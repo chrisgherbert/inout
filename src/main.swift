@@ -2425,7 +2425,7 @@ struct EmptyToolView: View {
 }
 
 struct ContentView: View {
-    @StateObject private var model = WorkspaceViewModel()
+    @ObservedObject var model: WorkspaceViewModel
     @StateObject private var externalOpenBridge = ExternalFileOpenBridge.shared
     @State private var isDropTargeted = false
 
@@ -2498,11 +2498,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct CheckBlackFramesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var model = WorkspaceViewModel()
 
     var body: some Scene {
         Window("Bulwark Video Tools", id: "main") {
-            ContentView()
+            ContentView(model: model)
         }
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Choose Video…") {
+                    model.chooseSource()
+                }
+                .keyboardShortcut("o", modifiers: [.command])
+
+                Button("Close Video") {
+                    model.clearSource()
+                }
+                .disabled(model.sourceURL == nil || model.isAnalyzing || model.isExporting)
+            }
+
+            CommandMenu("Tool") {
+                Button("Analyze") { model.selectedTool = .analyze }
+                    .keyboardShortcut("1", modifiers: [.command])
+                Button("Convert") { model.selectedTool = .convert }
+                    .keyboardShortcut("2", modifiers: [.command])
+                Button("Clip") { model.selectedTool = .clip }
+                    .keyboardShortcut("3", modifiers: [.command])
+                Button("Inspect") { model.selectedTool = .inspect }
+                    .keyboardShortcut("4", modifiers: [.command])
+            }
+
+            CommandMenu("Analyze") {
+                Button("Run Black Frame Analysis") {
+                    model.startAnalysis()
+                }
+                .keyboardShortcut("r", modifiers: [.command])
+                .disabled(!model.canAnalyze)
+
+                Button("Stop Analysis") {
+                    model.stopAnalysis()
+                }
+                .keyboardShortcut(".", modifiers: [.command])
+                .disabled(!model.isAnalyzing)
+            }
+
+            CommandMenu("Export") {
+                Button("Export Audio…") {
+                    model.startExport()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(!model.canExport)
+
+                Button("Export Clip…") {
+                    model.startClipExport()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+                .disabled(!model.canExportClip)
+            }
+        }
     }
 }
