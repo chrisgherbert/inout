@@ -73,6 +73,44 @@ enum ClipEncodingMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum CompatibleSpeedPreset: String, CaseIterable, Identifiable {
+    case fast = "Fast"
+    case balanced = "Balanced"
+    case quality = "Quality"
+
+    var id: String { rawValue }
+
+    var ffmpegPreset: String {
+        switch self {
+        case .fast: return "veryfast"
+        case .balanced: return "medium"
+        case .quality: return "slow"
+        }
+    }
+}
+
+enum CompatibleMaxResolution: String, CaseIterable, Identifiable {
+    case original = "Original"
+    case p1080 = "1080p"
+    case p720 = "720p"
+    case p480 = "480p"
+
+    var id: String { rawValue }
+
+    var scaleFilter: String? {
+        switch self {
+        case .original:
+            return nil
+        case .p1080:
+            return "scale='min(iw,1920)':'min(ih,1080)':force_original_aspect_ratio=decrease:force_divisible_by=2"
+        case .p720:
+            return "scale='min(iw,1280)':'min(ih,720)':force_original_aspect_ratio=decrease:force_divisible_by=2"
+        case .p480:
+            return "scale='min(iw,854)':'min(ih,480)':force_original_aspect_ratio=decrease:force_divisible_by=2"
+        }
+    }
+}
+
 enum CompletionSound: String, CaseIterable, Identifiable {
     case crystal
     case glass
@@ -663,6 +701,13 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
     @Published var clipVideoBitrateMbps: Double = 4.0
+    @Published var clipCompatibleSpeedPreset: CompatibleSpeedPreset = .balanced
+    @Published var clipCompatibleMaxResolution: CompatibleMaxResolution = .original {
+        didSet {
+            applySuggestedCompatibleBitrateForResolution()
+        }
+    }
+    @Published var clipAudioBitrateKbps: Int = 128
     @Published var jumpIntervalSeconds: Int = 5 {
         didSet {
             UserDefaults.standard.set(jumpIntervalSeconds, forKey: DefaultsKey.jumpIntervalSeconds)
@@ -684,6 +729,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var activeProcess: Process?
     private var exportCancellationRequested = false
     private var notificationAuthRequested = false
+    private var originalModeDefaultBitrateMbps: Double = 4.0
 
     init() {
         loadPreferences()
@@ -845,15 +891,40 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func applySuggestedClipBitrateFromSource() {
-        guard let sourceVideoBps = sourceInfo?.videoBitrateBps, sourceVideoBps > 0 else { return }
-
         let step = 0.5
         let sliderMin = 2.0
         let sliderMax = 20.0
-        let sourceMbps = sourceVideoBps / 1_000_000.0
-        let nearestTick = (sourceMbps / step).rounded() * step
-        let suggested = nearestTick + step
-        clipVideoBitrateMbps = min(sliderMax, max(sliderMin, suggested))
+
+        let suggested: Double
+        if let sourceVideoBps = sourceInfo?.videoBitrateBps, sourceVideoBps > 0 {
+            let sourceMbps = sourceVideoBps / 1_000_000.0
+            let nearestTick = (sourceMbps / step).rounded() * step
+            suggested = nearestTick + step
+        } else {
+            suggested = 4.0
+        }
+
+        originalModeDefaultBitrateMbps = min(sliderMax, max(sliderMin, suggested))
+        if clipCompatibleMaxResolution == .original {
+            clipVideoBitrateMbps = originalModeDefaultBitrateMbps
+        }
+    }
+
+    private func applySuggestedCompatibleBitrateForResolution() {
+        // Only auto-adjust when user selects a capped resolution.
+        let suggested: Double
+        switch clipCompatibleMaxResolution {
+        case .original:
+            suggested = originalModeDefaultBitrateMbps
+        case .p1080:
+            suggested = 8.0
+        case .p720:
+            suggested = 5.0
+        case .p480:
+            suggested = 2.5
+        }
+
+        clipVideoBitrateMbps = min(20.0, max(2.0, suggested))
     }
 
     func clampClipRange() {
@@ -1295,26 +1366,38 @@ final class WorkspaceViewModel: ObservableObject {
             }
 
             let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
+            let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
             let start = String(format: "%.3f", self.clipStartSeconds)
             let end = String(format: "%.3f", self.clipEndSeconds)
+            var ffmpegArgs = [
+                "-y",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-i", sourceURL.path,
+                "-ss", start,
+                "-to", end,
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
+                "-pix_fmt", "yuv420p",
+                "-b:v", "\(bitrateKbps)k"
+            ]
+
+            if let scaleFilter = self.clipCompatibleMaxResolution.scaleFilter {
+                ffmpegArgs.append(contentsOf: ["-vf", scaleFilter])
+            }
+
+            ffmpegArgs.append(contentsOf: [
+                "-c:a", "aac",
+                "-b:a", "\(audioBitrateKbps)k",
+                "-movflags", "+faststart",
+                destination.path
+            ])
+
             let encodeError = await self.runProcess(
                 executableURL: ffmpegURL,
-                arguments: [
-                    "-y",
-                    "-hide_banner",
-                    "-loglevel", "error",
-                    "-i", sourceURL.path,
-                    "-ss", start,
-                    "-to", end,
-                    "-map", "0:v:0",
-                    "-map", "0:a?",
-                    "-c:v", "libx264",
-                    "-b:v", "\(bitrateKbps)k",
-                    "-c:a", "aac",
-                    "-b:a", "128k",
-                    "-movflags", "+faststart",
-                    destination.path
-                ]
+                arguments: ffmpegArgs
             )
 
             await MainActor.run {
@@ -2116,6 +2199,22 @@ struct ClipToolView: View {
                             .controlSize(.small)
 
                             if model.clipEncodingMode == .compressed {
+                                Picker("Speed", selection: $model.clipCompatibleSpeedPreset) {
+                                    ForEach(CompatibleSpeedPreset.allCases) { preset in
+                                        Text(preset.rawValue).tag(preset)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .controlSize(.small)
+
+                                Picker("Max resolution", selection: $model.clipCompatibleMaxResolution) {
+                                    ForEach(CompatibleMaxResolution.allCases) { resolution in
+                                        Text(resolution.rawValue).tag(resolution)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .controlSize(.small)
+
                                 HStack {
                                     Text("Video bitrate")
                                     Slider(value: $model.clipVideoBitrateMbps, in: 2...20, step: 0.5)
@@ -2124,6 +2223,23 @@ struct ClipToolView: View {
                                         .font(.caption.monospacedDigit())
                                         .frame(width: 90, alignment: .trailing)
                                 }
+
+                                HStack {
+                                    Text("Audio bitrate")
+                                    Slider(
+                                        value: Binding(
+                                            get: { Double(model.clipAudioBitrateKbps) },
+                                            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
+                                        ),
+                                        in: 64...320,
+                                        step: 32
+                                    )
+                                    .controlSize(.small)
+                                    Text("\(model.clipAudioBitrateKbps) kbps")
+                                        .font(.caption.monospacedDigit())
+                                        .frame(width: 90, alignment: .trailing)
+                                }
+
                                 Text("Smaller File uses H.264 video + AAC audio.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
