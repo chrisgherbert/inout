@@ -1274,28 +1274,16 @@ struct ClipToolView: View {
 
                 GroupBox("Clip Range") {
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
-                            Text("Playhead")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Slider(
-                                value: Binding(
-                                    get: { playheadSeconds },
-                                    set: { seekPlayer(to: $0) }
-                                ),
-                                in: 0...max(0.001, max(playerDurationSeconds, model.sourceDurationSeconds))
-                            )
-                            Text(formatSeconds(playheadSeconds))
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 108, alignment: .trailing)
-                        }
-
-                        ClipRangeSelector(
+                        UnifiedClipTimelineSelector(
                             startSeconds: Binding(
                                 get: { model.clipStartSeconds },
                                 set: {
                                     model.setClipStart($0)
                                 }
+                            ),
+                            playheadSeconds: Binding(
+                                get: { playheadSeconds },
+                                set: { seekPlayer(to: $0) }
                             ),
                             endSeconds: Binding(
                                 get: { model.clipEndSeconds },
@@ -1303,9 +1291,22 @@ struct ClipToolView: View {
                                     model.setClipEnd($0)
                                 }
                             ),
-                            durationSeconds: max(0.001, model.sourceDurationSeconds)
+                            durationSeconds: max(0.001, model.sourceDurationSeconds),
+                            onSeek: { seekPlayer(to: $0) }
                         )
-                        .frame(height: 34)
+                        .frame(height: 44)
+
+                        HStack {
+                            Text("In: \(formatSeconds(model.clipStartSeconds))")
+                                .font(.caption.monospacedDigit())
+                            Spacer()
+                            Text("Playhead: \(formatSeconds(playheadSeconds))")
+                                .font(.caption.monospacedDigit())
+                            Spacer()
+                            Text("Out: \(formatSeconds(model.clipEndSeconds))")
+                                .font(.caption.monospacedDigit())
+                        }
+                        .foregroundStyle(.secondary)
 
                         HStack(spacing: 8) {
                             Text("Clip Start")
@@ -1429,10 +1430,12 @@ struct ClipToolView: View {
     }
 }
 
-struct ClipRangeSelector: View {
+struct UnifiedClipTimelineSelector: View {
     @Binding var startSeconds: Double
+    @Binding var playheadSeconds: Double
     @Binding var endSeconds: Double
     let durationSeconds: Double
+    let onSeek: (Double) -> Void
 
     private func xPosition(for value: Double, width: CGFloat) -> CGFloat {
         guard durationSeconds > 0 else { return 0 }
@@ -1449,23 +1452,36 @@ struct ClipRangeSelector: View {
         GeometryReader { proxy in
             let width = proxy.size.width
             let startX = xPosition(for: startSeconds, width: width)
+            let playheadX = xPosition(for: playheadSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.gray.opacity(0.2))
-                    .frame(height: 8)
-                    .offset(y: 12)
+                    .frame(height: 10)
+                    .offset(y: 15)
 
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.accentColor.opacity(0.35))
-                    .frame(width: max(2, endX - startX), height: 8)
-                    .offset(x: startX, y: 12)
+                    .frame(width: max(2, endX - startX), height: 10)
+                    .offset(x: startX, y: 15)
+
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 2, height: 24)
+                    .offset(x: playheadX - 1, y: 8)
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let newValue = timeValue(for: value.location.x, width: width)
+                                onSeek(newValue)
+                            }
+                    )
 
                 Circle()
                     .fill(Color.accentColor)
                     .frame(width: 14, height: 14)
-                    .offset(x: startX - 7, y: 9)
+                    .offset(x: startX - 7, y: 13)
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
@@ -1477,7 +1493,7 @@ struct ClipRangeSelector: View {
                 Circle()
                     .fill(Color.accentColor)
                     .frame(width: 14, height: 14)
-                    .offset(x: endX - 7, y: 9)
+                    .offset(x: endX - 7, y: 13)
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
@@ -1486,6 +1502,14 @@ struct ClipRangeSelector: View {
                             }
                     )
             }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { value in
+                        let newValue = timeValue(for: value.location.x, width: width)
+                        onSeek(newValue)
+                    }
+            )
         }
     }
 }
