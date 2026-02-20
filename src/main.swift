@@ -86,8 +86,30 @@ enum ClipFormat: String, CaseIterable, Identifiable {
 enum ClipEncodingMode: String, CaseIterable, Identifiable {
     case fast = "Fast (Original)"
     case compressed = "Advanced"
+    case audioOnly = "Audio Only"
 
     var id: String { rawValue }
+}
+
+enum ClipAudioOnlyFormat: String, CaseIterable, Identifiable {
+    case mp3 = "MP3"
+    case m4a = "M4A"
+
+    var id: String { rawValue }
+
+    var fileExtension: String {
+        switch self {
+        case .mp3: return "mp3"
+        case .m4a: return "m4a"
+        }
+    }
+
+    var contentType: UTType {
+        switch self {
+        case .mp3: return .mp3
+        case .m4a: return .mpeg4Audio
+        }
+    }
 }
 
 enum CompatibleSpeedPreset: String, CaseIterable, Identifiable {
@@ -737,8 +759,11 @@ final class WorkspaceViewModel: ObservableObject {
     }
     @Published var clipAudioBitrateKbps: Int = 128
     @Published var clipAdvancedVideoCodec: AdvancedVideoCodec = .h264
-    @Published var clipBoostAudio = false
-    @Published var clipAddFadeInOut = false
+    @Published var clipAdvancedBoostAudio = false
+    @Published var clipAdvancedAddFadeInOut = false
+    @Published var clipAudioOnlyBoostAudio = false
+    @Published var clipAudioOnlyAddFadeInOut = false
+    @Published var clipAudioOnlyFormat: ClipAudioOnlyFormat = .mp3
     @Published var jumpIntervalSeconds: Int = 5 {
         didSet {
             UserDefaults.standard.set(jumpIntervalSeconds, forKey: DefaultsKey.jumpIntervalSeconds)
@@ -1313,14 +1338,15 @@ final class WorkspaceViewModel: ObservableObject {
         clampClipRange()
         guard clipDurationSeconds > 0 else { return }
 
+        let outputExtension = clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.fileExtension : selectedClipFormat.fileExtension
         let defaultName = sourceURL.deletingPathExtension().lastPathComponent +
             "_clip_" + formatSeconds(clipStartSeconds).replacingOccurrences(of: ":", with: "-") +
             "_to_" + formatSeconds(clipEndSeconds).replacingOccurrences(of: ":", with: "-") +
-            "." + selectedClipFormat.fileExtension
+            "." + outputExtension
 
         let panel = NSSavePanel()
         panel.nameFieldStringValue = defaultName
-        panel.allowedContentTypes = [selectedClipFormat.contentType]
+        panel.allowedContentTypes = [clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.contentType : selectedClipFormat.contentType]
         panel.canCreateDirectories = true
         panel.title = "Export Clip"
 
@@ -1334,6 +1360,119 @@ final class WorkspaceViewModel: ObservableObject {
         exportProgress = 0
         exportStatusText = "Exporting clip…"
         outputURL = nil
+
+        if clipEncodingMode == .audioOnly {
+            exportTask = Task { [weak self] in
+                guard let self else { return }
+                await MainActor.run {
+                    self.exportProgress = 0.1
+                    self.exportStatusText = "Exporting audio-only clip…"
+                }
+
+                guard let ffmpegURL = self.findFFmpegExecutable() else {
+                    await MainActor.run {
+                        self.exportTask = nil
+                        self.isExporting = false
+                        self.exportProgress = 0
+                        self.exportStatusText = "Clip export failed: No ffmpeg executable found."
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
+                    }
+                    return
+                }
+
+                let start = String(format: "%.3f", self.clipStartSeconds)
+                let clipDuration = max(0.001, self.clipEndSeconds - self.clipStartSeconds)
+                let durationStr = String(format: "%.3f", clipDuration)
+                let bitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
+                let fadeDuration = min(0.333, clipDuration / 2.0)
+                let fadeOutStart = max(0.0, clipDuration - fadeDuration)
+                let allowFadeForDuration = clipDuration >= 2.0
+                let applyAudioFade = self.clipAudioOnlyAddFadeInOut && allowFadeForDuration
+                let codec = self.clipAudioOnlyFormat == .mp3 ? "libmp3lame" : "aac"
+                let sourceAsset = AVURLAsset(url: sourceURL)
+                guard let selectedAudioTrackIndex = self.preferredAudioTrackIndex(for: sourceAsset) else {
+                    await MainActor.run {
+                        self.exportTask = nil
+                        self.isExporting = false
+                        self.exportProgress = 0
+                        self.exportStatusText = "Clip export failed: No audio track found in source."
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
+                    }
+                    return
+                }
+
+                var audioFilters: [String] = []
+                if applyAudioFade {
+                    audioFilters.append("afade=t=in:st=0:d=\(String(format: "%.3f", fadeDuration))")
+                    audioFilters.append("afade=t=out:st=\(String(format: "%.3f", fadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
+                }
+                if self.clipAudioOnlyBoostAudio {
+                    audioFilters.append("volume=10dB")
+                    audioFilters.append("alimiter=limit=0.988553")
+                }
+
+                var args = [
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-ss", start,
+                    "-t", durationStr,
+                    "-i", sourceURL.path,
+                    "-vn"
+                ]
+
+                let audioInputRef = "0:a:\(selectedAudioTrackIndex)"
+                if !audioFilters.isEmpty {
+                    args.append(contentsOf: [
+                        "-filter_complex", "[\(audioInputRef)]\(audioFilters.joined(separator: ","))[aout]",
+                        "-map", "[aout]"
+                    ])
+                } else {
+                    args.append(contentsOf: ["-map", audioInputRef])
+                }
+
+                let encodeError = await self.runProcess(
+                    executableURL: ffmpegURL,
+                    arguments: args + [
+                        "-c:a", codec,
+                        "-b:a", "\(bitrateKbps)k",
+                        destination.path
+                    ]
+                )
+
+                await MainActor.run {
+                    self.exportTask = nil
+                    self.isExporting = false
+                    self.exportProgress = 0
+                    if self.exportCancellationRequested {
+                        self.exportStatusText = "Clip export cancelled"
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .cancelled
+                        self.notifyCompletion("Audio-Only Clip Export Stopped", message: self.exportStatusText)
+                        return
+                    }
+                    if let encodeError {
+                        self.exportStatusText = "Clip export failed: \(encodeError)"
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
+                        self.notifyCompletion("Audio-Only Clip Export Failed", message: self.exportStatusText)
+                    } else {
+                        self.outputURL = destination
+                        self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
+                        if self.clipAudioOnlyAddFadeInOut && !applyAudioFade {
+                            self.uiMessage = "Clip export complete: \(destination.lastPathComponent). Audio fade was skipped for clips under 2.0s."
+                        } else {
+                            self.uiMessage = self.exportStatusText
+                        }
+                        self.lastActivityState = .success
+                        self.notifyCompletion("Audio-Only Clip Export Complete", message: self.uiMessage)
+                    }
+                }
+            }
+            return
+        }
 
         if clipEncodingMode == .fast {
             guard selectedClipFormat.supportsPassthrough else {
@@ -1445,7 +1584,7 @@ final class WorkspaceViewModel: ObservableObject {
             let fadeDuration = min(0.333, clipDuration / 2.0)
             let fadeOutStart = max(0.0, clipDuration - fadeDuration)
             let allowFadeForDuration = clipDuration >= 2.0
-            let applyAudioFade = self.clipAddFadeInOut && allowFadeForDuration
+            let applyAudioFade = self.clipAdvancedAddFadeInOut && allowFadeForDuration
             let isWebM = self.selectedClipFormat == .webm
             let sourceAsset = AVURLAsset(url: sourceURL)
             let selectedAudioTrackIndex = self.preferredAudioTrackIndex(for: sourceAsset)
@@ -1477,7 +1616,7 @@ final class WorkspaceViewModel: ObservableObject {
                 audioFilters.append("afade=t=out:st=\(String(format: "%.3f", fadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
             }
 
-            if self.clipBoostAudio && hasSourceAudio {
+            if self.clipAdvancedBoostAudio && hasSourceAudio {
                 audioFilters.append("volume=10dB")
                 audioFilters.append("alimiter=limit=0.988553")
             }
@@ -1532,7 +1671,7 @@ final class WorkspaceViewModel: ObservableObject {
                 } else {
                     self.outputURL = destination
                     self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
-                    if self.clipAddFadeInOut && !applyAudioFade {
+                    if self.clipAdvancedAddFadeInOut && !applyAudioFade {
                         self.uiMessage = "Clip export complete: \(destination.lastPathComponent). Audio fade was skipped for clips under 2.0s."
                     } else {
                         self.uiMessage = self.exportStatusText
@@ -2305,6 +2444,7 @@ struct ClipToolView: View {
                             Picker("", selection: $model.clipEncodingMode) {
                                 Label("Fast", systemImage: "bolt.fill").tag(ClipEncodingMode.fast)
                                 Label("Advanced", systemImage: "slider.horizontal.3").tag(ClipEncodingMode.compressed)
+                                Label("Audio Only", systemImage: "waveform").tag(ClipEncodingMode.audioOnly)
                             }
                             .labelsHidden()
                             .pickerStyle(.segmented)
@@ -2314,36 +2454,81 @@ struct ClipToolView: View {
                             Text(
                                 model.clipEncodingMode == .fast
                                 ? "Fast mode uses passthrough copy with minimal processing."
-                                : "Advanced mode unlocks codec, container, resolution, and bitrate options."
+                                : model.clipEncodingMode == .compressed
+                                    ? "Advanced mode unlocks codec, container, resolution, and bitrate options."
+                                    : "Audio Only exports only audio from the selected clip range."
                             )
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
                             Divider()
 
-                            LabeledContent("Format") {
-                                Picker("Format", selection: $model.selectedClipFormat) {
-                                    if model.clipEncodingMode == .fast {
-                                        ForEach(fastClipFormats) { format in
-                                            Text(format.rawValue).tag(format)
-                                        }
-                                    } else {
-                                        ForEach(advancedClipFormats) { format in
+                            if model.clipEncodingMode == .audioOnly {
+                                LabeledContent("Audio format") {
+                                    Picker("Audio format", selection: $model.clipAudioOnlyFormat) {
+                                        ForEach(ClipAudioOnlyFormat.allCases) { format in
                                             Text(format.rawValue).tag(format)
                                         }
                                     }
+                                    .pickerStyle(.menu)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                                    .frame(width: 148)
                                 }
-                                .pickerStyle(.menu)
-                                .labelsHidden()
-                                .controlSize(.small)
-                                .frame(width: 148)
+
+                                HStack {
+                                    Text("Audio bitrate")
+                                        .frame(width: 120, alignment: .leading)
+                                    Slider(
+                                        value: Binding(
+                                            get: { Double(model.clipAudioBitrateKbps) },
+                                            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
+                                        ),
+                                        in: 64...320,
+                                        step: 32
+                                    )
+                                    .controlSize(.small)
+                                    Text("\(model.clipAudioBitrateKbps) kbps")
+                                        .font(.caption.monospacedDigit())
+                                        .frame(width: 90, alignment: .trailing)
+                                }
+
+                                Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAudioOnlyBoostAudio)
+                                    .toggleStyle(.switch)
+                                    .controlSize(.small)
+
+                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAudioOnlyAddFadeInOut)
+                                    .toggleStyle(.switch)
+                                    .controlSize(.small)
+
+                                Text("Audio-only mode exports only the selected range's audio track.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                LabeledContent("Format") {
+                                    Picker("Format", selection: $model.selectedClipFormat) {
+                                        if model.clipEncodingMode == .fast {
+                                            ForEach(fastClipFormats) { format in
+                                                Text(format.rawValue).tag(format)
+                                            }
+                                        } else {
+                                            ForEach(advancedClipFormats) { format in
+                                                Text(format.rawValue).tag(format)
+                                            }
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                                    .frame(width: 148)
+                                }
                             }
 
                             if model.clipEncodingMode == .fast {
                                 Text("Fast mode uses passthrough (original codecs/bitrate) and supports MP4/MOV.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                            } else {
+                            } else if model.clipEncodingMode == .compressed {
                                 if model.selectedClipFormat != .webm {
                                     LabeledContent("Video codec") {
                                         Picker("Video codec", selection: $model.clipAdvancedVideoCodec) {
@@ -2413,11 +2598,11 @@ struct ClipToolView: View {
                                         .frame(width: 90, alignment: .trailing)
                                 }
 
-                                Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipBoostAudio)
+                                Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAdvancedBoostAudio)
                                     .toggleStyle(.switch)
                                     .controlSize(.small)
 
-                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAddFadeInOut)
+                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAdvancedAddFadeInOut)
                                     .toggleStyle(.switch)
                                     .controlSize(.small)
 
