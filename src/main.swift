@@ -3453,7 +3453,7 @@ struct StatusFooterStripView: View {
                 }
                 .buttonStyle(.bordered)
             } else if model.outputURL != nil {
-                Button("Reveal Output") {
+                Button("Show in Finder") {
                     model.revealOutput()
                 }
                 .buttonStyle(.bordered)
