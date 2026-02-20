@@ -1,0 +1,42 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Swift / Xcode build artifacts
+.build/
+DerivedData/
+*.xcuserstate
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+
+# Xcode user-specific data
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+Packages/
+Package.resolved
+
+# App outputs and archives
+dist/
+*.app
+*.dmg
+*.pkg
+*.ipa
+*.xcarchive
+
+# Signing / notarization artifacts
+*.p12
+*.cer
+*.csr
+*.certSigningRequest
+*.notary.log
+notarization-output/
+
+# Logs / temp
+*.log
+*.tmp
+*.swp
