@@ -95,6 +95,14 @@ enum DetectionError: Error {
     case cancelled
 }
 
+enum ActivityState {
+    case idle
+    case running
+    case success
+    case failed
+    case cancelled
+}
+
 final class CancellationFlag {
     private let lock = NSLock()
     private var cancelled = false
@@ -611,9 +619,14 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipVideoBitrateMbps: Double = 4.0
 
     @Published var uiMessage = "Ready"
+    @Published var lastActivityState: ActivityState = .idle
 
     private var analyzeTask: Task<Void, Never>?
+    private var exportTask: Task<Void, Never>?
     private let cancelFlag = CancellationFlag()
+    private var activeExportSession: AVAssetExportSession?
+    private var activeProcess: Process?
+    private var exportCancellationRequested = false
 
     init() {
         if let firstArg = CommandLine.arguments.dropFirst().first {
@@ -660,6 +673,40 @@ final class WorkspaceViewModel: ObservableObject {
         return uiMessage
     }
 
+    var isActivityRunning: Bool {
+        isAnalyzing || isExporting
+    }
+
+    var lastResultIconName: String {
+        switch lastActivityState {
+        case .idle:
+            return "circle.dashed"
+        case .running:
+            return "hourglass"
+        case .success:
+            return "checkmark.circle.fill"
+        case .failed:
+            return "xmark.octagon.fill"
+        case .cancelled:
+            return "stop.circle.fill"
+        }
+    }
+
+    var lastResultLabel: String {
+        switch lastActivityState {
+        case .idle:
+            return "Idle"
+        case .running:
+            return "Running"
+        case .success:
+            return "Success"
+        case .failed:
+            return "Failed"
+        case .cancelled:
+            return "Cancelled"
+        }
+    }
+
     func chooseSource() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -695,6 +742,16 @@ final class WorkspaceViewModel: ObservableObject {
         outputURL = nil
         uiMessage = "Ready"
         resetClipRange()
+    }
+
+    func stopCurrentActivity() {
+        if isAnalyzing {
+            stopAnalysis()
+            return
+        }
+        if isExporting {
+            stopExport()
+        }
     }
 
     func resetClipRange() {
@@ -773,6 +830,7 @@ final class WorkspaceViewModel: ObservableObject {
         guard canAnalyze, let url = sourceURL else { return }
 
         isAnalyzing = true
+        lastActivityState = .running
         wasCancelled = false
         analyzeProgress = 0
         analyzeStatusText = "Analyzing \(url.lastPathComponent)… 0%"
@@ -836,6 +894,7 @@ final class WorkspaceViewModel: ObservableObject {
             analysis = current
             uiMessage = current.segments.isEmpty ? "No black segments found." : "Detected \(current.segments.count) black segment(s)."
             analyzeStatusText = uiMessage
+            lastActivityState = .success
             if let sound = NSSound(named: NSSound.Name("Crystal")) ?? NSSound(named: NSSound.Name("Glass")) {
                 sound.play()
             }
@@ -845,12 +904,32 @@ final class WorkspaceViewModel: ObservableObject {
             wasCancelled = true
             analyzeStatusText = "Analysis stopped"
             uiMessage = "Analysis stopped"
+            lastActivityState = .cancelled
         case .failure(.failed(let reason)):
             current.status = .failed(reason)
             analysis = current
             analyzeStatusText = "Analysis failed"
             uiMessage = "Analysis failed: \(reason)"
+            lastActivityState = .failed
         }
+    }
+
+    private func stopExport() {
+        guard isExporting else { return }
+        exportCancellationRequested = true
+        activeExportSession?.cancelExport()
+        if let process = activeProcess, process.isRunning {
+            process.terminate()
+        }
+        exportTask?.cancel()
+        exportTask = nil
+        activeExportSession = nil
+        activeProcess = nil
+        isExporting = false
+        exportProgress = 0
+        exportStatusText = "Export cancelled"
+        uiMessage = exportStatusText
+        lastActivityState = .cancelled
     }
 
     func startExport() {
@@ -870,6 +949,8 @@ final class WorkspaceViewModel: ObservableObject {
         guard panel.runModal() == .OK, let destination = panel.url else { return }
 
         isExporting = true
+        lastActivityState = .running
+        exportCancellationRequested = false
         exportProgress = 0
         exportStatusText = "Preparing export…"
         outputURL = nil
@@ -877,17 +958,22 @@ final class WorkspaceViewModel: ObservableObject {
         let asset = AVURLAsset(url: sourceURL)
         try? FileManager.default.removeItem(at: destination)
 
-        Task { [weak self] in
+        exportTask = Task { [weak self] in
             guard let self else { return }
 
             if self.selectedAudioFormat == .m4a {
                 guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
                     await MainActor.run {
+                        self.exportTask = nil
                         self.isExporting = false
                         self.exportStatusText = "Export failed: Unable to create export session"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
                     }
                     return
+                }
+                await MainActor.run {
+                    self.activeExportSession = session
                 }
 
                 session.outputURL = destination
@@ -913,23 +999,36 @@ final class WorkspaceViewModel: ObservableObject {
                 monitor.cancel()
 
                 await MainActor.run {
+                    self.exportTask = nil
+                    self.activeExportSession = nil
                     self.isExporting = false
                     self.exportProgress = 0
+
+                    if self.exportCancellationRequested {
+                        self.exportStatusText = "Export cancelled"
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .cancelled
+                        return
+                    }
 
                     switch session.status {
                     case .completed:
                         self.outputURL = destination
                         self.exportStatusText = "Export complete: \(destination.lastPathComponent)"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .success
                     case .failed:
                         self.exportStatusText = "Export failed: \(session.error?.localizedDescription ?? "Unknown error")"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
                     case .cancelled:
                         self.exportStatusText = "Export cancelled"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .cancelled
                     default:
                         self.exportStatusText = "Export ended with status: \(session.status.rawValue)"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
                     }
                 }
                 return
@@ -960,15 +1059,24 @@ final class WorkspaceViewModel: ObservableObject {
             }
 
             await MainActor.run {
+                self.exportTask = nil
                 self.isExporting = false
                 self.exportProgress = 0
+                if self.exportCancellationRequested {
+                    self.exportStatusText = "Export cancelled"
+                    self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .cancelled
+                    return
+                }
                 if let mp3Error {
                     self.exportStatusText = "MP3 export failed: \(mp3Error)"
                     self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .failed
                 } else {
                     self.outputURL = destination
                     self.exportStatusText = "Export complete: \(destination.lastPathComponent)"
                     self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .success
                 }
             }
         }
@@ -996,6 +1104,8 @@ final class WorkspaceViewModel: ObservableObject {
         try? FileManager.default.removeItem(at: destination)
 
         isExporting = true
+        lastActivityState = .running
+        exportCancellationRequested = false
         exportProgress = 0
         exportStatusText = "Exporting clip…"
         outputURL = nil
@@ -1008,8 +1118,10 @@ final class WorkspaceViewModel: ObservableObject {
                 isExporting = false
                 exportStatusText = "Clip export failed: Unable to create passthrough export session"
                 uiMessage = exportStatusText
+                lastActivityState = .failed
                 return
             }
+            activeExportSession = session
 
             session.outputURL = destination
             session.outputFileType = selectedClipFormat.fileType
@@ -1019,7 +1131,7 @@ final class WorkspaceViewModel: ObservableObject {
                 duration: CMTime(seconds: clipDurationSeconds, preferredTimescale: 600)
             )
 
-            Task { [weak self] in
+            exportTask = Task { [weak self] in
                 guard let self else { return }
 
                 let monitor = Task { [weak self] in
@@ -1040,29 +1152,41 @@ final class WorkspaceViewModel: ObservableObject {
                 monitor.cancel()
 
                 await MainActor.run {
+                    self.exportTask = nil
+                    self.activeExportSession = nil
                     self.isExporting = false
                     self.exportProgress = 0
+                    if self.exportCancellationRequested {
+                        self.exportStatusText = "Clip export cancelled"
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .cancelled
+                        return
+                    }
                     switch session.status {
                     case .completed:
                         self.outputURL = destination
                         self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .success
                     case .failed:
                         self.exportStatusText = "Clip export failed: \(session.error?.localizedDescription ?? "Unknown error")"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
                     case .cancelled:
                         self.exportStatusText = "Clip export cancelled"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .cancelled
                     default:
                         self.exportStatusText = "Clip export ended with status: \(session.status.rawValue)"
                         self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
                     }
                 }
             }
             return
         }
 
-        Task { [weak self] in
+        exportTask = Task { [weak self] in
             guard let self else { return }
             await MainActor.run {
                 self.exportProgress = 0.1
@@ -1071,10 +1195,12 @@ final class WorkspaceViewModel: ObservableObject {
 
             guard let ffmpegURL = self.findFFmpegExecutable() else {
                 await MainActor.run {
+                    self.exportTask = nil
                     self.isExporting = false
                     self.exportProgress = 0
                     self.exportStatusText = "Clip export failed: No ffmpeg executable found."
                     self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .failed
                 }
                 return
             }
@@ -1103,15 +1229,24 @@ final class WorkspaceViewModel: ObservableObject {
             )
 
             await MainActor.run {
+                self.exportTask = nil
                 self.isExporting = false
                 self.exportProgress = 0
+                if self.exportCancellationRequested {
+                    self.exportStatusText = "Clip export cancelled"
+                    self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .cancelled
+                    return
+                }
                 if let encodeError {
                     self.exportStatusText = "Clip export failed: \(encodeError)"
                     self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .failed
                 } else {
                     self.outputURL = destination
                     self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
                     self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .success
                 }
             }
         }
@@ -1129,12 +1264,20 @@ final class WorkspaceViewModel: ObservableObject {
 
             do {
                 try process.run()
+                Task { @MainActor in
+                    self.activeProcess = process
+                }
             } catch {
                 continuation.resume(returning: error.localizedDescription)
                 return
             }
 
             process.terminationHandler = { proc in
+                Task { @MainActor in
+                    if self.activeProcess === proc {
+                        self.activeProcess = nil
+                    }
+                }
                 let data = stderr.fileHandleForReading.readDataToEndOfFile()
                 let errorText = String(decoding: data, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1184,44 +1327,19 @@ struct SourceHeaderView: View {
     @ObservedObject var model: WorkspaceViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Button(model.sourceURL == nil ? "Choose Video" : "Change Video") {
-                    model.chooseSource()
-                }
-
-                Spacer()
-
-                if let sourceURL = model.sourceURL {
-                    Text(sourceURL.lastPathComponent)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+        HStack(spacing: 8) {
+            Button(model.sourceURL == nil ? "Choose Video" : "Change Video") {
+                model.chooseSource()
             }
-            HStack(spacing: 0) {
-                ForEach(WorkspaceTool.allCases) { tool in
-                    Button {
-                        model.selectedTool = tool
-                    } label: {
-                        ZStack {
-                            Text(tool.rawValue)
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(model.selectedTool == tool ? .primary : .secondary)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                        .background(
-                            model.selectedTool == tool
-                            ? Color(NSColor.windowBackgroundColor)
-                            : Color.clear
-                        )
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
+
+            Spacer()
+
+            if let sourceURL = model.sourceURL {
+                Text(sourceURL.lastPathComponent)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .padding(4)
-            .background(Color.gray.opacity(0.16), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .padding(12)
         .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -1233,22 +1351,43 @@ struct ToolContentView: View {
     let isCompactLayout: Bool
 
     var body: some View {
-        Group {
-            switch model.selectedTool {
-            case .analyze:
+        TabView(selection: $model.selectedTool) {
+            ScrollView {
                 AnalyzeToolView(model: model, isCompactLayout: isCompactLayout)
-            case .convert:
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.automatic)
+            .tabItem { Text(WorkspaceTool.analyze.rawValue) }
+            .tag(WorkspaceTool.analyze)
+
+            ScrollView {
                 ConvertToolView(model: model, isCompactLayout: isCompactLayout)
-            case .clip:
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.automatic)
+            .tabItem { Text(WorkspaceTool.convert.rawValue) }
+            .tag(WorkspaceTool.convert)
+
+            ScrollView {
                 ClipToolView(model: model, isCompactLayout: isCompactLayout)
-            case .inspect:
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.automatic)
+            .tabItem { Text(WorkspaceTool.clip.rawValue) }
+            .tag(WorkspaceTool.clip)
+
+            ScrollView {
                 InspectToolView(
                     sourceURL: model.sourceURL,
                     analysis: model.analysis,
                     sourceInfo: model.sourceInfo,
                     isCompactLayout: isCompactLayout
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.automatic)
+            .tabItem { Text(WorkspaceTool.inspect.rawValue) }
+            .tag(WorkspaceTool.inspect)
         }
     }
 }
@@ -1622,102 +1761,99 @@ struct ClipToolView: View {
                         dismissTimecodeFieldFocus()
                     }
 
-                GroupBox("Clip Range") {
+                GroupBox("Timeline Controls") {
                     VStack(alignment: .leading, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                Text("Zoom")
+                        HStack(spacing: 8) {
+                            Text("Zoom")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Slider(value: $timelineZoom, in: 1...100, step: 1)
+                            Text("\(Int(timelineZoom.rounded()))x")
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 48, alignment: .trailing)
+                            Button("Fit") {
+                                timelineZoom = 1
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if timelineZoom > 1 {
+                            TimelineViewportScroller(
+                                totalDurationSeconds: totalDurationSeconds,
+                                visibleStartSeconds: visibleStartSeconds,
+                                visibleEndSeconds: visibleEndSeconds
+                            ) { newStart in
+                                viewportStartSeconds = clampedViewportStart(newStart)
+                                isViewportManuallyControlled = true
+                            }
+                            .frame(height: 14)
+
+                            HStack(spacing: 6) {
+                                Image(systemName: "hand.draw")
+                                Text("Drag viewport or use trackpad scroll to pan")
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(6)
+                }
+
+                GroupBox("Selection") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if !isCompactLayout && isWaveformLoading {
+                            HStack {
+                                ProgressView()
+                                Text("Generating waveform…")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                Slider(value: $timelineZoom, in: 1...100, step: 1)
-                                Text("\(Int(timelineZoom.rounded()))x")
-                                    .font(.caption.monospacedDigit())
-                                    .frame(width: 48, alignment: .trailing)
-                                Button("Fit") {
-                                    timelineZoom = 1
-                                }
-                                .buttonStyle(.bordered)
                             }
-
-                            if timelineZoom > 1 {
-                                TimelineViewportScroller(
-                                    totalDurationSeconds: totalDurationSeconds,
-                                    visibleStartSeconds: visibleStartSeconds,
-                                    visibleEndSeconds: visibleEndSeconds
-                                ) { newStart in
-                                    viewportStartSeconds = clampedViewportStart(newStart)
-                                    isViewportManuallyControlled = true
-                                }
-                                .frame(height: 14)
-
-                                HStack(spacing: 6) {
-                                    Image(systemName: "hand.draw")
-                                    Text("Drag viewport or use trackpad scroll to pan")
-                                }
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(8)
-                        .background(Color.gray.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            if !isCompactLayout && isWaveformLoading {
-                                HStack {
-                                    ProgressView()
-                                    Text("Generating waveform…")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            } else if !isCompactLayout && !waveformSamples.isEmpty {
-                                WaveformView(
-                                    samples: waveformSamples,
-                                    startSeconds: model.clipStartSeconds,
-                                    playheadSeconds: playheadSeconds,
-                                    endSeconds: model.clipEndSeconds,
-                                    totalDurationSeconds: totalDurationSeconds,
-                                    visibleStartSeconds: visibleStartSeconds,
-                                    visibleEndSeconds: visibleEndSeconds,
-                                    onSeek: { seekPlayer(to: $0) }
-                                )
-                                .frame(height: 58)
-                            }
-
-                            UnifiedClipTimelineSelector(
-                                startSeconds: Binding(
-                                    get: { model.clipStartSeconds },
-                                    set: {
-                                        model.setClipStart($0)
-                                    }
-                                ),
-                                playheadSeconds: Binding(
-                                    get: { playheadSeconds },
-                                    set: { seekPlayer(to: $0) }
-                                ),
-                                endSeconds: Binding(
-                                    get: { model.clipEndSeconds },
-                                    set: {
-                                        model.setClipEnd($0)
-                                    }
-                                ),
+                        } else if !isCompactLayout && !waveformSamples.isEmpty {
+                            WaveformView(
+                                samples: waveformSamples,
+                                startSeconds: model.clipStartSeconds,
+                                playheadSeconds: playheadSeconds,
+                                endSeconds: model.clipEndSeconds,
                                 totalDurationSeconds: totalDurationSeconds,
                                 visibleStartSeconds: visibleStartSeconds,
                                 visibleEndSeconds: visibleEndSeconds,
                                 onSeek: { seekPlayer(to: $0) }
                             )
-                            .frame(height: 44)
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear
-                                        .onAppear { timelineInteractiveWidth = geo.size.width }
-                                        .onChange(of: geo.size.width) { width in
-                                            timelineInteractiveWidth = width
-                                        }
-                                }
-                            )
+                            .frame(height: 58)
                         }
-                        .padding(8)
-                        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                        UnifiedClipTimelineSelector(
+                            startSeconds: Binding(
+                                get: { model.clipStartSeconds },
+                                set: {
+                                    model.setClipStart($0)
+                                }
+                            ),
+                            playheadSeconds: Binding(
+                                get: { playheadSeconds },
+                                set: { seekPlayer(to: $0) }
+                            ),
+                            endSeconds: Binding(
+                                get: { model.clipEndSeconds },
+                                set: {
+                                    model.setClipEnd($0)
+                                }
+                            ),
+                            totalDurationSeconds: totalDurationSeconds,
+                            visibleStartSeconds: visibleStartSeconds,
+                            visibleEndSeconds: visibleEndSeconds,
+                            onSeek: { seekPlayer(to: $0) }
+                        )
+                        .frame(height: 44)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear
+                                    .onAppear { timelineInteractiveWidth = geo.size.width }
+                                    .onChange(of: geo.size.width) { width in
+                                        timelineInteractiveWidth = width
+                                    }
+                            }
+                        )
 
                         if !isCompactLayout {
                             HStack {
@@ -1764,7 +1900,7 @@ struct ClipToolView: View {
                         .font(.caption)
 
                         if !isCompactLayout {
-                            HStack(spacing: 8) {
+                            HStack {
                                 Text("Duration: \(formatSeconds(model.clipDurationSeconds))")
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
@@ -1786,7 +1922,7 @@ struct ClipToolView: View {
                     }
                 }
 
-                GroupBox("Export New Clip") {
+                GroupBox("Output") {
                     VStack(alignment: .leading, spacing: 10) {
                         Picker("Encoding", selection: $model.clipEncodingMode) {
                             ForEach(ClipEncodingMode.allCases) { mode in
@@ -2241,8 +2377,16 @@ struct InspectToolView: View {
             if let sourceURL {
                 GroupBox("File") {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(sourceURL.lastPathComponent)
-                            .font(.headline)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(sourceURL.lastPathComponent)
+                                .font(.headline)
+                            Spacer()
+                            Button("Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([sourceURL])
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                         Text(sourceURL.path)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -2276,12 +2420,20 @@ struct InspectToolView: View {
                     .padding(6)
                 }
 
-                GroupBox("Audio / Container") {
+                GroupBox("Audio") {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Audio codec: \(sourceInfo?.audioCodec ?? "—")")
                         Text("Sample rate: \(sourceInfo?.sampleRateHz.map { String(format: "%.0f Hz", $0) } ?? "—")")
                         Text("Channels: \(sourceInfo?.channels.map(String.init) ?? "—")")
                         Text("Audio bitrate: \(formatBitrate(sourceInfo?.audioBitrateBps))")
+                    }
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+                }
+
+                GroupBox("Container") {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Duration: \(sourceInfo?.durationSeconds.map(formatSeconds) ?? "—")")
                         Text("Overall bitrate: \(formatBitrate(sourceInfo?.overallBitrateBps))")
                         Text("File size: \(formatFileSize(sourceInfo?.fileSizeBytes))")
@@ -2302,34 +2454,69 @@ struct InspectToolView: View {
     }
 }
 
-struct OutputPanelView: View {
+struct StatusFooterStripView: View {
     @ObservedObject var model: WorkspaceViewModel
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Activity")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+    private var stateColor: Color {
+        switch model.lastActivityState {
+        case .idle:
+            return .secondary
+        case .running:
+            return .accentColor
+        case .success:
+            return .green
+        case .failed:
+            return .red
+        case .cancelled:
+            return .orange
+        }
+    }
 
-            if let progress = model.activityProgress {
-                ProgressView(value: progress)
+    var body: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: model.lastResultIconName)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(stateColor)
+                    .frame(width: 20, height: 20, alignment: .center)
+                Text(model.lastResultLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            .frame(width: 140, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.activityText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                ProgressView(value: model.activityProgress ?? 0)
                     .progressViewStyle(.linear)
+                    .opacity(model.activityProgress == nil ? 0.35 : 1.0)
             }
 
-            Text(model.activityText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if model.outputURL != nil {
-                Button("Reveal Output in Finder") {
+            if model.isActivityRunning {
+                Button(role: .destructive) {
+                    model.stopCurrentActivity()
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+            } else if model.outputURL != nil {
+                Button("Reveal Output") {
                     model.revealOutput()
                 }
                 .buttonStyle(.bordered)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.bar)
+        .overlay(alignment: .top) {
+            Divider()
+        }
     }
 }
 
@@ -2598,13 +2785,10 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: isCompactLayout ? 8 : 10) {
                 SourceHeaderView(model: model)
 
-                ScrollView {
-                    ToolContentView(model: model, isCompactLayout: isCompactLayout)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .scrollIndicators(.automatic)
+                ToolContentView(model: model, isCompactLayout: isCompactLayout)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-                OutputPanelView(model: model)
+                StatusFooterStripView(model: model)
             }
             .padding(isCompactLayout ? 8 : 12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
