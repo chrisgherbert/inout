@@ -3638,72 +3638,98 @@ struct PreferencesView: View {
     @ObservedObject var model: WorkspaceViewModel
 
     var body: some View {
-        Form {
-            Section("Audio") {
-                HStack {
-                    Text("Default MP3 Bitrate")
-                    Spacer()
-                    Stepper(value: $model.audioBitrateKbps, in: 64...320, step: 32) {
-                        Text("\(model.audioBitrateKbps) kbps")
-                            .font(.system(.body, design: .monospaced))
+        TabView {
+            Form {
+                Section {
+                    Picker("Theme", selection: $model.appearance) {
+                        ForEach(AppAppearance.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
                     }
-                    .frame(width: 180, alignment: .trailing)
+                    .pickerStyle(.radioGroup)
+                } header: {
+                    Text("Appearance")
+                }
+
+                Section {
+                    LabeledContent("Completion Sound") {
+                        Picker("Completion Sound", selection: $model.completionSound) {
+                            ForEach(CompletionSound.allCases) { sound in
+                                Text(sound.displayName).tag(sound)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 180)
+                    }
+
+                    HStack {
+                        Spacer()
+                        Button("Play Preview") {
+                            guard let soundName = model.completionSound.soundName,
+                                  let sound = NSSound(named: soundName) else { return }
+                            sound.play()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(model.completionSound == .none)
+                    }
+                } header: {
+                    Text("Notifications")
                 }
             }
-
-            Section("Clip") {
-                Picker("Default Encoding", selection: $model.defaultClipEncodingMode) {
-                    ForEach(ClipEncodingMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .controlSize(.small)
-
-                HStack {
-                    Text("Jump Interval")
-                    Spacer()
-                    Stepper(value: $model.jumpIntervalSeconds, in: 1...30, step: 1) {
-                        Text("\(model.jumpIntervalSeconds)s")
-                            .font(.system(.body, design: .monospaced))
-                    }
-                    .frame(width: 140, alignment: .trailing)
-                }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("General", systemImage: "gearshape")
             }
 
-            Section("Notifications") {
-                Picker("Completion Sound", selection: $model.completionSound) {
-                    ForEach(CompletionSound.allCases) { sound in
-                        Text(sound.displayName).tag(sound)
+            Form {
+                Section {
+                    LabeledContent("Default Encoding") {
+                        Picker("Default Encoding", selection: $model.defaultClipEncodingMode) {
+                            ForEach(ClipEncodingMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 180)
                     }
-                }
-                .pickerStyle(.menu)
 
-                HStack {
-                    Spacer()
-                    Button("Play Preview") {
-                        guard let soundName = model.completionSound.soundName,
-                              let sound = NSSound(named: soundName) else { return }
-                        sound.play()
+                    LabeledContent("Jump Interval") {
+                        Stepper(value: $model.jumpIntervalSeconds, in: 1...30, step: 1) {
+                            Text("\(model.jumpIntervalSeconds)s")
+                                .font(.system(.body, design: .monospaced))
+                        }
+                        .frame(width: 160, alignment: .trailing)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(model.completionSound == .none)
+                } header: {
+                    Text("Timeline")
                 }
             }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("Clip", systemImage: "timeline.selection")
+            }
 
-            Section("Appearance") {
-                Picker("Theme", selection: $model.appearance) {
-                    ForEach(AppAppearance.allCases) { option in
-                        Text(option.rawValue).tag(option)
+            Form {
+                Section {
+                    LabeledContent("Default MP3 Bitrate") {
+                        Stepper(value: $model.audioBitrateKbps, in: 64...320, step: 32) {
+                            Text("\(model.audioBitrateKbps) kbps")
+                                .font(.system(.body, design: .monospaced))
+                        }
+                        .frame(width: 180, alignment: .trailing)
                     }
+                } header: {
+                    Text("Export")
                 }
-                .pickerStyle(.segmented)
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("Audio", systemImage: "waveform")
             }
         }
-        .formStyle(.grouped)
-        .padding(16)
-        .frame(width: 520)
+        .padding(14)
+        .frame(width: 540, height: 320)
     }
 }
 
