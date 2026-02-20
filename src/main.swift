@@ -7,6 +7,7 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 import Combine
+import UserNotifications
 
 extension Notification.Name {
     static let clipSetStartAtPlayhead = Notification.Name("clipSetStartAtPlayhead")
@@ -70,6 +71,36 @@ enum ClipEncodingMode: String, CaseIterable, Identifiable {
     case compressed = "More Compatible"
 
     var id: String { rawValue }
+}
+
+enum CompletionSound: String, CaseIterable, Identifiable {
+    case crystal
+    case glass
+    case basso
+    case funk
+    case none
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .crystal: return "Crystal"
+        case .glass: return "Glass"
+        case .basso: return "Basso"
+        case .funk: return "Funk"
+        case .none: return "None"
+        }
+    }
+
+    var soundName: NSSound.Name? {
+        switch self {
+        case .crystal: return NSSound.Name("Crystal")
+        case .glass: return NSSound.Name("Glass")
+        case .basso: return NSSound.Name("Basso")
+        case .funk: return NSSound.Name("Funk")
+        case .none: return nil
+        }
+    }
 }
 
 struct Segment: Identifiable {
@@ -593,6 +624,13 @@ final class ExternalFileOpenBridge: ObservableObject {
 
 @MainActor
 final class WorkspaceViewModel: ObservableObject {
+    private enum DefaultsKey {
+        static let audioBitrateKbps = "prefs.audioBitrateKbps"
+        static let clipEncodingMode = "prefs.clipEncodingMode"
+        static let jumpIntervalSeconds = "prefs.jumpIntervalSeconds"
+        static let completionSound = "prefs.completionSound"
+    }
+
     @Published var selectedTool: WorkspaceTool = .analyze
     @Published var sourceURL: URL?
     @Published var analysis: FileAnalysis?
@@ -604,7 +642,11 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var wasCancelled = false
 
     @Published var selectedAudioFormat: AudioFormat = .mp3
-    @Published var audioBitrateKbps = 128
+    @Published var audioBitrateKbps = 128 {
+        didSet {
+            UserDefaults.standard.set(audioBitrateKbps, forKey: DefaultsKey.audioBitrateKbps)
+        }
+    }
     @Published var isExporting = false
     @Published var exportProgress = 0.0
     @Published var exportStatusText = "No export yet"
@@ -615,8 +657,22 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipStartText = "00:00:00.000"
     @Published var clipEndText = "00:00:00.000"
     @Published var selectedClipFormat: ClipFormat = .mp4
-    @Published var clipEncodingMode: ClipEncodingMode = .fast
+    @Published var clipEncodingMode: ClipEncodingMode = .fast {
+        didSet {
+            UserDefaults.standard.set(clipEncodingMode.rawValue, forKey: DefaultsKey.clipEncodingMode)
+        }
+    }
     @Published var clipVideoBitrateMbps: Double = 4.0
+    @Published var jumpIntervalSeconds: Int = 5 {
+        didSet {
+            UserDefaults.standard.set(jumpIntervalSeconds, forKey: DefaultsKey.jumpIntervalSeconds)
+        }
+    }
+    @Published var completionSound: CompletionSound = .crystal {
+        didSet {
+            UserDefaults.standard.set(completionSound.rawValue, forKey: DefaultsKey.completionSound)
+        }
+    }
 
     @Published var uiMessage = "Ready"
     @Published var lastActivityState: ActivityState = .idle
@@ -627,13 +683,39 @@ final class WorkspaceViewModel: ObservableObject {
     private var activeExportSession: AVAssetExportSession?
     private var activeProcess: Process?
     private var exportCancellationRequested = false
+    private var notificationAuthRequested = false
 
     init() {
+        loadPreferences()
         if let firstArg = CommandLine.arguments.dropFirst().first {
             let url = URL(fileURLWithPath: firstArg)
             if FileManager.default.fileExists(atPath: url.path) {
                 setSource(url)
             }
+        }
+    }
+
+    private func loadPreferences() {
+        let defaults = UserDefaults.standard
+
+        let savedBitrate = defaults.integer(forKey: DefaultsKey.audioBitrateKbps)
+        if savedBitrate > 0 {
+            audioBitrateKbps = min(max(64, savedBitrate), 320)
+        }
+
+        if let rawMode = defaults.string(forKey: DefaultsKey.clipEncodingMode),
+           let mode = ClipEncodingMode(rawValue: rawMode) {
+            clipEncodingMode = mode
+        }
+
+        let savedJump = defaults.integer(forKey: DefaultsKey.jumpIntervalSeconds)
+        if savedJump > 0 {
+            jumpIntervalSeconds = min(max(1, savedJump), 30)
+        }
+
+        if let rawSound = defaults.string(forKey: DefaultsKey.completionSound),
+           let sound = CompletionSound(rawValue: rawSound) {
+            completionSound = sound
         }
     }
 
@@ -895,9 +977,11 @@ final class WorkspaceViewModel: ObservableObject {
             uiMessage = current.segments.isEmpty ? "No black segments found." : "Detected \(current.segments.count) black segment(s)."
             analyzeStatusText = uiMessage
             lastActivityState = .success
-            if let sound = NSSound(named: NSSound.Name("Crystal")) ?? NSSound(named: NSSound.Name("Glass")) {
+            if let soundName = completionSound.soundName,
+               let sound = NSSound(named: soundName) {
                 sound.play()
             }
+            notifyCompletion("Black Frame Analysis Complete", message: uiMessage)
         case .failure(.cancelled):
             current.status = .failed("Stopped")
             analysis = current
@@ -905,12 +989,14 @@ final class WorkspaceViewModel: ObservableObject {
             analyzeStatusText = "Analysis stopped"
             uiMessage = "Analysis stopped"
             lastActivityState = .cancelled
+            notifyCompletion("Black Frame Analysis Stopped", message: uiMessage)
         case .failure(.failed(let reason)):
             current.status = .failed(reason)
             analysis = current
             analyzeStatusText = "Analysis failed"
             uiMessage = "Analysis failed: \(reason)"
             lastActivityState = .failed
+            notifyCompletion("Black Frame Analysis Failed", message: uiMessage)
         }
     }
 
@@ -1066,17 +1152,20 @@ final class WorkspaceViewModel: ObservableObject {
                     self.exportStatusText = "Export cancelled"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .cancelled
+                    self.notifyCompletion("MP3 Export Stopped", message: self.exportStatusText)
                     return
                 }
                 if let mp3Error {
                     self.exportStatusText = "MP3 export failed: \(mp3Error)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
+                    self.notifyCompletion("MP3 Export Failed", message: self.exportStatusText)
                 } else {
                     self.outputURL = destination
                     self.exportStatusText = "Export complete: \(destination.lastPathComponent)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .success
+                    self.notifyCompletion("MP3 Export Complete", message: self.exportStatusText)
                 }
             }
         }
@@ -1236,17 +1325,20 @@ final class WorkspaceViewModel: ObservableObject {
                     self.exportStatusText = "Clip export cancelled"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .cancelled
+                    self.notifyCompletion("Compatible Clip Export Stopped", message: self.exportStatusText)
                     return
                 }
                 if let encodeError {
                     self.exportStatusText = "Clip export failed: \(encodeError)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
+                    self.notifyCompletion("Compatible Clip Export Failed", message: self.exportStatusText)
                 } else {
                     self.outputURL = destination
                     self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .success
+                    self.notifyCompletion("Compatible Clip Export Complete", message: self.exportStatusText)
                 }
             }
         }
@@ -1321,10 +1413,46 @@ final class WorkspaceViewModel: ObservableObject {
         guard let outputURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([outputURL])
     }
+
+    private func notifyCompletion(_ title: String, message: String) {
+        let center = UNUserNotificationCenter.current()
+
+        let enqueue = {
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = message
+            content.sound = .default
+
+            let request = UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: content,
+                trigger: nil
+            )
+            center.add(request)
+        }
+
+        if notificationAuthRequested {
+            enqueue()
+            return
+        }
+
+        notificationAuthRequested = true
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if granted {
+                enqueue()
+            }
+        }
+    }
 }
 
 struct SourceHeaderView: View {
     @ObservedObject var model: WorkspaceViewModel
+
+    private func fileIcon(for url: URL) -> NSImage {
+        let image = NSWorkspace.shared.icon(forFile: url.path)
+        image.size = NSSize(width: 16, height: 16)
+        return image
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1335,10 +1463,30 @@ struct SourceHeaderView: View {
             Spacer()
 
             if let sourceURL = model.sourceURL {
-                Text(sourceURL.lastPathComponent)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Image(nsImage: fileIcon(for: sourceURL))
+                        .interpolation(.high)
+                    Text(sourceURL.lastPathComponent)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .help(sourceURL.path)
+                .onDrag {
+                    NSItemProvider(contentsOf: sourceURL) ?? NSItemProvider()
+                }
+                .contextMenu {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([sourceURL])
+                    }
+                    Button("Copy Path") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(sourceURL.path, forType: .string)
+                    }
+                }
             }
         }
         .padding(12)
@@ -1425,7 +1573,7 @@ struct AnalyzeToolView: View {
             }
 
             if let analysis = model.analysis {
-                DetailView(file: analysis, isCompactLayout: isCompactLayout)
+                DetailView(file: analysis, isCompactLayout: isCompactLayout, model: model)
             } else {
                 EmptyToolView(title: "Analyze", subtitle: "Choose a video and run black-frame analysis.")
             }
@@ -2109,12 +2257,16 @@ struct WaveformView: View {
                     var path = Path()
                     let visibleSampleCount = max(1, endIndex - startIndex + 1)
                     let columnCount = max(1, Int(size.width.rounded(.up)))
-                    let samplesPerColumn = max(1, visibleSampleCount / max(1, columnCount))
+                    let visibleSampleCountDouble = Double(visibleSampleCount)
 
-                    var x: CGFloat = 0
-                    var columnStart = startIndex
-                    while columnStart <= endIndex {
-                        let columnEnd = min(endIndex, columnStart + samplesPerColumn - 1)
+                    for column in 0..<columnCount {
+                        let columnStartRatio = Double(column) / Double(columnCount)
+                        let columnEndRatio = Double(column + 1) / Double(columnCount)
+                        var columnStart = startIndex + Int((columnStartRatio * visibleSampleCountDouble).rounded(.down))
+                        var columnEnd = startIndex + Int((columnEndRatio * visibleSampleCountDouble).rounded(.down)) - 1
+                        columnStart = min(max(columnStart, startIndex), endIndex)
+                        columnEnd = min(max(columnEnd, columnStart), endIndex)
+
                         var peak = 0.0
                         var i = columnStart
                         while i <= columnEnd {
@@ -2124,11 +2276,9 @@ struct WaveformView: View {
 
                         let normalized = max(0.02, min(1.0, peak))
                         let amp = CGFloat(normalized) * halfHeight
+                        let x = ((CGFloat(column) + 0.5) / CGFloat(columnCount)) * size.width
                         path.move(to: CGPoint(x: x, y: midY - amp))
                         path.addLine(to: CGPoint(x: x, y: midY + amp))
-
-                        x += 1
-                        columnStart = columnEnd + 1
                     }
 
                     context.stroke(path, with: .color(Color.primary.opacity(0.55)), lineWidth: 1)
@@ -2674,6 +2824,7 @@ struct InlinePlayerView: NSViewRepresentable {
 struct DetailView: View {
     let file: FileAnalysis
     let isCompactLayout: Bool
+    @ObservedObject var model: WorkspaceViewModel
 
     @State private var player = AVPlayer()
     @State private var isPlaying = false
@@ -2728,9 +2879,9 @@ struct DetailView: View {
                     Spacer()
                     HStack(spacing: 10) {
                         Button {
-                            jump(by: -5)
+                            jump(by: -Double(model.jumpIntervalSeconds))
                         } label: {
-                            Label("Back 5s", systemImage: "gobackward.5")
+                            Label("Back \(model.jumpIntervalSeconds)s", systemImage: "gobackward")
                                 .labelStyle(.titleAndIcon)
                         }
                         .buttonStyle(.bordered)
@@ -2744,9 +2895,9 @@ struct DetailView: View {
                         .buttonStyle(.borderedProminent)
 
                         Button {
-                            jump(by: 5)
+                            jump(by: Double(model.jumpIntervalSeconds))
                         } label: {
-                            Label("Forward 5s", systemImage: "goforward.5")
+                            Label("Forward \(model.jumpIntervalSeconds)s", systemImage: "goforward")
                                 .labelStyle(.titleAndIcon)
                         }
                         .buttonStyle(.bordered)
@@ -2904,6 +3055,70 @@ struct ContentView: View {
     }
 }
 
+struct PreferencesView: View {
+    @ObservedObject var model: WorkspaceViewModel
+
+    var body: some View {
+        Form {
+            Section("Audio") {
+                HStack {
+                    Text("Default MP3 Bitrate")
+                    Spacer()
+                    Stepper(value: $model.audioBitrateKbps, in: 64...320, step: 32) {
+                        Text("\(model.audioBitrateKbps) kbps")
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    .frame(width: 180, alignment: .trailing)
+                }
+            }
+
+            Section("Clip") {
+                Picker("Default Encoding", selection: $model.clipEncodingMode) {
+                    ForEach(ClipEncodingMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+
+                HStack {
+                    Text("Jump Interval")
+                    Spacer()
+                    Stepper(value: $model.jumpIntervalSeconds, in: 1...30, step: 1) {
+                        Text("\(model.jumpIntervalSeconds)s")
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    .frame(width: 140, alignment: .trailing)
+                }
+            }
+
+            Section("Notifications") {
+                Picker("Completion Sound", selection: $model.completionSound) {
+                    ForEach(CompletionSound.allCases) { sound in
+                        Text(sound.displayName).tag(sound)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                HStack {
+                    Spacer()
+                    Button("Play Preview") {
+                        guard let soundName = model.completionSound.soundName,
+                              let sound = NSSound(named: soundName) else { return }
+                        sound.play()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(model.completionSound == .none)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(16)
+        .frame(width: 520)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private func firstExistingFileURL(from paths: [String]) -> URL? {
         for path in paths {
@@ -3028,6 +3243,10 @@ struct CheckBlackFramesApp: App {
                 .keyboardShortcut("e", modifiers: [.command, .option])
                 .disabled(!model.canExportClip)
             }
+        }
+
+        Settings {
+            PreferencesView(model: model)
         }
     }
 }
