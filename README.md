@@ -37,6 +37,7 @@ BUNDLED_FFMPEG_PATH=/path/to/ffmpeg ./scripts/build_app.sh
 - Use the tool switcher:
   - `Analyze` for black-frame detection
   - `Convert` for audio export workflow
+  - `Clip` for exporting a selected time range as a new video clip
   - `Inspect` for quick source/result snapshot
 
 ## Behavior
@@ -51,6 +52,7 @@ BUNDLED_FFMPEG_PATH=/path/to/ffmpeg ./scripts/build_app.sh
   - Finder drag-and-drop target in the main window
   - Analyze tool with inline player and black-segment timeline/list
   - Convert tool with export controls (M4A and MP3)
+  - Clip tool with draggable range handles and direct timecode input
   - Inspect tool for source/result snapshot
   - Unified activity panel with progress and output actions
 

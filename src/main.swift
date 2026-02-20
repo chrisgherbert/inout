@@ -6,6 +6,7 @@ import CoreVideo
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 private let minDurationSeconds = 0.001
 private let picThreshold = 0.90
@@ -15,6 +16,7 @@ private let maxSampleDimension = 640
 enum WorkspaceTool: String, CaseIterable, Identifiable {
     case analyze = "Analyze"
     case convert = "Convert"
+    case clip = "Clip"
     case inspect = "Inspect"
 
     var id: String { rawValue }
@@ -23,6 +25,41 @@ enum WorkspaceTool: String, CaseIterable, Identifiable {
 enum AudioFormat: String, CaseIterable, Identifiable {
     case mp3 = "MP3"
     case m4a = "M4A"
+
+    var id: String { rawValue }
+}
+
+enum ClipFormat: String, CaseIterable, Identifiable {
+    case mp4 = "MP4"
+    case mov = "MOV"
+
+    var id: String { rawValue }
+
+    var fileExtension: String {
+        switch self {
+        case .mp4: return "mp4"
+        case .mov: return "mov"
+        }
+    }
+
+    var fileType: AVFileType {
+        switch self {
+        case .mp4: return .mp4
+        case .mov: return .mov
+        }
+    }
+
+    var contentType: UTType {
+        switch self {
+        case .mp4: return .mpeg4Movie
+        case .mov: return .quickTimeMovie
+        }
+    }
+}
+
+enum ClipEncodingMode: String, CaseIterable, Identifiable {
+    case fast = "Fast (Original)"
+    case compressed = "More Compatible"
 
     var id: String { rawValue }
 }
@@ -162,6 +199,33 @@ func formatFileSize(_ bytes: Int64?) -> String {
     formatter.allowedUnits = [.useKB, .useMB, .useGB]
     formatter.countStyle = .file
     return formatter.string(fromByteCount: bytes)
+}
+
+func parseTimecode(_ value: String) -> Double? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    let parts = trimmed.split(separator: ":")
+    guard !parts.isEmpty && parts.count <= 3 else { return nil }
+
+    func parseSeconds(_ token: Substring) -> Double? {
+        let normalized = token.replacingOccurrences(of: ",", with: ".")
+        return Double(normalized)
+    }
+
+    switch parts.count {
+    case 1:
+        guard let s = parseSeconds(parts[0]) else { return nil }
+        return s
+    case 2:
+        guard let m = Double(parts[0]), let s = parseSeconds(parts[1]) else { return nil }
+        return (m * 60.0) + s
+    case 3:
+        guard let h = Double(parts[0]), let m = Double(parts[1]), let s = parseSeconds(parts[2]) else { return nil }
+        return (h * 3600.0) + (m * 60.0) + s
+    default:
+        return nil
+    }
 }
 
 func fourCCString(_ value: FourCharCode) -> String {
@@ -434,6 +498,14 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var exportStatusText = "No export yet"
     @Published var outputURL: URL?
 
+    @Published var clipStartSeconds: Double = 0
+    @Published var clipEndSeconds: Double = 0
+    @Published var clipStartText = "00:00:00.000"
+    @Published var clipEndText = "00:00:00.000"
+    @Published var selectedClipFormat: ClipFormat = .mp4
+    @Published var clipEncodingMode: ClipEncodingMode = .fast
+    @Published var clipVideoBitrateMbps: Double = 4.0
+
     @Published var uiMessage = "Ready"
 
     private var analyzeTask: Task<Void, Never>?
@@ -454,6 +526,22 @@ final class WorkspaceViewModel: ObservableObject {
 
     var canExport: Bool {
         sourceURL != nil && !isAnalyzing && !isExporting
+    }
+
+    var sourceDurationSeconds: Double {
+        max(0, sourceInfo?.durationSeconds ?? analysis?.mediaDuration ?? 0)
+    }
+
+    var canExportClip: Bool {
+        sourceURL != nil &&
+        sourceDurationSeconds > 0 &&
+        clipEndSeconds > clipStartSeconds &&
+        !isAnalyzing &&
+        !isExporting
+    }
+
+    var clipDurationSeconds: Double {
+        max(0, clipEndSeconds - clipStartSeconds)
     }
 
     var activityProgress: Double? {
@@ -486,11 +574,13 @@ final class WorkspaceViewModel: ObservableObject {
         sourceURL = url
         analysis = FileAnalysis(fileURL: url)
         sourceInfo = loadSourceMediaInfo(for: url)
+        applySuggestedClipBitrateFromSource()
         outputURL = nil
         uiMessage = "Loaded \(url.lastPathComponent)"
         wasCancelled = false
         analyzeProgress = 0
         exportProgress = 0
+        resetClipRange()
     }
 
     func clearSource() {
@@ -500,6 +590,66 @@ final class WorkspaceViewModel: ObservableObject {
         sourceInfo = nil
         outputURL = nil
         uiMessage = "Ready"
+        resetClipRange()
+    }
+
+    func resetClipRange() {
+        let duration = max(0, sourceInfo?.durationSeconds ?? analysis?.mediaDuration ?? 0)
+        clipStartSeconds = 0
+        clipEndSeconds = duration
+        clipStartText = formatSeconds(clipStartSeconds)
+        clipEndText = formatSeconds(clipEndSeconds)
+    }
+
+    private func applySuggestedClipBitrateFromSource() {
+        guard let sourceVideoBps = sourceInfo?.videoBitrateBps, sourceVideoBps > 0 else { return }
+
+        let step = 0.5
+        let sliderMin = 2.0
+        let sliderMax = 20.0
+        let sourceMbps = sourceVideoBps / 1_000_000.0
+        let nearestTick = (sourceMbps / step).rounded() * step
+        let suggested = nearestTick + step
+        clipVideoBitrateMbps = min(sliderMax, max(sliderMin, suggested))
+    }
+
+    func clampClipRange() {
+        let duration = sourceDurationSeconds
+        clipStartSeconds = min(max(0, clipStartSeconds), duration)
+        clipEndSeconds = min(max(0, clipEndSeconds), duration)
+        if clipEndSeconds < clipStartSeconds {
+            clipEndSeconds = clipStartSeconds
+        }
+        clipStartText = formatSeconds(clipStartSeconds)
+        clipEndText = formatSeconds(clipEndSeconds)
+    }
+
+    func commitClipStartText() {
+        guard let parsed = parseTimecode(clipStartText) else {
+            clipStartText = formatSeconds(clipStartSeconds)
+            return
+        }
+        clipStartSeconds = parsed
+        clampClipRange()
+    }
+
+    func commitClipEndText() {
+        guard let parsed = parseTimecode(clipEndText) else {
+            clipEndText = formatSeconds(clipEndSeconds)
+            return
+        }
+        clipEndSeconds = parsed
+        clampClipRange()
+    }
+
+    func setClipStart(_ time: Double) {
+        clipStartSeconds = time
+        clampClipRange()
+    }
+
+    func setClipEnd(_ time: Double) {
+        clipEndSeconds = time
+        clampClipRange()
     }
 
     func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -720,6 +870,149 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func startClipExport() {
+        guard canExportClip, let sourceURL else { return }
+
+        clampClipRange()
+        guard clipDurationSeconds > 0 else { return }
+
+        let defaultName = sourceURL.deletingPathExtension().lastPathComponent +
+            "_clip_" + formatSeconds(clipStartSeconds).replacingOccurrences(of: ":", with: "-") +
+            "_to_" + formatSeconds(clipEndSeconds).replacingOccurrences(of: ":", with: "-") +
+            "." + selectedClipFormat.fileExtension
+
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = defaultName
+        panel.allowedContentTypes = [selectedClipFormat.contentType]
+        panel.canCreateDirectories = true
+        panel.title = "Export Clip"
+
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        try? FileManager.default.removeItem(at: destination)
+
+        isExporting = true
+        exportProgress = 0
+        exportStatusText = "Exporting clip…"
+        outputURL = nil
+
+        if clipEncodingMode == .fast {
+            let asset = AVURLAsset(url: sourceURL)
+            let preset = AVAssetExportPresetPassthrough
+
+            guard let session = AVAssetExportSession(asset: asset, presetName: preset) else {
+                isExporting = false
+                exportStatusText = "Clip export failed: Unable to create passthrough export session"
+                uiMessage = exportStatusText
+                return
+            }
+
+            session.outputURL = destination
+            session.outputFileType = selectedClipFormat.fileType
+            session.shouldOptimizeForNetworkUse = true
+            session.timeRange = CMTimeRange(
+                start: CMTime(seconds: clipStartSeconds, preferredTimescale: 600),
+                duration: CMTime(seconds: clipDurationSeconds, preferredTimescale: 600)
+            )
+
+            Task { [weak self] in
+                guard let self else { return }
+
+                let monitor = Task { [weak self] in
+                    while session.status == .waiting || session.status == .exporting {
+                        await MainActor.run {
+                            self?.exportProgress = Double(session.progress)
+                            self?.exportStatusText = "Exporting clip… \(Int((Double(session.progress) * 100).rounded()))%"
+                        }
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                    }
+                }
+
+                await withCheckedContinuation { continuation in
+                    session.exportAsynchronously {
+                        continuation.resume()
+                    }
+                }
+                monitor.cancel()
+
+                await MainActor.run {
+                    self.isExporting = false
+                    self.exportProgress = 0
+                    switch session.status {
+                    case .completed:
+                        self.outputURL = destination
+                        self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
+                        self.uiMessage = self.exportStatusText
+                    case .failed:
+                        self.exportStatusText = "Clip export failed: \(session.error?.localizedDescription ?? "Unknown error")"
+                        self.uiMessage = self.exportStatusText
+                    case .cancelled:
+                        self.exportStatusText = "Clip export cancelled"
+                        self.uiMessage = self.exportStatusText
+                    default:
+                        self.exportStatusText = "Clip export ended with status: \(session.status.rawValue)"
+                        self.uiMessage = self.exportStatusText
+                    }
+                }
+            }
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            await MainActor.run {
+                self.exportProgress = 0.1
+                self.exportStatusText = "Encoding compressed clip…"
+            }
+
+            guard let ffmpegURL = self.findFFmpegExecutable() else {
+                await MainActor.run {
+                    self.isExporting = false
+                    self.exportProgress = 0
+                    self.exportStatusText = "Clip export failed: No ffmpeg executable found."
+                    self.uiMessage = self.exportStatusText
+                }
+                return
+            }
+
+            let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
+            let start = String(format: "%.3f", self.clipStartSeconds)
+            let end = String(format: "%.3f", self.clipEndSeconds)
+            let encodeError = await self.runProcess(
+                executableURL: ffmpegURL,
+                arguments: [
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-i", sourceURL.path,
+                    "-ss", start,
+                    "-to", end,
+                    "-map", "0:v:0",
+                    "-map", "0:a?",
+                    "-c:v", "libx264",
+                    "-b:v", "\(bitrateKbps)k",
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    destination.path
+                ]
+            )
+
+            await MainActor.run {
+                self.isExporting = false
+                self.exportProgress = 0
+                if let encodeError {
+                    self.exportStatusText = "Clip export failed: \(encodeError)"
+                    self.uiMessage = self.exportStatusText
+                } else {
+                    self.outputURL = destination
+                    self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
+                    self.uiMessage = self.exportStatusText
+                }
+            }
+        }
+    }
+
     private func runProcess(executableURL: URL, arguments: [String]) async -> String? {
         await withCheckedContinuation { continuation in
             let process = Process()
@@ -841,6 +1134,8 @@ struct ToolContentView: View {
                 AnalyzeToolView(model: model)
             case .convert:
                 ConvertToolView(model: model)
+            case .clip:
+                ClipToolView(model: model)
             case .inspect:
                 InspectToolView(sourceURL: model.sourceURL, analysis: model.analysis, sourceInfo: model.sourceInfo)
             }
@@ -920,7 +1215,7 @@ struct ConvertToolView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canExport)
 
-                    Text("M4A uses native AVFoundation export. MP3 uses native afconvert and defaults to 128 kbps.")
+                    Text("M4A uses native AVFoundation export. MP3 uses ffmpeg and defaults to 128 kbps.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -937,6 +1232,260 @@ struct ConvertToolView: View {
             }
 
             Spacer()
+        }
+    }
+}
+
+struct ClipToolView: View {
+    @ObservedObject var model: WorkspaceViewModel
+
+    @State private var player = AVPlayer()
+    @State private var playheadSeconds: Double = 0
+    @State private var playerDurationSeconds: Double = 0
+
+    private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+
+    private func loadPlayerItem() {
+        guard let sourceURL = model.sourceURL else {
+            player.replaceCurrentItem(with: nil)
+            playheadSeconds = 0
+            playerDurationSeconds = 0
+            return
+        }
+        let item = AVPlayerItem(url: sourceURL)
+        player.replaceCurrentItem(with: item)
+        let duration = CMTimeGetSeconds(item.asset.duration)
+        playerDurationSeconds = duration.isFinite && duration > 0 ? duration : model.sourceDurationSeconds
+        playheadSeconds = 0
+    }
+
+    private func seekPlayer(to time: Double) {
+        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        playheadSeconds = clamped
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if model.sourceURL != nil {
+                InlinePlayerView(player: player)
+                    .frame(minHeight: 260, maxHeight: 320)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                GroupBox("Clip Range") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Text("Playhead")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Slider(
+                                value: Binding(
+                                    get: { playheadSeconds },
+                                    set: { seekPlayer(to: $0) }
+                                ),
+                                in: 0...max(0.001, max(playerDurationSeconds, model.sourceDurationSeconds))
+                            )
+                            Text(formatSeconds(playheadSeconds))
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 108, alignment: .trailing)
+                        }
+
+                        ClipRangeSelector(
+                            startSeconds: Binding(
+                                get: { model.clipStartSeconds },
+                                set: {
+                                    model.setClipStart($0)
+                                }
+                            ),
+                            endSeconds: Binding(
+                                get: { model.clipEndSeconds },
+                                set: {
+                                    model.setClipEnd($0)
+                                }
+                            ),
+                            durationSeconds: max(0.001, model.sourceDurationSeconds)
+                        )
+                        .frame(height: 34)
+
+                        HStack(spacing: 8) {
+                            Text("Clip Start")
+                                .frame(width: 70, alignment: .leading)
+                            TextField("00:00:00.000", text: $model.clipStartText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.body, design: .monospaced))
+                                .onSubmit { model.commitClipStartText() }
+
+                            Button("Set Start") {
+                                model.setClipStart(playheadSeconds)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .font(.caption)
+
+                        HStack(spacing: 8) {
+                            Text("Clip End")
+                                .frame(width: 70, alignment: .leading)
+                            TextField("00:00:00.000", text: $model.clipEndText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.body, design: .monospaced))
+                                .onSubmit { model.commitClipEndText() }
+
+                            Button("Set End") {
+                                model.setClipEnd(playheadSeconds)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .font(.caption)
+
+                        HStack(spacing: 8) {
+                            Text("Duration: \(formatSeconds(model.clipDurationSeconds))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Jump to Start") {
+                                seekPlayer(to: model.clipStartSeconds)
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Jump to End") {
+                                seekPlayer(to: model.clipEndSeconds)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(6)
+                }
+
+                GroupBox("Export New Clip") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Picker("Encoding", selection: $model.clipEncodingMode) {
+                            ForEach(ClipEncodingMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Picker("Format", selection: $model.selectedClipFormat) {
+                            ForEach(ClipFormat.allCases) { format in
+                                Text(format.rawValue).tag(format)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        if model.clipEncodingMode == .compressed {
+                            HStack {
+                                Text("Video bitrate")
+                                Slider(value: $model.clipVideoBitrateMbps, in: 2...20, step: 0.5)
+                                Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
+                                    .font(.caption.monospacedDigit())
+                                    .frame(width: 90, alignment: .trailing)
+                            }
+                            .font(.caption)
+                            Text("Smaller File uses H.264 video + AAC audio.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Fast uses passthrough (original codecs/bitrate).")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button {
+                            model.commitClipStartText()
+                            model.commitClipEndText()
+                            model.startClipExport()
+                        } label: {
+                            Label(model.isExporting ? "Exporting…" : "Export Clip", systemImage: "film.stack")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.canExportClip)
+                    }
+                    .padding(6)
+                }
+            } else {
+                EmptyToolView(title: "Clip", subtitle: "Choose a source video to create a new clip from a selected range.")
+            }
+
+            Spacer()
+        }
+        .onAppear {
+            loadPlayerItem()
+        }
+        .onChange(of: model.sourceURL?.path) { _ in
+            loadPlayerItem()
+        }
+        .onReceive(timer) { _ in
+            let current = CMTimeGetSeconds(player.currentTime())
+            if current.isFinite {
+                playheadSeconds = max(0, current)
+            }
+            let currentDuration = CMTimeGetSeconds(player.currentItem?.duration ?? .invalid)
+            if currentDuration.isFinite && currentDuration > 0 {
+                playerDurationSeconds = currentDuration
+            }
+        }
+        .onDisappear {
+            player.pause()
+        }
+    }
+}
+
+struct ClipRangeSelector: View {
+    @Binding var startSeconds: Double
+    @Binding var endSeconds: Double
+    let durationSeconds: Double
+
+    private func xPosition(for value: Double, width: CGFloat) -> CGFloat {
+        guard durationSeconds > 0 else { return 0 }
+        return CGFloat(min(max(0, value / durationSeconds), 1.0)) * width
+    }
+
+    private func timeValue(for x: CGFloat, width: CGFloat) -> Double {
+        guard width > 0 else { return 0 }
+        let ratio = min(max(0, x / width), 1.0)
+        return Double(ratio) * durationSeconds
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let startX = xPosition(for: startSeconds, width: width)
+            let endX = xPosition(for: endSeconds, width: width)
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.gray.opacity(0.2))
+                    .frame(height: 8)
+                    .offset(y: 12)
+
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.35))
+                    .frame(width: max(2, endX - startX), height: 8)
+                    .offset(x: startX, y: 12)
+
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 14, height: 14)
+                    .offset(x: startX - 7, y: 9)
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let newValue = min(timeValue(for: value.location.x, width: width), endSeconds)
+                                startSeconds = max(0, newValue)
+                            }
+                    )
+
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 14, height: 14)
+                    .offset(x: endX - 7, y: 9)
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let newValue = max(timeValue(for: value.location.x, width: width), startSeconds)
+                                endSeconds = min(durationSeconds, newValue)
+                            }
+                    )
+            }
         }
     }
 }
