@@ -3009,155 +3009,129 @@ struct TimelineViewportScroller: View {
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
     let onViewportStartChanged: (Double) -> Void
-    @State private var thumbDragOriginViewportStart: Double?
-    @State private var dragStartedOnThumb = false
-    @State private var isHovered = false
-    @State private var isThumbHovered = false
-    @State private var cursorState: Int = 0 // 0 none, 1 open hand, 2 closed hand
-
-    private var visibleDuration: Double {
-        max(0.0001, visibleEndSeconds - visibleStartSeconds)
-    }
-
-    private var maxViewportStart: Double {
-        max(0, totalDurationSeconds - visibleDuration)
-    }
-
-    private func widthForVisibleWindow(_ width: CGFloat) -> CGFloat {
-        guard totalDurationSeconds > 0 else { return width }
-        return max(28, CGFloat(min(1.0, visibleDuration / totalDurationSeconds)) * width)
-    }
-
-    private func availableThumbTravel(_ width: CGFloat, thumbWidth: CGFloat) -> CGFloat {
-        max(0, width - thumbWidth)
-    }
-
-    private func thumbOffset(for viewportStart: Double, width: CGFloat, thumbWidth: CGFloat) -> CGFloat {
-        let travel = availableThumbTravel(width, thumbWidth: thumbWidth)
-        guard maxViewportStart > 0, travel > 0 else { return 0 }
-        let ratio = min(max(0, viewportStart / maxViewportStart), 1.0)
-        return CGFloat(ratio) * travel
-    }
-
-    private func viewportStart(forThumbX thumbX: CGFloat, width: CGFloat, thumbWidth: CGFloat) -> Double {
-        let travel = availableThumbTravel(width, thumbWidth: thumbWidth)
-        guard travel > 0, maxViewportStart > 0 else { return 0 }
-        let clampedX = min(max(0, thumbX), travel)
-        let ratio = Double(clampedX / travel)
-        return ratio * maxViewportStart
-    }
-
-    private func viewportStartCentered(at x: CGFloat, width: CGFloat, thumbWidth: CGFloat) -> Double {
-        let targetThumbX = x - (thumbWidth / 2.0)
-        return viewportStart(forThumbX: targetThumbX, width: width, thumbWidth: thumbWidth)
-    }
-
-    private func updateCursorState() {
-        let desired: Int
-        if dragStartedOnThumb {
-            desired = 2
-        } else if isThumbHovered {
-            desired = 1
-        } else {
-            desired = 0
-        }
-
-        guard desired != cursorState else { return }
-        if cursorState != 0 {
-            NSCursor.pop()
-        }
-        if desired == 1 {
-            NSCursor.openHand.push()
-        } else if desired == 2 {
-            NSCursor.closedHand.push()
-        }
-        cursorState = desired
-    }
-
     var body: some View {
-        GeometryReader { proxy in
-            let width = proxy.size.width
-            let trackHeight: CGFloat = 8
-            let thumbHitPadding: CGFloat = 14
-            let thumbWidth = widthForVisibleWindow(width)
-            let thumbX = thumbOffset(for: visibleStartSeconds, width: width, thumbWidth: thumbWidth)
-            let thumbTravel = availableThumbTravel(width, thumbWidth: thumbWidth)
-            let thumbEndX = thumbX + thumbWidth
+        NativeTimelineScroller(
+            totalDurationSeconds: totalDurationSeconds,
+            visibleStartSeconds: visibleStartSeconds,
+            visibleEndSeconds: visibleEndSeconds,
+            onViewportStartChanged: onViewportStartChanged
+        )
+        .help("Use trackpad/mouse scrolling for native pan and momentum")
+    }
+}
 
-            ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(Color.gray.opacity(isHovered ? 0.30 : 0.22))
-                    .frame(height: trackHeight)
-                    .offset(y: (proxy.size.height - trackHeight) / 2.0)
+private final class TimelineScrollerContentView: NSView {}
 
-                Capsule(style: .continuous)
-                    .fill(Color.accentColor.opacity(0.65))
-                    .frame(width: thumbWidth, height: trackHeight)
-                    .offset(x: thumbX,
-                            y: (proxy.size.height - trackHeight) / 2.0)
+private final class TimelineScrollerCoordinator: NSObject {
+    var suppressCallback = false
+    var onViewportStartChanged: (Double) -> Void
+    var maxViewportStartSeconds: Double = 0
+    weak var clipView: NSClipView?
+    weak var contentView: NSView?
 
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: width, height: max(trackHeight + 14, proxy.size.height))
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        isHovered = hovering
-                    }
-                    .highPriorityGesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                if thumbDragOriginViewportStart == nil {
-                                    dragStartedOnThumb =
-                                        value.startLocation.x >= (thumbX - thumbHitPadding) &&
-                                        value.startLocation.x <= (thumbEndX + thumbHitPadding)
-                                    updateCursorState()
-                                }
-                                guard dragStartedOnThumb else { return }
-                                if thumbDragOriginViewportStart == nil {
-                                    thumbDragOriginViewportStart = visibleStartSeconds
-                                }
-                                let origin = thumbDragOriginViewportStart ?? visibleStartSeconds
-                                guard thumbTravel > 0, maxViewportStart > 0 else { return }
-                                let ratioDelta = Double(value.translation.width / thumbTravel)
-                                let candidate = origin + (ratioDelta * maxViewportStart)
-                                onViewportStartChanged(min(max(0, candidate), maxViewportStart))
-                            }
-                            .onEnded { value in
-                                if !dragStartedOnThumb &&
-                                    abs(value.translation.width) < 3 &&
-                                    abs(value.translation.height) < 3 {
-                                    onViewportStartChanged(
-                                        viewportStartCentered(
-                                            at: value.location.x,
-                                            width: width,
-                                            thumbWidth: thumbWidth
-                                        )
-                                    )
-                                }
-                                thumbDragOriginViewportStart = nil
-                                dragStartedOnThumb = false
-                                updateCursorState()
-                            }
-                    )
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(Color.clear)
-                            .frame(width: max(0, (thumbEndX + thumbHitPadding) - max(0, thumbX - thumbHitPadding)),
-                                   height: max(trackHeight + 14, proxy.size.height))
-                            .offset(x: max(0, thumbX - thumbHitPadding))
-                            .onHover { hovering in
-                                isThumbHovered = hovering
-                                updateCursorState()
-                            }
-                    }
-            }
-            .help("Drag to pan the visible timeline window")
-            .onDisappear {
-                if cursorState != 0 {
-                    NSCursor.pop()
-                    cursorState = 0
-                }
-            }
+    init(onViewportStartChanged: @escaping (Double) -> Void) {
+        self.onViewportStartChanged = onViewportStartChanged
+    }
+
+    @objc func boundsChanged(_ notification: Notification) {
+        guard !suppressCallback,
+              let clipView,
+              let contentView else { return }
+
+        let contentWidth = max(1, contentView.frame.width)
+        let visibleWidth = max(1, clipView.bounds.width)
+        let maxOffset = max(0, contentWidth - visibleWidth)
+        guard maxOffset > 0 else {
+            onViewportStartChanged(0)
+            return
+        }
+
+        let ratio = min(max(0, Double(clipView.bounds.origin.x / maxOffset)), 1.0)
+        onViewportStartChanged(ratio * maxViewportStartSeconds)
+    }
+}
+
+private struct NativeTimelineScroller: NSViewRepresentable {
+    let totalDurationSeconds: Double
+    let visibleStartSeconds: Double
+    let visibleEndSeconds: Double
+    let onViewportStartChanged: (Double) -> Void
+
+    func makeCoordinator() -> TimelineScrollerCoordinator {
+        TimelineScrollerCoordinator(onViewportStartChanged: onViewportStartChanged)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = false
+        scrollView.horizontalScrollElasticity = .allowed
+        scrollView.verticalScrollElasticity = .none
+        scrollView.scrollerStyle = .legacy
+
+        let content = TimelineScrollerContentView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        content.wantsLayer = true
+        content.layer?.backgroundColor = NSColor.clear.cgColor
+        scrollView.documentView = content
+
+        let clipView = scrollView.contentView
+        clipView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(TimelineScrollerCoordinator.boundsChanged(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: clipView
+        )
+
+        context.coordinator.clipView = clipView
+        context.coordinator.contentView = content
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.onViewportStartChanged = onViewportStartChanged
+        guard let content = nsView.documentView else { return }
+
+        let visibleDuration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
+        let totalDuration = max(0.0001, totalDurationSeconds)
+        let viewportRatio = min(1.0, visibleDuration / totalDuration)
+        let viewportWidth = max(1, nsView.contentSize.width)
+
+        // Use proportional content width so native scroller knob maps 1:1 with viewport range.
+        let contentWidth = max(viewportWidth, viewportWidth / max(viewportRatio, 0.0001))
+        if abs(content.frame.width - contentWidth) > 0.5 {
+            content.frame = NSRect(x: 0, y: 0, width: contentWidth, height: 1)
+        }
+
+        let maxViewportStart = max(0.0, totalDuration - visibleDuration)
+        context.coordinator.maxViewportStartSeconds = maxViewportStart
+        let maxOffset = max(0.0, contentWidth - viewportWidth)
+        let targetOffset: CGFloat
+        if maxViewportStart > 0, maxOffset > 0 {
+            let ratio = min(max(0, visibleStartSeconds / maxViewportStart), 1.0)
+            targetOffset = CGFloat(ratio) * maxOffset
+        } else {
+            targetOffset = 0
+        }
+
+        if abs(nsView.contentView.bounds.origin.x - targetOffset) > 0.5 {
+            context.coordinator.suppressCallback = true
+            nsView.contentView.bounds.origin.x = targetOffset
+            nsView.reflectScrolledClipView(nsView.contentView)
+            context.coordinator.suppressCallback = false
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: TimelineScrollerCoordinator) {
+        if let clipView = coordinator.clipView {
+            NotificationCenter.default.removeObserver(
+                coordinator,
+                name: NSView.boundsDidChangeNotification,
+                object: clipView
+            )
         }
     }
 }
