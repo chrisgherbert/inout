@@ -23,9 +23,9 @@ private let pixelBlackThreshold = 0.10
 private let maxSampleDimension = 640
 
 enum WorkspaceTool: String, CaseIterable, Identifiable {
+    case clip = "Clip"
     case analyze = "Analyze"
     case convert = "Convert"
-    case clip = "Clip"
     case inspect = "Inspect"
 
     var id: String { rawValue }
@@ -693,7 +693,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let completionSound = "prefs.completionSound"
     }
 
-    @Published var selectedTool: WorkspaceTool = .analyze
+    @Published var selectedTool: WorkspaceTool = .clip
     @Published var sourceURL: URL?
     @Published var analysis: FileAnalysis?
     @Published var sourceInfo: SourceMediaInfo?
@@ -1644,6 +1644,14 @@ struct ToolContentView: View {
     var body: some View {
         TabView(selection: $model.selectedTool) {
             ScrollView {
+                ClipToolView(model: model, isCompactLayout: isCompactLayout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.automatic)
+            .tabItem { Text(WorkspaceTool.clip.rawValue) }
+            .tag(WorkspaceTool.clip)
+
+            ScrollView {
                 AnalyzeToolView(model: model, isCompactLayout: isCompactLayout)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1658,14 +1666,6 @@ struct ToolContentView: View {
             .scrollIndicators(.automatic)
             .tabItem { Text(WorkspaceTool.convert.rawValue) }
             .tag(WorkspaceTool.convert)
-
-            ScrollView {
-                ClipToolView(model: model, isCompactLayout: isCompactLayout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .scrollIndicators(.automatic)
-            .tabItem { Text(WorkspaceTool.clip.rawValue) }
-            .tag(WorkspaceTool.clip)
 
             ScrollView {
                 InspectToolView(
@@ -3457,11 +3457,11 @@ struct CheckBlackFramesApp: App {
             }
 
             CommandMenu("Tool") {
-                Button("Analyze") { model.selectedTool = .analyze }
-                    .keyboardShortcut("1", modifiers: [.command])
-                Button("Convert") { model.selectedTool = .convert }
-                    .keyboardShortcut("2", modifiers: [.command])
                 Button("Clip") { model.selectedTool = .clip }
+                    .keyboardShortcut("1", modifiers: [.command])
+                Button("Analyze") { model.selectedTool = .analyze }
+                    .keyboardShortcut("2", modifiers: [.command])
+                Button("Convert") { model.selectedTool = .convert }
                     .keyboardShortcut("3", modifiers: [.command])
                 Button("Inspect") { model.selectedTool = .inspect }
                     .keyboardShortcut("4", modifiers: [.command])
