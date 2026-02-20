@@ -8,6 +8,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 import Combine
 
+extension Notification.Name {
+    static let clipSetStartAtPlayhead = Notification.Name("clipSetStartAtPlayhead")
+    static let clipSetEndAtPlayhead = Notification.Name("clipSetEndAtPlayhead")
+    static let clipClearRange = Notification.Name("clipClearRange")
+    static let clipJumpToStart = Notification.Name("clipJumpToStart")
+    static let clipJumpToEnd = Notification.Name("clipJumpToEnd")
+}
+
 private let minDurationSeconds = 0.001
 private let picThreshold = 0.90
 private let pixelBlackThreshold = 0.10
@@ -1835,6 +1843,22 @@ struct ClipToolView: View {
                 playerDurationSeconds = currentDuration
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .clipSetStartAtPlayhead)) { _ in
+            model.setClipStart(playheadSeconds)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipSetEndAtPlayhead)) { _ in
+            model.setClipEnd(playheadSeconds)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipClearRange)) { _ in
+            model.resetClipRange()
+            seekPlayer(to: model.clipStartSeconds)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart)) { _ in
+            seekPlayer(to: model.clipStartSeconds)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipJumpToEnd)) { _ in
+            seekPlayer(to: model.clipEndSeconds)
+        }
         .onDisappear {
             waveformTask?.cancel()
             removeKeyMonitor()
@@ -2506,6 +2530,40 @@ struct CheckBlackFramesApp: App {
         }
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(after: .textEditing) {
+                Divider()
+
+                Button("Set Clip Start at Playhead") {
+                    NotificationCenter.default.post(name: .clipSetStartAtPlayhead, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: [])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+
+                Button("Set Clip End at Playhead") {
+                    NotificationCenter.default.post(name: .clipSetEndAtPlayhead, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+
+                Button("Clear Clip In/Out") {
+                    NotificationCenter.default.post(name: .clipClearRange, object: nil)
+                }
+                .keyboardShortcut("x", modifiers: [])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+
+                Button("Jump to Clip Start") {
+                    NotificationCenter.default.post(name: .clipJumpToStart, object: nil)
+                }
+                .keyboardShortcut(.upArrow, modifiers: [])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+
+                Button("Jump to Clip End") {
+                    NotificationCenter.default.post(name: .clipJumpToEnd, object: nil)
+                }
+                .keyboardShortcut(.downArrow, modifiers: [])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("Choose Video…") {
                     model.chooseSource()
