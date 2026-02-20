@@ -2041,6 +2041,7 @@ struct WaveformView: View {
     let onSeek: (Double) -> Void
     @State private var dragWindowStart: Double?
     @State private var dragWindowEnd: Double?
+    @State private var isHovered = false
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -2068,7 +2069,7 @@ struct WaveformView: View {
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.gray.opacity(0.12))
+                    .fill(Color.gray.opacity(isHovered ? 0.18 : 0.12))
 
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.accentColor.opacity(0.12))
@@ -2105,9 +2106,12 @@ struct WaveformView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.gray.opacity(0.25), lineWidth: 1)
+                    .stroke(isHovered ? Color.accentColor.opacity(0.35) : Color.gray.opacity(0.25), lineWidth: 1)
             )
             .contentShape(Rectangle())
+            .onHover { hovering in
+                isHovered = hovering
+            }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
@@ -2152,6 +2156,7 @@ struct UnifiedClipTimelineSelector: View {
     let onSeek: (Double) -> Void
     @State private var seekDragWindowStart: Double?
     @State private var seekDragWindowEnd: Double?
+    @State private var isHovered = false
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -2178,7 +2183,7 @@ struct UnifiedClipTimelineSelector: View {
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.gray.opacity(0.2))
+                    .fill(Color.gray.opacity(isHovered ? 0.26 : 0.2))
                     .frame(height: 10)
                     .offset(y: 15)
 
@@ -2234,6 +2239,9 @@ struct UnifiedClipTimelineSelector: View {
                     )
             }
             .contentShape(Rectangle())
+            .onHover { hovering in
+                isHovered = hovering
+            }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
@@ -2262,6 +2270,9 @@ struct TimelineViewportScroller: View {
     let onViewportStartChanged: (Double) -> Void
     @State private var thumbDragOriginViewportStart: Double?
     @State private var dragStartedOnThumb = false
+    @State private var isHovered = false
+    @State private var isThumbHovered = false
+    @State private var cursorState: Int = 0 // 0 none, 1 open hand, 2 closed hand
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -2300,6 +2311,28 @@ struct TimelineViewportScroller: View {
         return viewportStart(forThumbX: targetThumbX, width: width, thumbWidth: thumbWidth)
     }
 
+    private func updateCursorState() {
+        let desired: Int
+        if dragStartedOnThumb {
+            desired = 2
+        } else if isThumbHovered {
+            desired = 1
+        } else {
+            desired = 0
+        }
+
+        guard desired != cursorState else { return }
+        if cursorState != 0 {
+            NSCursor.pop()
+        }
+        if desired == 1 {
+            NSCursor.openHand.push()
+        } else if desired == 2 {
+            NSCursor.closedHand.push()
+        }
+        cursorState = desired
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
@@ -2312,7 +2345,7 @@ struct TimelineViewportScroller: View {
 
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
-                    .fill(Color.gray.opacity(0.22))
+                    .fill(Color.gray.opacity(isHovered ? 0.30 : 0.22))
                     .frame(height: trackHeight)
                     .offset(y: (proxy.size.height - trackHeight) / 2.0)
 
@@ -2326,6 +2359,9 @@ struct TimelineViewportScroller: View {
                     .fill(Color.clear)
                     .frame(width: width, height: max(trackHeight + 14, proxy.size.height))
                     .contentShape(Rectangle())
+                    .onHover { hovering in
+                        isHovered = hovering
+                    }
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
@@ -2333,6 +2369,7 @@ struct TimelineViewportScroller: View {
                                     dragStartedOnThumb =
                                         value.startLocation.x >= (thumbX - thumbHitPadding) &&
                                         value.startLocation.x <= (thumbEndX + thumbHitPadding)
+                                    updateCursorState()
                                 }
                                 guard dragStartedOnThumb else { return }
                                 if thumbDragOriginViewportStart == nil {
@@ -2358,10 +2395,28 @@ struct TimelineViewportScroller: View {
                                 }
                                 thumbDragOriginViewportStart = nil
                                 dragStartedOnThumb = false
+                                updateCursorState()
                             }
                     )
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(Color.clear)
+                            .frame(width: max(0, (thumbEndX + thumbHitPadding) - max(0, thumbX - thumbHitPadding)),
+                                   height: max(trackHeight + 14, proxy.size.height))
+                            .offset(x: max(0, thumbX - thumbHitPadding))
+                            .onHover { hovering in
+                                isThumbHovered = hovering
+                                updateCursorState()
+                            }
+                    }
             }
             .help("Drag to pan the visible timeline window")
+            .onDisappear {
+                if cursorState != 0 {
+                    NSCursor.pop()
+                    cursorState = 0
+                }
+            }
         }
     }
 }
