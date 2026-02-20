@@ -1222,18 +1222,24 @@ struct SourceHeaderView: View {
 
 struct ToolContentView: View {
     @ObservedObject var model: WorkspaceViewModel
+    let isCompactLayout: Bool
 
     var body: some View {
         Group {
             switch model.selectedTool {
             case .analyze:
-                AnalyzeToolView(model: model)
+                AnalyzeToolView(model: model, isCompactLayout: isCompactLayout)
             case .convert:
-                ConvertToolView(model: model)
+                ConvertToolView(model: model, isCompactLayout: isCompactLayout)
             case .clip:
-                ClipToolView(model: model)
+                ClipToolView(model: model, isCompactLayout: isCompactLayout)
             case .inspect:
-                InspectToolView(sourceURL: model.sourceURL, analysis: model.analysis, sourceInfo: model.sourceInfo)
+                InspectToolView(
+                    sourceURL: model.sourceURL,
+                    analysis: model.analysis,
+                    sourceInfo: model.sourceInfo,
+                    isCompactLayout: isCompactLayout
+                )
             }
         }
     }
@@ -1241,6 +1247,7 @@ struct ToolContentView: View {
 
 struct AnalyzeToolView: View {
     @ObservedObject var model: WorkspaceViewModel
+    let isCompactLayout: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1270,7 +1277,7 @@ struct AnalyzeToolView: View {
             }
 
             if let analysis = model.analysis {
-                DetailView(file: analysis)
+                DetailView(file: analysis, isCompactLayout: isCompactLayout)
             } else {
                 EmptyToolView(title: "Analyze", subtitle: "Choose a video and run black-frame analysis.")
             }
@@ -1280,6 +1287,7 @@ struct AnalyzeToolView: View {
 
 struct ConvertToolView: View {
     @ObservedObject var model: WorkspaceViewModel
+    let isCompactLayout: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1327,13 +1335,16 @@ struct ConvertToolView: View {
                 EmptyToolView(title: "Convert", subtitle: "Choose a source video to enable audio export.")
             }
 
-            Spacer()
+            if !isCompactLayout {
+                Spacer()
+            }
         }
     }
 }
 
 struct ClipToolView: View {
     @ObservedObject var model: WorkspaceViewModel
+    let isCompactLayout: Bool
 
     @State private var player = AVPlayer()
     @State private var playheadSeconds: Double = 0
@@ -1471,6 +1482,18 @@ struct ClipToolView: View {
 
             let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let hasDisallowedModifier = flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
+
+            if !hasDisallowedModifier && !flags.contains(.shift) {
+                if event.specialKey == .upArrow {
+                    seekPlayer(to: model.clipStartSeconds)
+                    return nil
+                }
+                if event.specialKey == .downArrow {
+                    seekPlayer(to: model.clipEndSeconds)
+                    return nil
+                }
+            }
 
             if flags.isDisjoint(with: [.command, .option, .control]) && !flags.contains(.shift) {
                 if chars == "i" {
@@ -1489,7 +1512,6 @@ struct ClipToolView: View {
             }
 
             let hasShift = flags.contains(.shift)
-            let hasDisallowedModifier = flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
             guard hasShift && !hasDisallowedModifier else { return event }
 
             let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
@@ -1583,7 +1605,10 @@ struct ClipToolView: View {
         VStack(alignment: .leading, spacing: 12) {
             if model.sourceURL != nil {
                 InlinePlayerView(player: player)
-                    .frame(minHeight: 260, maxHeight: 320)
+                    .frame(
+                        minHeight: isCompactLayout ? 150 : 260,
+                        maxHeight: isCompactLayout ? 210 : 320
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .onTapGesture {
                         dismissTimecodeFieldFocus()
@@ -1605,14 +1630,14 @@ struct ClipToolView: View {
                             .buttonStyle(.bordered)
                         }
 
-                        if isWaveformLoading {
+                        if !isCompactLayout && isWaveformLoading {
                             HStack {
                                 ProgressView()
                                 Text("Generating waveform…")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                        } else if !waveformSamples.isEmpty {
+                        } else if !isCompactLayout && !waveformSamples.isEmpty {
                             WaveformView(
                                 samples: waveformSamples,
                                 startSeconds: model.clipStartSeconds,
@@ -1659,17 +1684,19 @@ struct ClipToolView: View {
                             }
                         )
 
-                        HStack {
-                            Text("In: \(formatSeconds(model.clipStartSeconds))")
-                                .font(.caption.monospacedDigit())
-                            Spacer()
-                            Text("Playhead: \(formatSeconds(playheadSeconds))")
-                                .font(.caption.monospacedDigit())
-                            Spacer()
-                            Text("Out: \(formatSeconds(model.clipEndSeconds))")
-                                .font(.caption.monospacedDigit())
+                        if !isCompactLayout {
+                            HStack {
+                                Text("In: \(formatSeconds(model.clipStartSeconds))")
+                                    .font(.caption.monospacedDigit())
+                                Spacer()
+                                Text("Playhead: \(formatSeconds(playheadSeconds))")
+                                    .font(.caption.monospacedDigit())
+                                Spacer()
+                                Text("Out: \(formatSeconds(model.clipEndSeconds))")
+                                    .font(.caption.monospacedDigit())
+                            }
+                            .foregroundStyle(.secondary)
                         }
-                        .foregroundStyle(.secondary)
 
                         HStack(spacing: 8) {
                             Text("Clip Start")
@@ -1701,19 +1728,21 @@ struct ClipToolView: View {
                         }
                         .font(.caption)
 
-                        HStack(spacing: 8) {
-                            Text("Duration: \(formatSeconds(model.clipDurationSeconds))")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Jump to Start") {
-                                seekPlayer(to: model.clipStartSeconds)
+                        if !isCompactLayout {
+                            HStack(spacing: 8) {
+                                Text("Duration: \(formatSeconds(model.clipDurationSeconds))")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Jump to Start") {
+                                    seekPlayer(to: model.clipStartSeconds)
+                                }
+                                .buttonStyle(.bordered)
+                                Button("Jump to End") {
+                                    seekPlayer(to: model.clipEndSeconds)
+                                }
+                                .buttonStyle(.bordered)
                             }
-                            .buttonStyle(.bordered)
-                            Button("Jump to End") {
-                                seekPlayer(to: model.clipEndSeconds)
-                            }
-                            .buttonStyle(.bordered)
                         }
                     }
                     .padding(6)
@@ -1772,11 +1801,13 @@ struct ClipToolView: View {
                 EmptyToolView(title: "Clip", subtitle: "Choose a source video to create a new clip from a selected range.")
             }
 
-            Spacer()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    dismissTimecodeFieldFocus()
-                }
+            if !isCompactLayout {
+                Spacer()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        dismissTimecodeFieldFocus()
+                    }
+            }
         }
         .onAppear {
             loadPlayerItem()
@@ -2041,6 +2072,7 @@ struct InspectToolView: View {
     let sourceURL: URL?
     let analysis: FileAnalysis?
     let sourceInfo: SourceMediaInfo?
+    let isCompactLayout: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -2101,7 +2133,9 @@ struct InspectToolView: View {
                 EmptyToolView(title: "Inspect", subtitle: "Choose a source video to inspect metadata and results.")
             }
 
-            Spacer()
+            if !isCompactLayout {
+                Spacer()
+            }
         }
     }
 }
@@ -2198,6 +2232,7 @@ struct InlinePlayerView: NSViewRepresentable {
 
 struct DetailView: View {
     let file: FileAnalysis
+    let isCompactLayout: Bool
 
     @State private var player = AVPlayer()
     @State private var isPlaying = false
@@ -2241,40 +2276,45 @@ struct DetailView: View {
                 .textSelection(.enabled)
 
             InlinePlayerView(player: player)
-                .frame(minHeight: 260, maxHeight: 320)
+                .frame(
+                    minHeight: isCompactLayout ? 150 : 260,
+                    maxHeight: isCompactLayout ? 210 : 320
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            HStack {
-                Spacer()
-                HStack(spacing: 10) {
-                    Button {
-                        jump(by: -5)
-                    } label: {
-                        Label("Back 5s", systemImage: "gobackward.5")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    .buttonStyle(.bordered)
+            if !isCompactLayout {
+                HStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Button {
+                            jump(by: -5)
+                        } label: {
+                            Label("Back 5s", systemImage: "gobackward.5")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.bordered)
 
-                    Button {
-                        togglePlayPause()
-                    } label: {
-                        Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    .buttonStyle(.borderedProminent)
+                        Button {
+                            togglePlayPause()
+                        } label: {
+                            Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.borderedProminent)
 
-                    Button {
-                        jump(by: 5)
-                    } label: {
-                        Label("Forward 5s", systemImage: "goforward.5")
-                            .labelStyle(.titleAndIcon)
+                        Button {
+                            jump(by: 5)
+                        } label: {
+                            Label("Forward 5s", systemImage: "goforward.5")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    Spacer()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
-                Spacer()
             }
 
             switch file.status {
@@ -2390,30 +2430,39 @@ struct ContentView: View {
     @State private var isDropTargeted = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SourceHeaderView(model: model)
-            ToolContentView(model: model)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { proxy in
+            let isCompactLayout = proxy.size.height < 760
 
-            OutputPanelView(model: model)
+            VStack(alignment: .leading, spacing: isCompactLayout ? 8 : 10) {
+                SourceHeaderView(model: model)
+
+                ScrollView {
+                    ToolContentView(model: model, isCompactLayout: isCompactLayout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollIndicators(.automatic)
+
+                OutputPanelView(model: model)
+            }
+            .padding(isCompactLayout ? 8 : 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(isDropTargeted ? Color.accentColor.opacity(0.12) : Color.clear)
+            .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
+                model.handleDrop(providers: providers)
+            }
+            .onOpenURL { url in
+                guard url.isFileURL else { return }
+                model.setSource(url)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            .onReceive(externalOpenBridge.$incomingURL) { url in
+                guard let url else { return }
+                model.setSource(url)
+                NSApp.activate(ignoringOtherApps: true)
+                externalOpenBridge.incomingURL = nil
+            }
         }
-        .padding(12)
         .frame(minWidth: 980, minHeight: 640)
-        .background(isDropTargeted ? Color.accentColor.opacity(0.12) : Color.clear)
-        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
-            model.handleDrop(providers: providers)
-        }
-        .onOpenURL { url in
-            guard url.isFileURL else { return }
-            model.setSource(url)
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        .onReceive(externalOpenBridge.$incomingURL) { url in
-            guard let url else { return }
-            model.setSource(url)
-            NSApp.activate(ignoringOtherApps: true)
-            externalOpenBridge.incomingURL = nil
-        }
     }
 }
 
