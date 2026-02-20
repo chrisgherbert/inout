@@ -1648,7 +1648,7 @@ struct ClipToolView: View {
                                     viewportStartSeconds = clampedViewportStart(newStart)
                                     isViewportManuallyControlled = true
                                 }
-                                .frame(height: 18)
+                                .frame(height: 14)
 
                                 HStack(spacing: 6) {
                                     Image(systemName: "hand.draw")
@@ -2167,7 +2167,7 @@ struct TimelineViewportScroller: View {
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
-            let trackHeight: CGFloat = 12
+            let trackHeight: CGFloat = 8
             let thumbHitPadding: CGFloat = 14
             let thumbWidth = widthForVisibleWindow(width)
             let thumbX = thumbOffset(for: visibleStartSeconds, width: width, thumbWidth: thumbWidth)
