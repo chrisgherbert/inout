@@ -325,6 +325,90 @@ func loadSourceMediaInfo(for url: URL) -> SourceMediaInfo {
     return info
 }
 
+func generateWaveformSamples(for url: URL, sampleCount: Int) -> [Double] {
+    guard sampleCount > 0 else { return [] }
+
+    let asset = AVURLAsset(url: url)
+    guard let audioTrack = asset.tracks(withMediaType: .audio).first else { return [] }
+
+    let durationSeconds = CMTimeGetSeconds(asset.duration)
+    guard durationSeconds.isFinite && durationSeconds > 0 else { return [] }
+
+    let outputSettings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false
+    ]
+
+    let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
+    output.alwaysCopiesSampleData = false
+
+    let reader: AVAssetReader
+    do {
+        reader = try AVAssetReader(asset: asset)
+    } catch {
+        return []
+    }
+    guard reader.canAdd(output) else { return [] }
+    reader.add(output)
+    guard reader.startReading() else { return [] }
+
+    var peaks = Array(repeating: 0.0, count: sampleCount)
+
+    while let sampleBuffer = output.copyNextSampleBuffer() {
+        guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+              asbd.mSampleRate > 0 else {
+            continue
+        }
+
+        let startTime = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        if !startTime.isFinite { continue }
+
+        guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
+
+        var length = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+        let status = CMBlockBufferGetDataPointer(
+            dataBuffer,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &length,
+            dataPointerOut: &dataPointer
+        )
+        guard status == kCMBlockBufferNoErr, let dataPointer, length > 0 else { continue }
+
+        let channels = max(Int(asbd.mChannelsPerFrame), 1)
+        let bytesPerFrame = max(Int(asbd.mBytesPerFrame), channels * 2)
+        let frameCount = length / bytesPerFrame
+        if frameCount <= 0 { continue }
+
+        let int16Pointer = UnsafeRawPointer(dataPointer).assumingMemoryBound(to: Int16.self)
+
+        for frame in 0..<frameCount {
+            let sampleTime = startTime + (Double(frame) / asbd.mSampleRate)
+            let bucketFloat = (sampleTime / durationSeconds) * Double(sampleCount - 1)
+            let bucket = min(sampleCount - 1, max(0, Int(bucketFloat)))
+
+            var framePeak = 0.0
+            for channel in 0..<channels {
+                let sampleIndex = frame * channels + channel
+                let v = Double(abs(Int(int16Pointer[sampleIndex]))) / Double(Int16.max)
+                framePeak = max(framePeak, v)
+            }
+            peaks[bucket] = max(peaks[bucket], framePeak)
+        }
+    }
+
+    let maxPeak = peaks.max() ?? 0
+    if maxPeak > 0 {
+        return peaks.map { $0 / maxPeak }
+    }
+    return peaks
+}
+
 func isFrameMostlyBlack(_ sampleBuffer: CMSampleBuffer) -> Bool {
     guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
         return false
@@ -1242,6 +1326,10 @@ struct ClipToolView: View {
     @State private var player = AVPlayer()
     @State private var playheadSeconds: Double = 0
     @State private var playerDurationSeconds: Double = 0
+    @State private var waveformSamples: [Double] = []
+    @State private var isWaveformLoading = false
+    @State private var waveformTask: Task<Void, Never>?
+    @State private var keyMonitor: Any?
 
     private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -1250,6 +1338,9 @@ struct ClipToolView: View {
             player.replaceCurrentItem(with: nil)
             playheadSeconds = 0
             playerDurationSeconds = 0
+            waveformTask?.cancel()
+            waveformSamples = []
+            isWaveformLoading = false
             return
         }
         let item = AVPlayerItem(url: sourceURL)
@@ -1257,12 +1348,81 @@ struct ClipToolView: View {
         let duration = CMTimeGetSeconds(item.asset.duration)
         playerDurationSeconds = duration.isFinite && duration > 0 ? duration : model.sourceDurationSeconds
         playheadSeconds = 0
+        loadWaveform(for: sourceURL)
+    }
+
+    private func loadWaveform(for url: URL) {
+        waveformTask?.cancel()
+        waveformSamples = []
+        isWaveformLoading = true
+
+        waveformTask = Task.detached(priority: .userInitiated) {
+            let samples = generateWaveformSamples(for: url, sampleCount: 420)
+            await MainActor.run {
+                self.waveformSamples = samples
+                self.isWaveformLoading = false
+            }
+        }
     }
 
     private func seekPlayer(to time: Double) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
+    }
+
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            if NSApp.keyWindow?.firstResponder is NSTextView {
+                return event
+            }
+
+            let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            if flags.isDisjoint(with: [.command, .option, .control]) && !flags.contains(.shift) {
+                if chars == "i" {
+                    model.setClipStart(playheadSeconds)
+                    return nil
+                }
+                if chars == "o" {
+                    model.setClipEnd(playheadSeconds)
+                    return nil
+                }
+                if chars == "x" {
+                    model.resetClipRange()
+                    seekPlayer(to: model.clipStartSeconds)
+                    return nil
+                }
+            }
+
+            let hasShift = flags.contains(.shift)
+            let hasDisallowedModifier = flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
+            guard hasShift && !hasDisallowedModifier else { return event }
+
+            let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+            let tenFrames = 10.0 / fps
+
+            if event.specialKey == .leftArrow {
+                seekPlayer(to: playheadSeconds - tenFrames)
+                return nil
+            }
+
+            if event.specialKey == .rightArrow {
+                seekPlayer(to: playheadSeconds + tenFrames)
+                return nil
+            }
+
+            return event
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
     }
 
     var body: some View {
@@ -1274,6 +1434,24 @@ struct ClipToolView: View {
 
                 GroupBox("Clip Range") {
                     VStack(alignment: .leading, spacing: 10) {
+                        if isWaveformLoading {
+                            HStack {
+                                ProgressView()
+                                Text("Generating waveform…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if !waveformSamples.isEmpty {
+                            WaveformView(
+                                samples: waveformSamples,
+                                startSeconds: model.clipStartSeconds,
+                                playheadSeconds: playheadSeconds,
+                                endSeconds: model.clipEndSeconds,
+                                durationSeconds: max(0.001, model.sourceDurationSeconds)
+                            )
+                            .frame(height: 58)
+                        }
+
                         UnifiedClipTimelineSelector(
                             startSeconds: Binding(
                                 get: { model.clipStartSeconds },
@@ -1410,6 +1588,7 @@ struct ClipToolView: View {
         }
         .onAppear {
             loadPlayerItem()
+            installKeyMonitor()
         }
         .onChange(of: model.sourceURL?.path) { _ in
             loadPlayerItem()
@@ -1425,7 +1604,85 @@ struct ClipToolView: View {
             }
         }
         .onDisappear {
+            waveformTask?.cancel()
+            removeKeyMonitor()
             player.pause()
+        }
+    }
+}
+
+struct WaveformView: View {
+    let samples: [Double]
+    let startSeconds: Double
+    let playheadSeconds: Double
+    let endSeconds: Double
+    let durationSeconds: Double
+
+    private func xPosition(for value: Double, width: CGFloat) -> CGFloat {
+        guard durationSeconds > 0 else { return 0 }
+        return CGFloat(min(max(0, value / durationSeconds), 1.0)) * width
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            let startX = xPosition(for: startSeconds, width: width)
+            let endX = xPosition(for: endSeconds, width: width)
+            let playheadX = xPosition(for: playheadSeconds, width: width)
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.gray.opacity(0.12))
+
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+                    .frame(width: max(1, endX - startX))
+                    .offset(x: startX)
+
+                Canvas { context, size in
+                    guard !samples.isEmpty else { return }
+                    let n = max(samples.count - 1, 1)
+                    let midY = size.height / 2.0
+                    let halfHeight = max(1.0, (size.height - 8.0) / 2.0)
+
+                    var path = Path()
+                    for idx in samples.indices {
+                        let x = (CGFloat(idx) / CGFloat(n)) * size.width
+                        let normalized = max(0.02, min(1.0, samples[idx]))
+                        let amp = CGFloat(normalized) * halfHeight
+                        path.move(to: CGPoint(x: x, y: midY - amp))
+                        path.addLine(to: CGPoint(x: x, y: midY + amp))
+                    }
+
+                    context.stroke(path, with: .color(Color.primary.opacity(0.55)), lineWidth: 1)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 2, height: height)
+                    .offset(x: playheadX - 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.gray.opacity(0.25), lineWidth: 1)
+            )
+            .overlay(alignment: .bottomLeading) {
+                Text(formatSeconds(startSeconds))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 6)
+                    .padding(.bottom, 4)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Text(formatSeconds(endSeconds))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 6)
+                    .padding(.bottom, 4)
+            }
         }
     }
 }
