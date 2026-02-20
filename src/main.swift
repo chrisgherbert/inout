@@ -41,6 +41,8 @@ enum AudioFormat: String, CaseIterable, Identifiable {
 enum ClipFormat: String, CaseIterable, Identifiable {
     case mp4 = "MP4"
     case mov = "MOV"
+    case mkv = "MKV"
+    case webm = "WebM"
 
     var id: String { rawValue }
 
@@ -48,6 +50,8 @@ enum ClipFormat: String, CaseIterable, Identifiable {
         switch self {
         case .mp4: return "mp4"
         case .mov: return "mov"
+        case .mkv: return "mkv"
+        case .webm: return "webm"
         }
     }
 
@@ -55,6 +59,8 @@ enum ClipFormat: String, CaseIterable, Identifiable {
         switch self {
         case .mp4: return .mp4
         case .mov: return .mov
+        case .mkv: return .mov
+        case .webm: return .mov
         }
     }
 
@@ -62,13 +68,24 @@ enum ClipFormat: String, CaseIterable, Identifiable {
         switch self {
         case .mp4: return .mpeg4Movie
         case .mov: return .quickTimeMovie
+        case .mkv: return UTType(filenameExtension: "mkv") ?? .data
+        case .webm: return UTType(filenameExtension: "webm") ?? .data
+        }
+    }
+
+    var supportsPassthrough: Bool {
+        switch self {
+        case .mp4, .mov:
+            return true
+        case .mkv, .webm:
+            return false
         }
     }
 }
 
 enum ClipEncodingMode: String, CaseIterable, Identifiable {
     case fast = "Fast (Original)"
-    case compressed = "More Compatible"
+    case compressed = "Advanced"
 
     var id: String { rawValue }
 }
@@ -109,6 +126,13 @@ enum CompatibleMaxResolution: String, CaseIterable, Identifiable {
             return "scale='min(iw,854)':'min(ih,480)':force_original_aspect_ratio=decrease:force_divisible_by=2"
         }
     }
+}
+
+enum AdvancedVideoCodec: String, CaseIterable, Identifiable {
+    case h264 = "H.264"
+    case hevc = "HEVC (H.265)"
+
+    var id: String { rawValue }
 }
 
 enum CompletionSound: String, CaseIterable, Identifiable {
@@ -664,7 +688,7 @@ final class ExternalFileOpenBridge: ObservableObject {
 final class WorkspaceViewModel: ObservableObject {
     private enum DefaultsKey {
         static let audioBitrateKbps = "prefs.audioBitrateKbps"
-        static let clipEncodingMode = "prefs.clipEncodingMode"
+        static let defaultClipEncodingMode = "prefs.defaultClipEncodingMode"
         static let jumpIntervalSeconds = "prefs.jumpIntervalSeconds"
         static let completionSound = "prefs.completionSound"
     }
@@ -695,11 +719,15 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipStartText = "00:00:00.000"
     @Published var clipEndText = "00:00:00.000"
     @Published var selectedClipFormat: ClipFormat = .mp4
-    @Published var clipEncodingMode: ClipEncodingMode = .fast {
+    @Published var defaultClipEncodingMode: ClipEncodingMode = .fast {
         didSet {
-            UserDefaults.standard.set(clipEncodingMode.rawValue, forKey: DefaultsKey.clipEncodingMode)
+            UserDefaults.standard.set(defaultClipEncodingMode.rawValue, forKey: DefaultsKey.defaultClipEncodingMode)
+            if clipEncodingMode != defaultClipEncodingMode {
+                clipEncodingMode = defaultClipEncodingMode
+            }
         }
     }
+    @Published var clipEncodingMode: ClipEncodingMode = .fast
     @Published var clipVideoBitrateMbps: Double = 4.0
     @Published var clipCompatibleSpeedPreset: CompatibleSpeedPreset = .balanced
     @Published var clipCompatibleMaxResolution: CompatibleMaxResolution = .original {
@@ -708,6 +736,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
     @Published var clipAudioBitrateKbps: Int = 128
+    @Published var clipAdvancedVideoCodec: AdvancedVideoCodec = .h264
     @Published var jumpIntervalSeconds: Int = 5 {
         didSet {
             UserDefaults.standard.set(jumpIntervalSeconds, forKey: DefaultsKey.jumpIntervalSeconds)
@@ -727,17 +756,32 @@ final class WorkspaceViewModel: ObservableObject {
     private let cancelFlag = CancellationFlag()
     private var activeExportSession: AVAssetExportSession?
     private var activeProcess: Process?
+    private var willTerminateObserver: NSObjectProtocol?
     private var exportCancellationRequested = false
     private var notificationAuthRequested = false
     private var originalModeDefaultBitrateMbps: Double = 4.0
 
     init() {
+        willTerminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.stopCurrentActivity()
+        }
+
         loadPreferences()
         if let firstArg = CommandLine.arguments.dropFirst().first {
             let url = URL(fileURLWithPath: firstArg)
             if FileManager.default.fileExists(atPath: url.path) {
                 setSource(url)
             }
+        }
+    }
+
+    deinit {
+        if let willTerminateObserver {
+            NotificationCenter.default.removeObserver(willTerminateObserver)
         }
     }
 
@@ -749,10 +793,11 @@ final class WorkspaceViewModel: ObservableObject {
             audioBitrateKbps = min(max(64, savedBitrate), 320)
         }
 
-        if let rawMode = defaults.string(forKey: DefaultsKey.clipEncodingMode),
+        if let rawMode = defaults.string(forKey: DefaultsKey.defaultClipEncodingMode),
            let mode = ClipEncodingMode(rawValue: rawMode) {
-            clipEncodingMode = mode
+            defaultClipEncodingMode = mode
         }
+        clipEncodingMode = defaultClipEncodingMode
 
         let savedJump = defaults.integer(forKey: DefaultsKey.jumpIntervalSeconds)
         if savedJump > 0 {
@@ -853,6 +898,7 @@ final class WorkspaceViewModel: ObservableObject {
         sourceURL = url
         analysis = FileAnalysis(fileURL: url)
         sourceInfo = loadSourceMediaInfo(for: url)
+        clipEncodingMode = defaultClipEncodingMode
         applySuggestedClipBitrateFromSource()
         outputURL = nil
         uiMessage = "Loaded \(url.lastPathComponent)"
@@ -1271,6 +1317,13 @@ final class WorkspaceViewModel: ObservableObject {
         outputURL = nil
 
         if clipEncodingMode == .fast {
+            guard selectedClipFormat.supportsPassthrough else {
+                isExporting = false
+                exportStatusText = "Fast mode supports only MP4 and MOV."
+                uiMessage = exportStatusText
+                lastActivityState = .failed
+                return
+            }
             let asset = AVURLAsset(url: sourceURL)
             let preset = AVAssetExportPresetPassthrough
 
@@ -1369,6 +1422,9 @@ final class WorkspaceViewModel: ObservableObject {
             let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
             let start = String(format: "%.3f", self.clipStartSeconds)
             let end = String(format: "%.3f", self.clipEndSeconds)
+            let isWebM = self.selectedClipFormat == .webm
+            let videoCodec = isWebM ? "libvpx-vp9" : (self.clipAdvancedVideoCodec == .hevc ? "libx265" : "libx264")
+            let audioCodec = isWebM ? "libopus" : "aac"
             var ffmpegArgs = [
                 "-y",
                 "-hide_banner",
@@ -1378,7 +1434,7 @@ final class WorkspaceViewModel: ObservableObject {
                 "-to", end,
                 "-map", "0:v:0",
                 "-map", "0:a?",
-                "-c:v", "libx264",
+                "-c:v", videoCodec,
                 "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
                 "-pix_fmt", "yuv420p",
                 "-b:v", "\(bitrateKbps)k"
@@ -1389,11 +1445,15 @@ final class WorkspaceViewModel: ObservableObject {
             }
 
             ffmpegArgs.append(contentsOf: [
-                "-c:a", "aac",
-                "-b:a", "\(audioBitrateKbps)k",
-                "-movflags", "+faststart",
-                destination.path
+                "-c:a", audioCodec,
+                "-b:a", "\(audioBitrateKbps)k"
             ])
+
+            if self.selectedClipFormat == .mp4 || self.selectedClipFormat == .mov {
+                ffmpegArgs.append(contentsOf: ["-movflags", "+faststart"])
+            }
+
+            ffmpegArgs.append(destination.path)
 
             let encodeError = await self.runProcess(
                 executableURL: ffmpegURL,
@@ -1748,6 +1808,9 @@ struct ClipToolView: View {
     @State private var timelineInteractiveWidth: CGFloat = 1
 
     private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+
+    private var fastClipFormats: [ClipFormat] { [.mp4, .mov] }
+    private var advancedClipFormats: [ClipFormat] { ClipFormat.allCases }
 
     private func loadPlayerItem() {
         guard let sourceURL = model.sourceURL else {
@@ -2181,42 +2244,90 @@ struct ClipToolView: View {
 
                 GroupBox("Output") {
                     VStack(alignment: .leading, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Picker("Encoding", selection: $model.clipEncodingMode) {
-                                ForEach(ClipEncodingMode.allCases) { mode in
-                                    Text(mode.rawValue).tag(mode)
-                                }
+                        VStack(alignment: .leading, spacing: 10) {
+                            Picker("", selection: $model.clipEncodingMode) {
+                                Label("Fast", systemImage: "bolt.fill").tag(ClipEncodingMode.fast)
+                                Label("Advanced", systemImage: "slider.horizontal.3").tag(ClipEncodingMode.compressed)
                             }
+                            .labelsHidden()
                             .pickerStyle(.segmented)
-                            .controlSize(.small)
+                            .controlSize(.regular)
+                            .frame(maxWidth: .infinity)
 
-                            Picker("Format", selection: $model.selectedClipFormat) {
-                                ForEach(ClipFormat.allCases) { format in
-                                    Text(format.rawValue).tag(format)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .controlSize(.small)
+                            Text(
+                                model.clipEncodingMode == .fast
+                                ? "Fast mode uses passthrough copy with minimal processing."
+                                : "Advanced mode unlocks codec, container, resolution, and bitrate options."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
-                            if model.clipEncodingMode == .compressed {
-                                Picker("Speed", selection: $model.clipCompatibleSpeedPreset) {
-                                    ForEach(CompatibleSpeedPreset.allCases) { preset in
-                                        Text(preset.rawValue).tag(preset)
+                            Divider()
+
+                            LabeledContent("Format") {
+                                Picker("Format", selection: $model.selectedClipFormat) {
+                                    if model.clipEncodingMode == .fast {
+                                        ForEach(fastClipFormats) { format in
+                                            Text(format.rawValue).tag(format)
+                                        }
+                                    } else {
+                                        ForEach(advancedClipFormats) { format in
+                                            Text(format.rawValue).tag(format)
+                                        }
                                     }
                                 }
-                                .pickerStyle(.segmented)
-                                .controlSize(.small)
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                                .frame(width: 160)
+                            }
 
-                                Picker("Max resolution", selection: $model.clipCompatibleMaxResolution) {
-                                    ForEach(CompatibleMaxResolution.allCases) { resolution in
-                                        Text(resolution.rawValue).tag(resolution)
+                            if model.clipEncodingMode == .fast {
+                                Text("Fast mode uses passthrough (original codecs/bitrate) and supports MP4/MOV.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                if model.selectedClipFormat != .webm {
+                                    LabeledContent("Video codec") {
+                                        Picker("Video codec", selection: $model.clipAdvancedVideoCodec) {
+                                            ForEach(AdvancedVideoCodec.allCases) { codec in
+                                                Text(codec.rawValue).tag(codec)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                        .labelsHidden()
+                                        .frame(width: 160)
                                     }
+                                } else {
+                                    Text("Video codec: VP9 (WebM)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                                .pickerStyle(.segmented)
-                                .controlSize(.small)
+
+                                LabeledContent("Speed") {
+                                    Picker("Speed", selection: $model.clipCompatibleSpeedPreset) {
+                                        ForEach(CompatibleSpeedPreset.allCases) { preset in
+                                            Text(preset.rawValue).tag(preset)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .labelsHidden()
+                                    .frame(width: 160)
+                                }
+
+                                LabeledContent("Max resolution") {
+                                    Picker("Max resolution", selection: $model.clipCompatibleMaxResolution) {
+                                        ForEach(CompatibleMaxResolution.allCases) { resolution in
+                                            Text(resolution.rawValue).tag(resolution)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .labelsHidden()
+                                    .frame(width: 160)
+                                }
 
                                 HStack {
                                     Text("Video bitrate")
+                                        .frame(width: 120, alignment: .leading)
                                     Slider(value: $model.clipVideoBitrateMbps, in: 2...20, step: 0.5)
                                         .controlSize(.small)
                                     Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
@@ -2226,6 +2337,7 @@ struct ClipToolView: View {
 
                                 HStack {
                                     Text("Audio bitrate")
+                                        .frame(width: 120, alignment: .leading)
                                     Slider(
                                         value: Binding(
                                             get: { Double(model.clipAudioBitrateKbps) },
@@ -2240,17 +2352,17 @@ struct ClipToolView: View {
                                         .frame(width: 90, alignment: .trailing)
                                 }
 
-                                Text("Smaller File uses H.264 video + AAC audio.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("Fast uses passthrough (original codecs/bitrate).")
+                                Text("Advanced mode uses configurable codecs, bitrate, and container.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .tint(.secondary)
+                        .padding(10)
+                        .background(Color.gray.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                         Divider()
 
@@ -2287,6 +2399,16 @@ struct ClipToolView: View {
         }
         .onChange(of: model.sourceURL?.path) { _ in
             loadPlayerItem()
+        }
+        .onChange(of: model.clipEncodingMode) { mode in
+            if mode == .fast && !model.selectedClipFormat.supportsPassthrough {
+                model.selectedClipFormat = .mp4
+            }
+        }
+        .onChange(of: model.selectedClipFormat) { format in
+            if format == .webm {
+                model.clipAdvancedVideoCodec = .h264
+            }
         }
         .onChange(of: timelineZoom) { _ in
             updateViewportForPlayhead(shouldFollow: false)
@@ -3202,7 +3324,7 @@ struct PreferencesView: View {
             }
 
             Section("Clip") {
-                Picker("Default Encoding", selection: $model.clipEncodingMode) {
+                Picker("Default Encoding", selection: $model.defaultClipEncodingMode) {
                     ForEach(ClipEncodingMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
