@@ -5,9 +5,11 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT_DIR/src/main.swift"
 DIST="$ROOT_DIR/dist"
 MODULE_CACHE="$ROOT_DIR/.build/module-cache"
-APP_NAME="CheckBlackFrames"
+APP_NAME="Bulwark Video Tools"
+APP_EXECUTABLE="BulwarkVideoTools"
+BUNDLE_ID="com.bulwark.BulwarkVideoTools"
 APP="$DIST/$APP_NAME.app"
-BIN="$APP/Contents/MacOS/$APP_NAME"
+BIN="$APP/Contents/MacOS/$APP_EXECUTABLE"
 PLIST="$APP/Contents/Info.plist"
 APP_RESOURCES="$APP/Contents/Resources"
 
@@ -37,12 +39,14 @@ cat > "$PLIST" <<PLIST
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>$APP_NAME</string>
+  <string>$APP_EXECUTABLE</string>
   <key>CFBundleIdentifier</key>
-  <string>com.bulwark.$APP_NAME</string>
+  <string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key>
   <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>

@@ -1330,8 +1330,12 @@ struct ClipToolView: View {
     @State private var isWaveformLoading = false
     @State private var waveformTask: Task<Void, Never>?
     @State private var keyMonitor: Any?
+    @State private var scrollMonitor: Any?
     @State private var timelineZoom: Double = 1.0
     @State private var viewportStartSeconds: Double = 0
+    @State private var isViewportManuallyControlled = false
+    @State private var isTimelineHovered = false
+    @State private var timelineInteractiveWidth: CGFloat = 1
 
     private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -1374,7 +1378,7 @@ struct ClipToolView: View {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
-        updateViewportForPlayhead(shouldFollow: true)
+        updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
     }
 
     private var totalDurationSeconds: Double {
@@ -1398,20 +1402,20 @@ struct ClipToolView: View {
     private func updateViewportForPlayhead(shouldFollow: Bool) {
         if timelineZoom <= 1 {
             viewportStartSeconds = 0
+            isViewportManuallyControlled = false
             return
         }
 
         let window = zoomedWindowDuration
         var start = clampedViewportStart(viewportStartSeconds)
-        let end = start + window
-
-        if playheadSeconds < start || playheadSeconds > end {
-            viewportStartSeconds = clampedViewportStart(playheadSeconds - (window / 2))
+        guard shouldFollow else {
+            viewportStartSeconds = start
             return
         }
 
-        guard shouldFollow else {
-            viewportStartSeconds = start
+        let end = start + window
+        if playheadSeconds < start || playheadSeconds > end {
+            viewportStartSeconds = clampedViewportStart(playheadSeconds - (window / 2))
             return
         }
 
@@ -1423,6 +1427,15 @@ struct ClipToolView: View {
             start = playheadSeconds - (window - deadZonePaddingSeconds)
         }
         viewportStartSeconds = clampedViewportStart(start)
+    }
+
+    private func panViewport(byPoints points: CGFloat) {
+        guard timelineZoom > 1 else { return }
+        let width = max(1, timelineInteractiveWidth)
+        let secondsPerPoint = zoomedWindowDuration / Double(width)
+        // Natural-feeling pan: swipe left reveals later timeline content.
+        viewportStartSeconds = clampedViewportStart(viewportStartSeconds - (Double(points) * secondsPerPoint))
+        isViewportManuallyControlled = true
     }
 
     private var visibleStartSeconds: Double {
@@ -1483,10 +1496,35 @@ struct ClipToolView: View {
         }
     }
 
+    private func installScrollMonitor() {
+        guard scrollMonitor == nil else { return }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { event in
+            guard isTimelineHovered, timelineZoom > 1 else { return event }
+
+            let dx = event.scrollingDeltaX
+            let dy = event.scrollingDeltaY
+            let panPoints: CGFloat
+            if abs(dx) >= 0.1 {
+                panPoints = dx
+            } else if event.modifierFlags.contains(.shift) && abs(dy) >= 0.1 {
+                panPoints = dy
+            } else {
+                return event
+            }
+
+            panViewport(byPoints: panPoints)
+            return nil
+        }
+    }
+
     private func removeKeyMonitor() {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
+        }
+        if let scrollMonitor {
+            NSEvent.removeMonitor(scrollMonitor)
+            self.scrollMonitor = nil
         }
     }
 
@@ -1557,6 +1595,15 @@ struct ClipToolView: View {
                             onSeek: { seekPlayer(to: $0) }
                         )
                         .frame(height: 44)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear
+                                    .onAppear { timelineInteractiveWidth = geo.size.width }
+                                    .onChange(of: geo.size.width) { width in
+                                        timelineInteractiveWidth = width
+                                    }
+                            }
+                        )
 
                         HStack {
                             Text("In: \(formatSeconds(model.clipStartSeconds))")
@@ -1616,6 +1663,9 @@ struct ClipToolView: View {
                         }
                     }
                     .padding(6)
+                    .onHover { hovering in
+                        isTimelineHovered = hovering
+                    }
                 }
 
                 GroupBox("Export New Clip") {
@@ -1673,6 +1723,7 @@ struct ClipToolView: View {
         .onAppear {
             loadPlayerItem()
             installKeyMonitor()
+            installScrollMonitor()
         }
         .onChange(of: model.sourceURL?.path) { _ in
             loadPlayerItem()
@@ -1684,6 +1735,9 @@ struct ClipToolView: View {
             let current = CMTimeGetSeconds(player.currentTime())
             if current.isFinite {
                 playheadSeconds = max(0, current)
+                if player.rate != 0 {
+                    isViewportManuallyControlled = false
+                }
                 updateViewportForPlayhead(shouldFollow: player.rate != 0)
             }
             let currentDuration = CMTimeGetSeconds(player.currentItem?.duration ?? .invalid)
@@ -2295,7 +2349,7 @@ struct ContentView: View {
 @main
 struct CheckBlackFramesApp: App {
     var body: some Scene {
-        WindowGroup("Check for Black Frames") {
+        WindowGroup("Bulwark Video Tools") {
             ContentView()
         }
         .windowResizability(.contentMinSize)
