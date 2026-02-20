@@ -2865,25 +2865,49 @@ struct InspectToolView: View {
     let sourceInfo: SourceMediaInfo?
     let isCompactLayout: Bool
 
+    private func fileIcon(for url: URL) -> NSImage {
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icon.size = NSSize(width: 64, height: 64)
+        return icon
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let sourceURL {
                 GroupBox("File") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(sourceURL.lastPathComponent)
-                                .font(.headline)
-                            Spacer()
-                            Button("Show in Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([sourceURL])
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(nsImage: fileIcon(for: sourceURL))
+                            .interpolation(.high)
+                            .frame(width: 64, height: 64, alignment: .topLeading)
+                            .onDrag {
+                                NSItemProvider(contentsOf: sourceURL) ?? NSItemProvider()
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            .contextMenu {
+                                Button("Show in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([sourceURL])
+                                }
+                                Button("Copy Path") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(sourceURL.path, forType: .string)
+                                }
+                            }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(sourceURL.lastPathComponent)
+                                    .font(.headline)
+                                Spacer()
+                                Button("Show in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([sourceURL])
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            Text(sourceURL.path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
                         }
-                        Text(sourceURL.path)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
