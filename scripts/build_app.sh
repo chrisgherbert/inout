@@ -60,4 +60,22 @@ PLIST
 
 chmod +x "$BIN"
 
+FFMPEG_SOURCE="${BUNDLED_FFMPEG_PATH:-}"
+if [[ -z "$FFMPEG_SOURCE" ]]; then
+  for candidate in /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg /usr/bin/ffmpeg; do
+    if [[ -x "$candidate" ]]; then
+      FFMPEG_SOURCE="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -n "$FFMPEG_SOURCE" && -x "$FFMPEG_SOURCE" ]]; then
+  cp "$FFMPEG_SOURCE" "$APP_RESOURCES/ffmpeg"
+  chmod +x "$APP_RESOURCES/ffmpeg"
+  echo "Bundled ffmpeg: $FFMPEG_SOURCE"
+else
+  echo "ffmpeg not bundled (set BUNDLED_FFMPEG_PATH to include one)."
+fi
+
 echo "Built: $APP"

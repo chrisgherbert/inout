@@ -17,6 +17,18 @@ This creates:
 
 - `dist/CheckBlackFrames.app`
 
+`build_app.sh` also bundles `ffmpeg` into the app when found at:
+
+- `/opt/homebrew/bin/ffmpeg`
+- `/usr/local/bin/ffmpeg`
+- `/usr/bin/ffmpeg`
+
+To bundle a specific binary:
+
+```bash
+BUNDLED_FFMPEG_PATH=/path/to/ffmpeg ./scripts/build_app.sh
+```
+
 ## Run
 
 - Double-click `dist/CheckBlackFrames.app`
@@ -38,6 +50,13 @@ This creates:
   - Modular tool layout with shared source header
   - Finder drag-and-drop target in the main window
   - Analyze tool with inline player and black-segment timeline/list
-  - Convert tool with export controls (M4A active, MP3 scaffolded in UI)
+  - Convert tool with export controls (M4A and MP3)
   - Inspect tool for source/result snapshot
   - Unified activity panel with progress and output actions
+
+## Audio Export
+
+- `Convert` supports:
+  - `M4A` export via AVFoundation
+  - `MP3` export via `ffmpeg` (bundled `Contents/Resources/ffmpeg` preferred)
+- Default MP3 bitrate is `128 kbps`

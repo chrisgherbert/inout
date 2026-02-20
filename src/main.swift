@@ -428,7 +428,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var wasCancelled = false
 
     @Published var selectedAudioFormat: AudioFormat = .mp3
-    @Published var audioBitrateKbps = 192
+    @Published var audioBitrateKbps = 128
     @Published var isExporting = false
     @Published var exportProgress = 0.0
     @Published var exportStatusText = "No export yet"
@@ -602,15 +602,14 @@ final class WorkspaceViewModel: ObservableObject {
     func startExport() {
         guard canExport, let sourceURL else { return }
 
-        if selectedAudioFormat == .mp3 {
-            exportStatusText = "MP3 export placeholder: UI is ready; encoder integration can be added next."
-            uiMessage = exportStatusText
-            return
-        }
-
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + ".m4a"
-        panel.allowedContentTypes = [.mpeg4Audio]
+        if selectedAudioFormat == .mp3 {
+            panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + ".mp3"
+            panel.allowedContentTypes = [.mp3]
+        } else {
+            panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + ".m4a"
+            panel.allowedContentTypes = [.mpeg4Audio]
+        }
         panel.canCreateDirectories = true
         panel.title = "Export Audio"
 
@@ -622,59 +621,160 @@ final class WorkspaceViewModel: ObservableObject {
         outputURL = nil
 
         let asset = AVURLAsset(url: sourceURL)
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
-            isExporting = false
-            exportStatusText = "Export failed: Unable to create export session"
-            return
-        }
-
         try? FileManager.default.removeItem(at: destination)
-        session.outputURL = destination
-        session.outputFileType = .m4a
-        session.shouldOptimizeForNetworkUse = true
 
         Task { [weak self] in
             guard let self else { return }
 
-            let monitor = Task { [weak self] in
-                while session.status == .waiting || session.status == .exporting {
+            if self.selectedAudioFormat == .m4a {
+                guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
                     await MainActor.run {
-                        self?.exportProgress = Double(session.progress)
-                        self?.exportStatusText = "Exporting… \(Int((Double(session.progress) * 100).rounded()))%"
+                        self.isExporting = false
+                        self.exportStatusText = "Export failed: Unable to create export session"
+                        self.uiMessage = self.exportStatusText
                     }
-                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    return
                 }
+
+                session.outputURL = destination
+                session.outputFileType = .m4a
+                session.shouldOptimizeForNetworkUse = true
+
+                let monitor = Task { [weak self] in
+                    while session.status == .waiting || session.status == .exporting {
+                        await MainActor.run {
+                            self?.exportProgress = Double(session.progress)
+                            self?.exportStatusText = "Exporting M4A… \(Int((Double(session.progress) * 100).rounded()))%"
+                        }
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                    }
+                }
+
+                await withCheckedContinuation { continuation in
+                    session.exportAsynchronously {
+                        continuation.resume()
+                    }
+                }
+
+                monitor.cancel()
+
+                await MainActor.run {
+                    self.isExporting = false
+                    self.exportProgress = 0
+
+                    switch session.status {
+                    case .completed:
+                        self.outputURL = destination
+                        self.exportStatusText = "Export complete: \(destination.lastPathComponent)"
+                        self.uiMessage = self.exportStatusText
+                    case .failed:
+                        self.exportStatusText = "Export failed: \(session.error?.localizedDescription ?? "Unknown error")"
+                        self.uiMessage = self.exportStatusText
+                    case .cancelled:
+                        self.exportStatusText = "Export cancelled"
+                        self.uiMessage = self.exportStatusText
+                    default:
+                        self.exportStatusText = "Export ended with status: \(session.status.rawValue)"
+                        self.uiMessage = self.exportStatusText
+                    }
+                }
+                return
             }
 
-            await withCheckedContinuation { continuation in
-                session.exportAsynchronously {
-                    continuation.resume()
-                }
+            await MainActor.run {
+                self.exportProgress = 0.1
+                self.exportStatusText = "Encoding MP3…"
             }
 
-            monitor.cancel()
+            let mp3Error: String?
+            if let ffmpegURL = self.findFFmpegExecutable() {
+                mp3Error = await self.runProcess(
+                    executableURL: ffmpegURL,
+                    arguments: [
+                        "-y",
+                        "-hide_banner",
+                        "-loglevel", "error",
+                        "-i", sourceURL.path,
+                        "-vn",
+                        "-acodec", "libmp3lame",
+                        "-b:a", "\(max(64, self.audioBitrateKbps))k",
+                        destination.path
+                    ]
+                )
+            } else {
+                mp3Error = "No ffmpeg executable found. Bundle ffmpeg at Contents/Resources/ffmpeg or install it on this Mac."
+            }
 
             await MainActor.run {
                 self.isExporting = false
                 self.exportProgress = 0
-
-                switch session.status {
-                case .completed:
+                if let mp3Error {
+                    self.exportStatusText = "MP3 export failed: \(mp3Error)"
+                    self.uiMessage = self.exportStatusText
+                } else {
                     self.outputURL = destination
                     self.exportStatusText = "Export complete: \(destination.lastPathComponent)"
-                    self.uiMessage = self.exportStatusText
-                case .failed:
-                    self.exportStatusText = "Export failed: \(session.error?.localizedDescription ?? "Unknown error")"
-                    self.uiMessage = self.exportStatusText
-                case .cancelled:
-                    self.exportStatusText = "Export cancelled"
-                    self.uiMessage = self.exportStatusText
-                default:
-                    self.exportStatusText = "Export ended with status: \(session.status.rawValue)"
                     self.uiMessage = self.exportStatusText
                 }
             }
         }
+    }
+
+    private func runProcess(executableURL: URL, arguments: [String]) async -> String? {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = executableURL
+            process.arguments = arguments
+
+            let stderr = Pipe()
+            process.standardError = stderr
+            process.standardOutput = Pipe()
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: error.localizedDescription)
+                return
+            }
+
+            process.terminationHandler = { proc in
+                let data = stderr.fileHandleForReading.readDataToEndOfFile()
+                let errorText = String(decoding: data, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: nil)
+                } else if errorText.isEmpty {
+                    continuation.resume(returning: "\(executableURL.lastPathComponent) exited with status \(proc.terminationStatus)")
+                } else {
+                    continuation.resume(returning: errorText)
+                }
+            }
+        }
+    }
+
+    private func findFFmpegExecutable() -> URL? {
+        if let bundled = Bundle.main.url(forResource: "ffmpeg", withExtension: nil),
+           FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled
+        }
+
+        var candidates = [
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg"
+        ]
+        if let path = ProcessInfo.processInfo.environment["PATH"] {
+            for entry in path.split(separator: ":") {
+                candidates.append(String(entry) + "/ffmpeg")
+            }
+        }
+
+        for candidate in candidates {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return URL(fileURLWithPath: candidate)
+            }
+        }
+        return nil
     }
 
     func revealOutput() {
@@ -802,7 +902,7 @@ struct ConvertToolView: View {
                     .pickerStyle(.segmented)
 
                     HStack {
-                        Text("Bitrate")
+                        Text("Bitrate (MP3)")
                         Slider(value: Binding(
                             get: { Double(model.audioBitrateKbps) },
                             set: { model.audioBitrateKbps = Int($0.rounded()) }
@@ -820,11 +920,9 @@ struct ConvertToolView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canExport)
 
-                    if model.selectedAudioFormat == .mp3 {
-                        Text("MP3 is scaffolded in the UI. The native build currently exports M4A; MP3 encoder integration can be added next.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("M4A uses native AVFoundation export. MP3 uses native afconvert and defaults to 128 kbps.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(6)
             }
