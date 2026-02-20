@@ -12,11 +12,18 @@ APP="$DIST/$APP_NAME.app"
 BIN="$APP/Contents/MacOS/$APP_EXECUTABLE"
 PLIST="$APP/Contents/Info.plist"
 APP_RESOURCES="$APP/Contents/Resources"
+ICON_SOURCE_PNG="$ROOT_DIR/assets/AppIcon-1024.png"
+ICON_BASE_NAME="AppIcon"
+ICON_ICNS_NAME="${ICON_BASE_NAME}.icns"
+ICON_PNG_NAME="${ICON_BASE_NAME}.png"
+ICON_ICNS_PATH="$APP_RESOURCES/$ICON_ICNS_NAME"
+ICON_PNG_PATH="$APP_RESOURCES/$ICON_PNG_NAME"
 
 mkdir -p "$DIST"
 mkdir -p "$MODULE_CACHE"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES"
+mkdir -p "$ROOT_DIR/assets"
 
 swiftc \
   -O \
@@ -54,6 +61,8 @@ cat > "$PLIST" <<PLIST
   <string>1.0</string>
   <key>CFBundleVersion</key>
   <string>1</string>
+  <key>CFBundleIconFile</key>
+  <string>${ICON_BASE_NAME}</string>
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -78,6 +87,33 @@ cat > "$PLIST" <<PLIST
 PLIST
 
 chmod +x "$BIN"
+
+if [[ -f "$ICON_SOURCE_PNG" ]]; then
+  ICONSET_DIR="$DIST/AppIcon.iconset"
+  rm -rf "$ICONSET_DIR"
+  mkdir -p "$ICONSET_DIR"
+
+  /usr/bin/sips -z 16 16 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null
+  /usr/bin/sips -z 32 32 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_16x16@2x.png" >/dev/null
+  /usr/bin/sips -z 32 32 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_32x32.png" >/dev/null
+  /usr/bin/sips -z 64 64 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_32x32@2x.png" >/dev/null
+  /usr/bin/sips -z 128 128 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_128x128.png" >/dev/null
+  /usr/bin/sips -z 256 256 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null
+  /usr/bin/sips -z 256 256 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_256x256.png" >/dev/null
+  /usr/bin/sips -z 512 512 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null
+  /usr/bin/sips -z 512 512 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
+  /usr/bin/sips -z 1024 1024 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null
+
+  if /usr/bin/iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS_PATH"; then
+    echo "Bundled app icon (.icns): $ICON_SOURCE_PNG"
+  else
+    cp "$ICON_SOURCE_PNG" "$ICON_PNG_PATH"
+    echo "iconutil failed; bundled PNG fallback icon: $ICON_SOURCE_PNG"
+  fi
+  rm -rf "$ICONSET_DIR"
+else
+  echo "App icon not bundled (missing $ICON_SOURCE_PNG)."
+fi
 
 FFMPEG_SOURCE="${BUNDLED_FFMPEG_PATH:-}"
 if [[ -z "$FFMPEG_SOURCE" ]]; then
