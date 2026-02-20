@@ -1318,7 +1318,7 @@ final class WorkspaceViewModel: ObservableObject {
 
             let mp3Error: String?
             if let ffmpegURL = self.findFFmpegExecutable() {
-                mp3Error = await self.runProcess(
+                mp3Error = await self.runFFmpegProcessWithProgress(
                     executableURL: ffmpegURL,
                     arguments: [
                         "-y",
@@ -1329,7 +1329,9 @@ final class WorkspaceViewModel: ObservableObject {
                         "-acodec", "libmp3lame",
                         "-b:a", "\(max(64, self.audioBitrateKbps))k",
                         destination.path
-                    ]
+                    ],
+                    durationSeconds: max(0.001, self.sourceDurationSeconds),
+                    statusPrefix: "Encoding MP3"
                 )
             } else {
                 mp3Error = "No ffmpeg executable found. Bundle ffmpeg at Contents/Resources/ffmpeg or install it on this Mac."
@@ -1478,9 +1480,11 @@ final class WorkspaceViewModel: ObservableObject {
                     outputArgs.append(contentsOf: ["-b:a", "\(bitrateKbps)k"])
                 }
 
-                let encodeError = await self.runProcess(
+                let encodeError = await self.runFFmpegProcessWithProgress(
                     executableURL: ffmpegURL,
-                    arguments: args + outputArgs + [destination.path]
+                    arguments: args + outputArgs + [destination.path],
+                    durationSeconds: clipDuration,
+                    statusPrefix: "Exporting audio-only clip"
                 )
 
                 await MainActor.run {
@@ -1688,9 +1692,11 @@ final class WorkspaceViewModel: ObservableObject {
 
             ffmpegArgs.append(destination.path)
 
-            let encodeError = await self.runProcess(
+            let encodeError = await self.runFFmpegProcessWithProgress(
                 executableURL: ffmpegURL,
-                arguments: ffmpegArgs
+                arguments: ffmpegArgs,
+                durationSeconds: clipDuration,
+                statusPrefix: "Encoding advanced clip"
             )
 
             await MainActor.run {
@@ -1759,6 +1765,115 @@ final class WorkspaceViewModel: ObservableObject {
                     continuation.resume(returning: "\(executableURL.lastPathComponent) exited with status \(proc.terminationStatus)")
                 } else {
                     continuation.resume(returning: errorText)
+                }
+            }
+        }
+    }
+
+    private func runFFmpegProcessWithProgress(
+        executableURL: URL,
+        arguments: [String],
+        durationSeconds: Double,
+        statusPrefix: String
+    ) async -> String? {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = executableURL
+            process.arguments = arguments + ["-progress", "pipe:1", "-nostats"]
+
+            let stderr = Pipe()
+            let stdout = Pipe()
+            process.standardError = stderr
+            process.standardOutput = stdout
+
+            let safeDuration = max(0.001, durationSeconds)
+            var stdoutBuffer = Data()
+
+            let emitProgress: (Double) -> Void = { [weak self] progress in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard self.isExporting else { return }
+                    let clamped = min(max(progress, 0), 1)
+                    self.exportProgress = clamped
+                    self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
+                }
+            }
+
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                stdoutBuffer.append(chunk)
+
+                while let newlineRange = stdoutBuffer.firstRange(of: Data([0x0A])) {
+                    let lineData = stdoutBuffer.subdata(in: 0..<newlineRange.lowerBound)
+                    stdoutBuffer.removeSubrange(0...newlineRange.lowerBound)
+                    guard let rawLine = String(data: lineData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                          !rawLine.isEmpty else { continue }
+
+                    if rawLine == "progress=end" {
+                        emitProgress(1.0)
+                        continue
+                    }
+
+                    if rawLine.hasPrefix("out_time_us="),
+                       let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
+                        emitProgress((microseconds / 1_000_000.0) / safeDuration)
+                        continue
+                    }
+
+                    if rawLine.hasPrefix("out_time_ms="),
+                       let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
+                        // ffmpeg emits this value in microseconds.
+                        emitProgress((value / 1_000_000.0) / safeDuration)
+                        continue
+                    }
+
+                    if rawLine.hasPrefix("out_time="),
+                       let seconds = parseTimecode(String(rawLine.dropFirst("out_time=".count))) {
+                        emitProgress(seconds / safeDuration)
+                    }
+                }
+            }
+
+            do {
+                try process.run()
+                Task { @MainActor in
+                    self.activeProcess = process
+                }
+            } catch {
+                stdout.fileHandleForReading.readabilityHandler = nil
+                continuation.resume(returning: error.localizedDescription)
+                return
+            }
+
+            process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                Task { @MainActor in
+                    if self.activeProcess === proc {
+                        self.activeProcess = nil
+                    }
+                }
+
+                let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+                let trailingStdout = stdout.fileHandleForReading.readDataToEndOfFile()
+                if !trailingStdout.isEmpty {
+                    stdoutBuffer.append(trailingStdout)
+                }
+
+                let stderrText = String(decoding: stderrData, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let stdoutText = String(decoding: stdoutBuffer, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: nil)
+                } else if !stderrText.isEmpty {
+                    continuation.resume(returning: stderrText)
+                } else if !stdoutText.isEmpty {
+                    continuation.resume(returning: stdoutText)
+                } else {
+                    continuation.resume(returning: "\(executableURL.lastPathComponent) exited with status \(proc.terminationStatus)")
                 }
             }
         }
@@ -2091,6 +2206,19 @@ struct ClipToolView: View {
         updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
     }
 
+    private func seekPlayerAndFocusViewport(to time: Double) {
+        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        playheadSeconds = clamped
+
+        if timelineZoom > 1 {
+            viewportStartSeconds = clampedViewportStart(clamped - (zoomedWindowDuration / 2.0))
+            isViewportManuallyControlled = true
+        } else {
+            updateViewportForPlayhead(shouldFollow: true)
+        }
+    }
+
     private var totalDurationSeconds: Double {
         max(0.001, max(playerDurationSeconds, model.sourceDurationSeconds))
     }
@@ -2200,11 +2328,11 @@ struct ClipToolView: View {
 
             if !hasDisallowedModifier && !flags.contains(.shift) {
                 if event.specialKey == .upArrow {
-                    seekPlayer(to: model.clipStartSeconds)
+                    seekPlayerAndFocusViewport(to: model.clipStartSeconds)
                     return nil
                 }
                 if event.specialKey == .downArrow {
-                    seekPlayer(to: model.clipEndSeconds)
+                    seekPlayerAndFocusViewport(to: model.clipEndSeconds)
                     return nil
                 }
             }
@@ -2761,10 +2889,10 @@ struct ClipToolView: View {
             seekPlayer(to: model.clipStartSeconds)
         }
         .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart)) { _ in
-            seekPlayer(to: model.clipStartSeconds)
+            seekPlayerAndFocusViewport(to: model.clipStartSeconds)
         }
         .onReceive(NotificationCenter.default.publisher(for: .clipJumpToEnd)) { _ in
-            seekPlayer(to: model.clipEndSeconds)
+            seekPlayerAndFocusViewport(to: model.clipEndSeconds)
         }
         .onDisappear {
             waveformTask?.cancel()
