@@ -1624,73 +1624,100 @@ struct ClipToolView: View {
 
                 GroupBox("Clip Range") {
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
-                            Text("Zoom")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Slider(value: $timelineZoom, in: 1...100, step: 1)
-                            Text("\(Int(timelineZoom.rounded()))x")
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 48, alignment: .trailing)
-                            Button("Fit") {
-                                timelineZoom = 1
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        if !isCompactLayout && isWaveformLoading {
-                            HStack {
-                                ProgressView()
-                                Text("Generating waveform…")
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text("Zoom")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                Slider(value: $timelineZoom, in: 1...100, step: 1)
+                                Text("\(Int(timelineZoom.rounded()))x")
+                                    .font(.caption.monospacedDigit())
+                                    .frame(width: 48, alignment: .trailing)
+                                Button("Fit") {
+                                    timelineZoom = 1
+                                }
+                                .buttonStyle(.bordered)
                             }
-                        } else if !isCompactLayout && !waveformSamples.isEmpty {
-                            WaveformView(
-                                samples: waveformSamples,
-                                startSeconds: model.clipStartSeconds,
-                                playheadSeconds: playheadSeconds,
-                                endSeconds: model.clipEndSeconds,
+
+                            if timelineZoom > 1 {
+                                TimelineViewportScroller(
+                                    totalDurationSeconds: totalDurationSeconds,
+                                    visibleStartSeconds: visibleStartSeconds,
+                                    visibleEndSeconds: visibleEndSeconds
+                                ) { newStart in
+                                    viewportStartSeconds = clampedViewportStart(newStart)
+                                    isViewportManuallyControlled = true
+                                }
+                                .frame(height: 18)
+
+                                HStack(spacing: 6) {
+                                    Image(systemName: "hand.draw")
+                                    Text("Drag viewport or use trackpad scroll to pan")
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.gray.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            if !isCompactLayout && isWaveformLoading {
+                                HStack {
+                                    ProgressView()
+                                    Text("Generating waveform…")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else if !isCompactLayout && !waveformSamples.isEmpty {
+                                WaveformView(
+                                    samples: waveformSamples,
+                                    startSeconds: model.clipStartSeconds,
+                                    playheadSeconds: playheadSeconds,
+                                    endSeconds: model.clipEndSeconds,
+                                    totalDurationSeconds: totalDurationSeconds,
+                                    visibleStartSeconds: visibleStartSeconds,
+                                    visibleEndSeconds: visibleEndSeconds,
+                                    onSeek: { seekPlayer(to: $0) }
+                                )
+                                .frame(height: 58)
+                            }
+
+                            UnifiedClipTimelineSelector(
+                                startSeconds: Binding(
+                                    get: { model.clipStartSeconds },
+                                    set: {
+                                        model.setClipStart($0)
+                                    }
+                                ),
+                                playheadSeconds: Binding(
+                                    get: { playheadSeconds },
+                                    set: { seekPlayer(to: $0) }
+                                ),
+                                endSeconds: Binding(
+                                    get: { model.clipEndSeconds },
+                                    set: {
+                                        model.setClipEnd($0)
+                                    }
+                                ),
                                 totalDurationSeconds: totalDurationSeconds,
                                 visibleStartSeconds: visibleStartSeconds,
                                 visibleEndSeconds: visibleEndSeconds,
                                 onSeek: { seekPlayer(to: $0) }
                             )
-                            .frame(height: 58)
+                            .frame(height: 44)
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear
+                                        .onAppear { timelineInteractiveWidth = geo.size.width }
+                                        .onChange(of: geo.size.width) { width in
+                                            timelineInteractiveWidth = width
+                                        }
+                                }
+                            )
                         }
-
-                        UnifiedClipTimelineSelector(
-                            startSeconds: Binding(
-                                get: { model.clipStartSeconds },
-                                set: {
-                                    model.setClipStart($0)
-                                }
-                            ),
-                            playheadSeconds: Binding(
-                                get: { playheadSeconds },
-                                set: { seekPlayer(to: $0) }
-                            ),
-                            endSeconds: Binding(
-                                get: { model.clipEndSeconds },
-                                set: {
-                                    model.setClipEnd($0)
-                                }
-                            ),
-                            totalDurationSeconds: totalDurationSeconds,
-                            visibleStartSeconds: visibleStartSeconds,
-                            visibleEndSeconds: visibleEndSeconds,
-                            onSeek: { seekPlayer(to: $0) }
-                        )
-                        .frame(height: 44)
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear
-                                    .onAppear { timelineInteractiveWidth = geo.size.width }
-                                    .onChange(of: geo.size.width) { width in
-                                        timelineInteractiveWidth = width
-                                    }
-                            }
-                        )
+                        .padding(8)
+                        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                         if !isCompactLayout {
                             HStack {
@@ -2088,6 +2115,117 @@ struct UnifiedClipTimelineSelector: View {
                         seekDragWindowEnd = nil
                     }
             )
+        }
+    }
+}
+
+struct TimelineViewportScroller: View {
+    let totalDurationSeconds: Double
+    let visibleStartSeconds: Double
+    let visibleEndSeconds: Double
+    let onViewportStartChanged: (Double) -> Void
+    @State private var thumbDragOriginViewportStart: Double?
+    @State private var dragStartedOnThumb = false
+
+    private var visibleDuration: Double {
+        max(0.0001, visibleEndSeconds - visibleStartSeconds)
+    }
+
+    private var maxViewportStart: Double {
+        max(0, totalDurationSeconds - visibleDuration)
+    }
+
+    private func widthForVisibleWindow(_ width: CGFloat) -> CGFloat {
+        guard totalDurationSeconds > 0 else { return width }
+        return max(28, CGFloat(min(1.0, visibleDuration / totalDurationSeconds)) * width)
+    }
+
+    private func availableThumbTravel(_ width: CGFloat, thumbWidth: CGFloat) -> CGFloat {
+        max(0, width - thumbWidth)
+    }
+
+    private func thumbOffset(for viewportStart: Double, width: CGFloat, thumbWidth: CGFloat) -> CGFloat {
+        let travel = availableThumbTravel(width, thumbWidth: thumbWidth)
+        guard maxViewportStart > 0, travel > 0 else { return 0 }
+        let ratio = min(max(0, viewportStart / maxViewportStart), 1.0)
+        return CGFloat(ratio) * travel
+    }
+
+    private func viewportStart(forThumbX thumbX: CGFloat, width: CGFloat, thumbWidth: CGFloat) -> Double {
+        let travel = availableThumbTravel(width, thumbWidth: thumbWidth)
+        guard travel > 0, maxViewportStart > 0 else { return 0 }
+        let clampedX = min(max(0, thumbX), travel)
+        let ratio = Double(clampedX / travel)
+        return ratio * maxViewportStart
+    }
+
+    private func viewportStartCentered(at x: CGFloat, width: CGFloat, thumbWidth: CGFloat) -> Double {
+        let targetThumbX = x - (thumbWidth / 2.0)
+        return viewportStart(forThumbX: targetThumbX, width: width, thumbWidth: thumbWidth)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let trackHeight: CGFloat = 12
+            let thumbHitPadding: CGFloat = 14
+            let thumbWidth = widthForVisibleWindow(width)
+            let thumbX = thumbOffset(for: visibleStartSeconds, width: width, thumbWidth: thumbWidth)
+            let thumbTravel = availableThumbTravel(width, thumbWidth: thumbWidth)
+            let thumbEndX = thumbX + thumbWidth
+
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.gray.opacity(0.22))
+                    .frame(height: trackHeight)
+                    .offset(y: (proxy.size.height - trackHeight) / 2.0)
+
+                Capsule(style: .continuous)
+                    .fill(Color.accentColor.opacity(0.65))
+                    .frame(width: thumbWidth, height: trackHeight)
+                    .offset(x: thumbX,
+                            y: (proxy.size.height - trackHeight) / 2.0)
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: width, height: max(trackHeight + 14, proxy.size.height))
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                if thumbDragOriginViewportStart == nil {
+                                    dragStartedOnThumb =
+                                        value.startLocation.x >= (thumbX - thumbHitPadding) &&
+                                        value.startLocation.x <= (thumbEndX + thumbHitPadding)
+                                }
+                                guard dragStartedOnThumb else { return }
+                                if thumbDragOriginViewportStart == nil {
+                                    thumbDragOriginViewportStart = visibleStartSeconds
+                                }
+                                let origin = thumbDragOriginViewportStart ?? visibleStartSeconds
+                                guard thumbTravel > 0, maxViewportStart > 0 else { return }
+                                let ratioDelta = Double(value.translation.width / thumbTravel)
+                                let candidate = origin + (ratioDelta * maxViewportStart)
+                                onViewportStartChanged(min(max(0, candidate), maxViewportStart))
+                            }
+                            .onEnded { value in
+                                if !dragStartedOnThumb &&
+                                    abs(value.translation.width) < 3 &&
+                                    abs(value.translation.height) < 3 {
+                                    onViewportStartChanged(
+                                        viewportStartCentered(
+                                            at: value.location.x,
+                                            width: width,
+                                            thumbWidth: thumbWidth
+                                        )
+                                    )
+                                }
+                                thumbDragOriginViewportStart = nil
+                                dragStartedOnThumb = false
+                            }
+                    )
+            }
+            .help("Drag to pan the visible timeline window")
         }
     }
 }
