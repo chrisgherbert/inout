@@ -564,6 +564,18 @@ func copyToClipboard(_ text: String) {
 }
 
 @MainActor
+final class ExternalFileOpenBridge: ObservableObject {
+    static let shared = ExternalFileOpenBridge()
+    @Published var incomingURL: URL?
+
+    private init() {}
+
+    func open(_ url: URL) {
+        incomingURL = url
+    }
+}
+
+@MainActor
 final class WorkspaceViewModel: ObservableObject {
     @Published var selectedTool: WorkspaceTool = .analyze
     @Published var sourceURL: URL?
@@ -1331,6 +1343,7 @@ struct ClipToolView: View {
     @State private var waveformTask: Task<Void, Never>?
     @State private var keyMonitor: Any?
     @State private var scrollMonitor: Any?
+    @State private var mouseDownMonitor: Any?
     @State private var timelineZoom: Double = 1.0
     @State private var viewportStartSeconds: Double = 0
     @State private var isViewportManuallyControlled = false
@@ -1517,6 +1530,34 @@ struct ClipToolView: View {
         }
     }
 
+    private func installMouseDownMonitor() {
+        guard mouseDownMonitor == nil else { return }
+        mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
+            guard let window = NSApp.keyWindow else { return event }
+            guard window.firstResponder is NSTextView else { return event }
+
+            let clickPoint = window.contentView?.convert(event.locationInWindow, from: nil) ?? .zero
+            let hitView = window.contentView?.hitTest(clickPoint)
+            if isTextInputView(hitView) {
+                return event
+            }
+
+            dismissTimecodeFieldFocus()
+            return event
+        }
+    }
+
+    private func isTextInputView(_ view: NSView?) -> Bool {
+        var current = view
+        while let v = current {
+            if v is NSTextView || v is NSTextField {
+                return true
+            }
+            current = v.superview
+        }
+        return false
+    }
+
     private func removeKeyMonitor() {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
@@ -1526,6 +1567,16 @@ struct ClipToolView: View {
             NSEvent.removeMonitor(scrollMonitor)
             self.scrollMonitor = nil
         }
+        if let mouseDownMonitor {
+            NSEvent.removeMonitor(mouseDownMonitor)
+            self.mouseDownMonitor = nil
+        }
+    }
+
+    private func dismissTimecodeFieldFocus() {
+        model.commitClipStartText()
+        model.commitClipEndText()
+        NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
     var body: some View {
@@ -1534,6 +1585,9 @@ struct ClipToolView: View {
                 InlinePlayerView(player: player)
                     .frame(minHeight: 260, maxHeight: 320)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .onTapGesture {
+                        dismissTimecodeFieldFocus()
+                    }
 
                 GroupBox("Clip Range") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -1719,11 +1773,16 @@ struct ClipToolView: View {
             }
 
             Spacer()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    dismissTimecodeFieldFocus()
+                }
         }
         .onAppear {
             loadPlayerItem()
             installKeyMonitor()
             installScrollMonitor()
+            installMouseDownMonitor()
         }
         .onChange(of: model.sourceURL?.path) { _ in
             loadPlayerItem()
@@ -2327,6 +2386,7 @@ struct EmptyToolView: View {
 
 struct ContentView: View {
     @StateObject private var model = WorkspaceViewModel()
+    @StateObject private var externalOpenBridge = ExternalFileOpenBridge.shared
     @State private var isDropTargeted = false
 
     var body: some View {
@@ -2343,13 +2403,55 @@ struct ContentView: View {
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
             model.handleDrop(providers: providers)
         }
+        .onOpenURL { url in
+            guard url.isFileURL else { return }
+            model.setSource(url)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        .onReceive(externalOpenBridge.$incomingURL) { url in
+            guard let url else { return }
+            model.setSource(url)
+            NSApp.activate(ignoringOtherApps: true)
+            externalOpenBridge.incomingURL = nil
+        }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private func firstExistingFileURL(from paths: [String]) -> URL? {
+        for path in paths {
+            guard !path.isEmpty else { continue }
+            if FileManager.default.fileExists(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+        return nil
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        if let url = firstExistingFileURL(from: filenames) {
+            DispatchQueue.main.async {
+                ExternalFileOpenBridge.shared.open(url)
+            }
+        }
+        sender.reply(toOpenOrPrint: .success)
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        guard let url = firstExistingFileURL(from: [filename]) else { return false }
+        DispatchQueue.main.async {
+            ExternalFileOpenBridge.shared.open(url)
+        }
+        return true
     }
 }
 
 @main
 struct CheckBlackFramesApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
-        WindowGroup("Bulwark Video Tools") {
+        Window("Bulwark Video Tools", id: "main") {
             ContentView()
         }
         .windowResizability(.contentMinSize)
