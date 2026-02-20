@@ -1702,6 +1702,11 @@ struct ClipToolView: View {
                 return event
             }
 
+            // Ignore tiny jitter deltas to reduce needless redraw churn.
+            if abs(panPoints) < 0.45 {
+                return nil
+            }
+
             panViewport(byPoints: panPoints)
             return nil
         }
@@ -2102,13 +2107,28 @@ struct WaveformView: View {
                     let halfHeight = max(1.0, (size.height - 8.0) / 2.0)
 
                     var path = Path()
-                    let count = max(1, endIndex - startIndex)
-                    for idx in startIndex...endIndex {
-                        let x = (CGFloat(idx - startIndex) / CGFloat(count)) * size.width
-                        let normalized = max(0.02, min(1.0, samples[idx]))
+                    let visibleSampleCount = max(1, endIndex - startIndex + 1)
+                    let columnCount = max(1, Int(size.width.rounded(.up)))
+                    let samplesPerColumn = max(1, visibleSampleCount / max(1, columnCount))
+
+                    var x: CGFloat = 0
+                    var columnStart = startIndex
+                    while columnStart <= endIndex {
+                        let columnEnd = min(endIndex, columnStart + samplesPerColumn - 1)
+                        var peak = 0.0
+                        var i = columnStart
+                        while i <= columnEnd {
+                            peak = max(peak, samples[i])
+                            i += 1
+                        }
+
+                        let normalized = max(0.02, min(1.0, peak))
                         let amp = CGFloat(normalized) * halfHeight
                         path.move(to: CGPoint(x: x, y: midY - amp))
                         path.addLine(to: CGPoint(x: x, y: midY + amp))
+
+                        x += 1
+                        columnStart = columnEnd + 1
                     }
 
                     context.stroke(path, with: .color(Color.primary.opacity(0.55)), lineWidth: 1)
