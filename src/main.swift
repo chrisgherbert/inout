@@ -1408,12 +1408,13 @@ struct AnalyzeToolView: View {
                 .disabled(!model.canAnalyze)
 
                 if model.isAnalyzing {
-                    Button(role: .destructive) {
+                    Button {
                         model.stopAnalysis()
                     } label: {
                         Label("Stop", systemImage: "stop.fill")
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
 
@@ -1440,35 +1441,46 @@ struct ConvertToolView: View {
         VStack(alignment: .leading, spacing: 12) {
             GroupBox("Audio Export") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Picker("Format", selection: $model.selectedAudioFormat) {
-                        ForEach(AudioFormat.allCases) { format in
-                            Text(format.rawValue).tag(format)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Format", selection: $model.selectedAudioFormat) {
+                            ForEach(AudioFormat.allCases) { format in
+                                Text(format.rawValue).tag(format)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .controlSize(.small)
+
+                        HStack {
+                            Text("Bitrate (MP3)")
+                            Slider(value: Binding(
+                                get: { Double(model.audioBitrateKbps) },
+                                set: { model.audioBitrateKbps = Int($0.rounded()) }
+                            ), in: 96...320, step: 32)
+                            .controlSize(.small)
+                            Text("\(model.audioBitrateKbps) kbps")
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 90, alignment: .trailing)
+                        }
+
+                        Text("M4A uses native AVFoundation export. MP3 uses ffmpeg and defaults to 128 kbps.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .pickerStyle(.segmented)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    Divider()
 
                     HStack {
-                        Text("Bitrate (MP3)")
-                        Slider(value: Binding(
-                            get: { Double(model.audioBitrateKbps) },
-                            set: { model.audioBitrateKbps = Int($0.rounded()) }
-                        ), in: 96...320, step: 32)
-                        Text("\(model.audioBitrateKbps) kbps")
-                            .font(.caption.monospacedDigit())
-                            .frame(width: 90, alignment: .trailing)
+                        Spacer()
+                        Button {
+                            model.startExport()
+                        } label: {
+                            Label(model.isExporting ? "Exporting…" : "Export Audio", systemImage: "arrow.down.doc")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.canExport)
                     }
-
-                    Button {
-                        model.startExport()
-                    } label: {
-                        Label(model.isExporting ? "Exporting…" : "Export Audio", systemImage: "arrow.down.doc")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.canExport)
-
-                    Text("M4A uses native AVFoundation export. MP3 uses ffmpeg and defaults to 128 kbps.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
                 .padding(6)
             }
@@ -1480,10 +1492,6 @@ struct ConvertToolView: View {
                     .textSelection(.enabled)
             } else {
                 EmptyToolView(title: "Convert", subtitle: "Choose a source video to enable audio export.")
-            }
-
-            if !isCompactLayout {
-                Spacer()
             }
         }
     }
@@ -1924,47 +1932,58 @@ struct ClipToolView: View {
 
                 GroupBox("Output") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Picker("Encoding", selection: $model.clipEncodingMode) {
-                            ForEach(ClipEncodingMode.allCases) { mode in
-                                Text(mode.rawValue).tag(mode)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Picker("Encoding", selection: $model.clipEncodingMode) {
+                                ForEach(ClipEncodingMode.allCases) { mode in
+                                    Text(mode.rawValue).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .controlSize(.small)
+
+                            Picker("Format", selection: $model.selectedClipFormat) {
+                                ForEach(ClipFormat.allCases) { format in
+                                    Text(format.rawValue).tag(format)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .controlSize(.small)
+
+                            if model.clipEncodingMode == .compressed {
+                                HStack {
+                                    Text("Video bitrate")
+                                    Slider(value: $model.clipVideoBitrateMbps, in: 2...20, step: 0.5)
+                                        .controlSize(.small)
+                                    Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
+                                        .font(.caption.monospacedDigit())
+                                        .frame(width: 90, alignment: .trailing)
+                                }
+                                Text("Smaller File uses H.264 video + AAC audio.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Fast uses passthrough (original codecs/bitrate).")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .pickerStyle(.segmented)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
-                        Picker("Format", selection: $model.selectedClipFormat) {
-                            ForEach(ClipFormat.allCases) { format in
-                                Text(format.rawValue).tag(format)
+                        Divider()
+
+                        HStack {
+                            Spacer()
+                            Button {
+                                model.commitClipStartText()
+                                model.commitClipEndText()
+                                model.startClipExport()
+                            } label: {
+                                Label(model.isExporting ? "Exporting…" : "Export Clip", systemImage: "film.stack")
                             }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.canExportClip)
                         }
-                        .pickerStyle(.segmented)
-
-                        if model.clipEncodingMode == .compressed {
-                            HStack {
-                                Text("Video bitrate")
-                                Slider(value: $model.clipVideoBitrateMbps, in: 2...20, step: 0.5)
-                                Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
-                                    .font(.caption.monospacedDigit())
-                                    .frame(width: 90, alignment: .trailing)
-                            }
-                            .font(.caption)
-                            Text("Smaller File uses H.264 video + AAC audio.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("Fast uses passthrough (original codecs/bitrate).")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Button {
-                            model.commitClipStartText()
-                            model.commitClipEndText()
-                            model.startClipExport()
-                        } label: {
-                            Label(model.isExporting ? "Exporting…" : "Export Clip", systemImage: "film.stack")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!model.canExportClip)
                     }
                     .padding(6)
                 }
@@ -1972,13 +1991,11 @@ struct ClipToolView: View {
                 EmptyToolView(title: "Clip", subtitle: "Choose a source video to create a new clip from a selected range.")
             }
 
-            if !isCompactLayout {
-                Spacer()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        dismissTimecodeFieldFocus()
-                    }
-            }
+            Spacer()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    dismissTimecodeFieldFocus()
+                }
         }
         .onAppear {
             loadPlayerItem()
