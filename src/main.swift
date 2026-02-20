@@ -190,6 +190,22 @@ enum CompletionSound: String, CaseIterable, Identifiable {
     }
 }
 
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system = "Follow System"
+    case light = "Light"
+    case dark = "Dark"
+
+    var id: String { rawValue }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
 struct Segment: Identifiable {
     let id = UUID()
     let start: Double
@@ -716,6 +732,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let defaultClipEncodingMode = "prefs.defaultClipEncodingMode"
         static let jumpIntervalSeconds = "prefs.jumpIntervalSeconds"
         static let completionSound = "prefs.completionSound"
+        static let appearance = "prefs.appearance"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -775,6 +792,11 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var completionSound: CompletionSound = .crystal {
         didSet {
             UserDefaults.standard.set(completionSound.rawValue, forKey: DefaultsKey.completionSound)
+        }
+    }
+    @Published var appearance: AppAppearance = .system {
+        didSet {
+            UserDefaults.standard.set(appearance.rawValue, forKey: DefaultsKey.appearance)
         }
     }
 
@@ -837,6 +859,11 @@ final class WorkspaceViewModel: ObservableObject {
         if let rawSound = defaults.string(forKey: DefaultsKey.completionSound),
            let sound = CompletionSound(rawValue: rawSound) {
             completionSound = sound
+        }
+
+        if let rawAppearance = defaults.string(forKey: DefaultsKey.appearance),
+           let savedAppearance = AppAppearance(rawValue: rawAppearance) {
+            appearance = savedAppearance
         }
     }
 
@@ -3664,6 +3691,15 @@ struct PreferencesView: View {
                     .disabled(model.completionSound == .none)
                 }
             }
+
+            Section("Appearance") {
+                Picker("Theme", selection: $model.appearance) {
+                    ForEach(AppAppearance.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
         }
         .formStyle(.grouped)
         .padding(16)
@@ -3708,6 +3744,7 @@ struct CheckBlackFramesApp: App {
     var body: some Scene {
         Window("Bulwark Video Tools", id: "main") {
             ContentView(model: model)
+                .preferredColorScheme(model.appearance.colorScheme)
         }
         .windowResizability(.contentMinSize)
         .commands {
