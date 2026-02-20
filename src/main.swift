@@ -1505,7 +1505,7 @@ struct UnifiedClipTimelineSelector: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onEnded { value in
+                    .onChanged { value in
                         let newValue = timeValue(for: value.location.x, width: width)
                         onSeek(newValue)
                     }
@@ -1608,6 +1608,7 @@ struct OutputPanelView: View {
                 .buttonStyle(.bordered)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
