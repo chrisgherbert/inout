@@ -94,6 +94,7 @@ enum ClipEncodingMode: String, CaseIterable, Identifiable {
 enum ClipAudioOnlyFormat: String, CaseIterable, Identifiable {
     case mp3 = "MP3"
     case m4a = "M4A"
+    case wav = "WAV"
 
     var id: String { rawValue }
 
@@ -101,6 +102,7 @@ enum ClipAudioOnlyFormat: String, CaseIterable, Identifiable {
         switch self {
         case .mp3: return "mp3"
         case .m4a: return "m4a"
+        case .wav: return "wav"
         }
     }
 
@@ -108,6 +110,7 @@ enum ClipAudioOnlyFormat: String, CaseIterable, Identifiable {
         switch self {
         case .mp3: return .mp3
         case .m4a: return .mpeg4Audio
+        case .wav: return .wav
         }
     }
 }
@@ -1389,7 +1392,15 @@ final class WorkspaceViewModel: ObservableObject {
                 let fadeOutStart = max(0.0, clipDuration - fadeDuration)
                 let allowFadeForDuration = clipDuration >= 2.0
                 let applyAudioFade = self.clipAudioOnlyAddFadeInOut && allowFadeForDuration
-                let codec = self.clipAudioOnlyFormat == .mp3 ? "libmp3lame" : "aac"
+                let codec: String
+                switch self.clipAudioOnlyFormat {
+                case .mp3:
+                    codec = "libmp3lame"
+                case .m4a:
+                    codec = "aac"
+                case .wav:
+                    codec = "pcm_s16le"
+                }
                 let sourceAsset = AVURLAsset(url: sourceURL)
                 guard let selectedAudioTrackIndex = self.preferredAudioTrackIndex(for: sourceAsset) else {
                     await MainActor.run {
@@ -1433,13 +1444,16 @@ final class WorkspaceViewModel: ObservableObject {
                     args.append(contentsOf: ["-map", audioInputRef])
                 }
 
+                var outputArgs = [
+                    "-c:a", codec
+                ]
+                if self.clipAudioOnlyFormat != .wav {
+                    outputArgs.append(contentsOf: ["-b:a", "\(bitrateKbps)k"])
+                }
+
                 let encodeError = await self.runProcess(
                     executableURL: ffmpegURL,
-                    arguments: args + [
-                        "-c:a", codec,
-                        "-b:a", "\(bitrateKbps)k",
-                        destination.path
-                    ]
+                    arguments: args + outputArgs + [destination.path]
                 )
 
                 await MainActor.run {
@@ -2003,7 +2017,7 @@ struct ClipToolView: View {
     @State private var isTimelineHovered = false
     @State private var timelineInteractiveWidth: CGFloat = 1
 
-    private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+    private let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     private var fastClipFormats: [ClipFormat] { [.mp4, .mov] }
     private var advancedClipFormats: [ClipFormat] { ClipFormat.allCases }
@@ -2107,6 +2121,19 @@ struct ClipToolView: View {
         isViewportManuallyControlled = true
     }
 
+    private func adjustTimelineZoom(by delta: Double) {
+        let newZoom = min(100, max(1, timelineZoom + delta))
+        guard newZoom != timelineZoom else { return }
+        timelineZoom = newZoom
+        updateViewportForPlayhead(shouldFollow: false)
+    }
+
+    private func resetTimelineZoom() {
+        guard timelineZoom != 1 else { return }
+        timelineZoom = 1
+        updateViewportForPlayhead(shouldFollow: false)
+    }
+
     private var visibleStartSeconds: Double {
         if timelineZoom <= 1 {
             return 0
@@ -2128,6 +2155,21 @@ struct ClipToolView: View {
             let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let hasDisallowedModifier = flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
+
+            if flags.contains(.command) && !flags.contains(.option) && !flags.contains(.control) {
+                if chars == "=" || chars == "+" {
+                    adjustTimelineZoom(by: 1)
+                    return nil
+                }
+                if chars == "-" || chars == "_" {
+                    adjustTimelineZoom(by: -1)
+                    return nil
+                }
+                if chars == "0" {
+                    resetTimelineZoom()
+                    return nil
+                }
+            }
 
             if !hasDisallowedModifier && !flags.contains(.shift) {
                 if event.specialKey == .upArrow {
@@ -2761,7 +2803,9 @@ struct WaveformView: View {
 
                     var path = Path()
                     let visibleSampleCount = max(1, endIndex - startIndex + 1)
-                    let columnCount = max(1, Int(size.width.rounded(.up)))
+                    let barPitch: CGFloat = 4.0
+                    let barWidth: CGFloat = 2.6
+                    let columnCount = max(1, Int((size.width / barPitch).rounded(.up)))
                     let visibleSampleCountDouble = Double(visibleSampleCount)
 
                     for column in 0..<columnCount {
@@ -2781,12 +2825,17 @@ struct WaveformView: View {
 
                         let normalized = max(0.02, min(1.0, peak))
                         let amp = CGFloat(normalized) * halfHeight
-                        let x = ((CGFloat(column) + 0.5) / CGFloat(columnCount)) * size.width
-                        path.move(to: CGPoint(x: x, y: midY - amp))
-                        path.addLine(to: CGPoint(x: x, y: midY + amp))
+                        let centerX = ((CGFloat(column) + 0.5) / CGFloat(columnCount)) * size.width
+                        let rect = CGRect(
+                            x: centerX - (barWidth / 2.0),
+                            y: midY - amp,
+                            width: barWidth,
+                            height: amp * 2.0
+                        )
+                        path.addRect(rect)
                     }
 
-                    context.stroke(path, with: .color(Color.primary.opacity(0.55)), lineWidth: 1)
+                    context.fill(path, with: .color(Color.primary.opacity(0.55)))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
