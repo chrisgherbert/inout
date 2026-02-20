@@ -737,6 +737,8 @@ final class WorkspaceViewModel: ObservableObject {
     }
     @Published var clipAudioBitrateKbps: Int = 128
     @Published var clipAdvancedVideoCodec: AdvancedVideoCodec = .h264
+    @Published var clipBoostAudio = false
+    @Published var clipAddFadeInOut = false
     @Published var jumpIntervalSeconds: Int = 5 {
         didSet {
             UserDefaults.standard.set(jumpIntervalSeconds, forKey: DefaultsKey.jumpIntervalSeconds)
@@ -971,6 +973,23 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         clipVideoBitrateMbps = min(20.0, max(2.0, suggested))
+    }
+
+    private func preferredAudioTrackIndex(for asset: AVAsset) -> Int? {
+        let audioTracks = asset.tracks(withMediaType: .audio)
+        guard !audioTracks.isEmpty else { return nil }
+
+        // Prefer the highest-bitrate audio track; this is usually the primary program audio.
+        var bestIndex = 0
+        var bestScore = audioTracks[0].estimatedDataRate
+        for (index, track) in audioTracks.enumerated() {
+            let score = track.estimatedDataRate
+            if score > bestScore {
+                bestScore = score
+                bestIndex = index
+            }
+        }
+        return bestIndex
     }
 
     func clampClipRange() {
@@ -1421,19 +1440,28 @@ final class WorkspaceViewModel: ObservableObject {
             let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
             let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
             let start = String(format: "%.3f", self.clipStartSeconds)
-            let end = String(format: "%.3f", self.clipEndSeconds)
+            let clipDuration = max(0.001, self.clipEndSeconds - self.clipStartSeconds)
+            let durationStr = String(format: "%.3f", clipDuration)
+            let fadeDuration = min(0.333, clipDuration / 2.0)
+            let fadeOutStart = max(0.0, clipDuration - fadeDuration)
+            let allowFadeForDuration = clipDuration >= 2.0
+            let applyAudioFade = self.clipAddFadeInOut && allowFadeForDuration
             let isWebM = self.selectedClipFormat == .webm
+            let sourceAsset = AVURLAsset(url: sourceURL)
+            let selectedAudioTrackIndex = self.preferredAudioTrackIndex(for: sourceAsset)
+            let hasSourceAudio = (selectedAudioTrackIndex != nil)
             let videoCodec = isWebM ? "libvpx-vp9" : (self.clipAdvancedVideoCodec == .hevc ? "libx265" : "libx264")
             let audioCodec = isWebM ? "libopus" : "aac"
+            var videoFilters: [String] = []
+            var audioFilters: [String] = []
             var ffmpegArgs = [
                 "-y",
                 "-hide_banner",
                 "-loglevel", "error",
-                "-i", sourceURL.path,
                 "-ss", start,
-                "-to", end,
+                "-t", durationStr,
+                "-i", sourceURL.path,
                 "-map", "0:v:0",
-                "-map", "0:a?",
                 "-c:v", videoCodec,
                 "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
                 "-pix_fmt", "yuv420p",
@@ -1441,13 +1469,38 @@ final class WorkspaceViewModel: ObservableObject {
             ]
 
             if let scaleFilter = self.clipCompatibleMaxResolution.scaleFilter {
-                ffmpegArgs.append(contentsOf: ["-vf", scaleFilter])
+                videoFilters.append(scaleFilter)
             }
 
-            ffmpegArgs.append(contentsOf: [
-                "-c:a", audioCodec,
-                "-b:a", "\(audioBitrateKbps)k"
-            ])
+            if applyAudioFade && hasSourceAudio {
+                audioFilters.append("afade=t=in:st=0:d=\(String(format: "%.3f", fadeDuration))")
+                audioFilters.append("afade=t=out:st=\(String(format: "%.3f", fadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
+            }
+
+            if self.clipBoostAudio && hasSourceAudio {
+                audioFilters.append("volume=10dB")
+                audioFilters.append("alimiter=limit=0.988553")
+            }
+
+            if !videoFilters.isEmpty {
+                ffmpegArgs.append(contentsOf: ["-vf", videoFilters.joined(separator: ",")])
+            }
+
+            if let selectedAudioTrackIndex {
+                let audioInputRef = "0:a:\(selectedAudioTrackIndex)"
+                if !audioFilters.isEmpty {
+                    ffmpegArgs.append(contentsOf: [
+                        "-filter_complex", "[\(audioInputRef)]\(audioFilters.joined(separator: ","))[aout]",
+                        "-map", "[aout]"
+                    ])
+                } else {
+                    ffmpegArgs.append(contentsOf: ["-map", audioInputRef])
+                }
+                ffmpegArgs.append(contentsOf: [
+                    "-c:a", audioCodec,
+                    "-b:a", "\(audioBitrateKbps)k"
+                ])
+            }
 
             if self.selectedClipFormat == .mp4 || self.selectedClipFormat == .mov {
                 ffmpegArgs.append(contentsOf: ["-movflags", "+faststart"])
@@ -1479,9 +1532,13 @@ final class WorkspaceViewModel: ObservableObject {
                 } else {
                     self.outputURL = destination
                     self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
-                    self.uiMessage = self.exportStatusText
+                    if self.clipAddFadeInOut && !applyAudioFade {
+                        self.uiMessage = "Clip export complete: \(destination.lastPathComponent). Audio fade was skipped for clips under 2.0s."
+                    } else {
+                        self.uiMessage = self.exportStatusText
+                    }
                     self.lastActivityState = .success
-                    self.notifyCompletion("Compatible Clip Export Complete", message: self.exportStatusText)
+                    self.notifyCompletion("Compatible Clip Export Complete", message: self.uiMessage)
                 }
             }
         }
@@ -2278,7 +2335,8 @@ struct ClipToolView: View {
                                 }
                                 .pickerStyle(.menu)
                                 .labelsHidden()
-                                .frame(width: 160)
+                                .controlSize(.small)
+                                .frame(width: 148)
                             }
 
                             if model.clipEncodingMode == .fast {
@@ -2295,7 +2353,8 @@ struct ClipToolView: View {
                                         }
                                         .pickerStyle(.menu)
                                         .labelsHidden()
-                                        .frame(width: 160)
+                                        .controlSize(.small)
+                                        .frame(width: 148)
                                     }
                                 } else {
                                     Text("Video codec: VP9 (WebM)")
@@ -2311,7 +2370,8 @@ struct ClipToolView: View {
                                     }
                                     .pickerStyle(.menu)
                                     .labelsHidden()
-                                    .frame(width: 160)
+                                    .controlSize(.small)
+                                    .frame(width: 148)
                                 }
 
                                 LabeledContent("Max resolution") {
@@ -2322,7 +2382,8 @@ struct ClipToolView: View {
                                     }
                                     .pickerStyle(.menu)
                                     .labelsHidden()
-                                    .frame(width: 160)
+                                    .controlSize(.small)
+                                    .frame(width: 148)
                                 }
 
                                 HStack {
@@ -2351,6 +2412,14 @@ struct ClipToolView: View {
                                         .font(.caption.monospacedDigit())
                                         .frame(width: 90, alignment: .trailing)
                                 }
+
+                                Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipBoostAudio)
+                                    .toggleStyle(.switch)
+                                    .controlSize(.small)
+
+                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAddFadeInOut)
+                                    .toggleStyle(.switch)
+                                    .controlSize(.small)
 
                                 Text("Advanced mode uses configurable codecs, bitrate, and container.")
                                     .font(.caption)
