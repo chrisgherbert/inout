@@ -2066,14 +2066,27 @@ struct ClipToolView: View {
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Button("Jump to Start") {
-                                    seekPlayer(to: model.clipStartSeconds)
+                                ControlGroup {
+                                    Button {
+                                        seekPlayer(to: model.clipStartSeconds)
+                                    } label: {
+                                        Image(systemName: "backward.end.fill")
+                                    }
+                                    .help("Jump to Clip Start")
+                                    .accessibilityLabel("Jump to Clip Start")
+
+                                    Button {
+                                        seekPlayer(to: model.clipEndSeconds)
+                                    } label: {
+                                        Image(systemName: "forward.end.fill")
+                                    }
+                                    .help("Jump to Clip End")
+                                    .accessibilityLabel("Jump to Clip End")
                                 }
-                                .buttonStyle(.bordered)
-                                Button("Jump to End") {
-                                    seekPlayer(to: model.clipEndSeconds)
-                                }
-                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .opacity(isTimelineHovered ? 0.95 : 0.0)
+                                .allowsHitTesting(isTimelineHovered)
+                                .animation(.easeOut(duration: 0.15), value: isTimelineHovered)
                             }
                         }
                     }
