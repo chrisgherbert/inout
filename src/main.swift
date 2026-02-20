@@ -1330,6 +1330,8 @@ struct ClipToolView: View {
     @State private var isWaveformLoading = false
     @State private var waveformTask: Task<Void, Never>?
     @State private var keyMonitor: Any?
+    @State private var timelineZoom: Double = 1.0
+    @State private var viewportStartSeconds: Double = 0
 
     private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -1348,6 +1350,7 @@ struct ClipToolView: View {
         let duration = CMTimeGetSeconds(item.asset.duration)
         playerDurationSeconds = duration.isFinite && duration > 0 ? duration : model.sourceDurationSeconds
         playheadSeconds = 0
+        viewportStartSeconds = 0
         loadWaveform(for: sourceURL)
     }
 
@@ -1356,8 +1359,10 @@ struct ClipToolView: View {
         waveformSamples = []
         isWaveformLoading = true
 
+        let targetSampleCount = Int(min(24_000, max(4_000, model.sourceDurationSeconds * 40.0)))
+
         waveformTask = Task.detached(priority: .userInitiated) {
-            let samples = generateWaveformSamples(for: url, sampleCount: 420)
+            let samples = generateWaveformSamples(for: url, sampleCount: targetSampleCount)
             await MainActor.run {
                 self.waveformSamples = samples
                 self.isWaveformLoading = false
@@ -1369,6 +1374,66 @@ struct ClipToolView: View {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
+        updateViewportForPlayhead(shouldFollow: true)
+    }
+
+    private var totalDurationSeconds: Double {
+        max(0.001, max(playerDurationSeconds, model.sourceDurationSeconds))
+    }
+
+    private var zoomedWindowDuration: Double {
+        max(0.25, totalDurationSeconds / max(1.0, timelineZoom))
+    }
+
+    private var deadZonePaddingSeconds: Double {
+        // Keep 90% of the viewport as a no-pan zone to reduce disorienting jumps.
+        max(0, zoomedWindowDuration * 0.05)
+    }
+
+    private func clampedViewportStart(_ start: Double) -> Double {
+        let maxStart = max(0, totalDurationSeconds - zoomedWindowDuration)
+        return min(max(0, start), maxStart)
+    }
+
+    private func updateViewportForPlayhead(shouldFollow: Bool) {
+        if timelineZoom <= 1 {
+            viewportStartSeconds = 0
+            return
+        }
+
+        let window = zoomedWindowDuration
+        var start = clampedViewportStart(viewportStartSeconds)
+        let end = start + window
+
+        if playheadSeconds < start || playheadSeconds > end {
+            viewportStartSeconds = clampedViewportStart(playheadSeconds - (window / 2))
+            return
+        }
+
+        guard shouldFollow else {
+            viewportStartSeconds = start
+            return
+        }
+
+        let deadStart = start + deadZonePaddingSeconds
+        let deadEnd = end - deadZonePaddingSeconds
+        if playheadSeconds < deadStart {
+            start = playheadSeconds - deadZonePaddingSeconds
+        } else if playheadSeconds > deadEnd {
+            start = playheadSeconds - (window - deadZonePaddingSeconds)
+        }
+        viewportStartSeconds = clampedViewportStart(start)
+    }
+
+    private var visibleStartSeconds: Double {
+        if timelineZoom <= 1 {
+            return 0
+        }
+        return clampedViewportStart(viewportStartSeconds)
+    }
+
+    private var visibleEndSeconds: Double {
+        min(totalDurationSeconds, visibleStartSeconds + zoomedWindowDuration)
     }
 
     private func installKeyMonitor() {
@@ -1434,6 +1499,20 @@ struct ClipToolView: View {
 
                 GroupBox("Clip Range") {
                     VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Text("Zoom")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Slider(value: $timelineZoom, in: 1...100, step: 1)
+                            Text("\(Int(timelineZoom.rounded()))x")
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 48, alignment: .trailing)
+                            Button("Fit") {
+                                timelineZoom = 1
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
                         if isWaveformLoading {
                             HStack {
                                 ProgressView()
@@ -1447,7 +1526,10 @@ struct ClipToolView: View {
                                 startSeconds: model.clipStartSeconds,
                                 playheadSeconds: playheadSeconds,
                                 endSeconds: model.clipEndSeconds,
-                                durationSeconds: max(0.001, model.sourceDurationSeconds)
+                                totalDurationSeconds: totalDurationSeconds,
+                                visibleStartSeconds: visibleStartSeconds,
+                                visibleEndSeconds: visibleEndSeconds,
+                                onSeek: { seekPlayer(to: $0) }
                             )
                             .frame(height: 58)
                         }
@@ -1469,7 +1551,9 @@ struct ClipToolView: View {
                                     model.setClipEnd($0)
                                 }
                             ),
-                            durationSeconds: max(0.001, model.sourceDurationSeconds),
+                            totalDurationSeconds: totalDurationSeconds,
+                            visibleStartSeconds: visibleStartSeconds,
+                            visibleEndSeconds: visibleEndSeconds,
                             onSeek: { seekPlayer(to: $0) }
                         )
                         .frame(height: 44)
@@ -1593,10 +1677,14 @@ struct ClipToolView: View {
         .onChange(of: model.sourceURL?.path) { _ in
             loadPlayerItem()
         }
+        .onChange(of: timelineZoom) { _ in
+            updateViewportForPlayhead(shouldFollow: false)
+        }
         .onReceive(timer) { _ in
             let current = CMTimeGetSeconds(player.currentTime())
             if current.isFinite {
                 playheadSeconds = max(0, current)
+                updateViewportForPlayhead(shouldFollow: player.rate != 0)
             }
             let currentDuration = CMTimeGetSeconds(player.currentItem?.duration ?? .invalid)
             if currentDuration.isFinite && currentDuration > 0 {
@@ -1616,11 +1704,27 @@ struct WaveformView: View {
     let startSeconds: Double
     let playheadSeconds: Double
     let endSeconds: Double
-    let durationSeconds: Double
+    let totalDurationSeconds: Double
+    let visibleStartSeconds: Double
+    let visibleEndSeconds: Double
+    let onSeek: (Double) -> Void
+    @State private var dragWindowStart: Double?
+    @State private var dragWindowEnd: Double?
+
+    private var visibleDuration: Double {
+        max(0.0001, visibleEndSeconds - visibleStartSeconds)
+    }
 
     private func xPosition(for value: Double, width: CGFloat) -> CGFloat {
-        guard durationSeconds > 0 else { return 0 }
-        return CGFloat(min(max(0, value / durationSeconds), 1.0)) * width
+        let local = value - visibleStartSeconds
+        return CGFloat(min(max(0, local / visibleDuration), 1.0)) * width
+    }
+
+    private func timeValue(for x: CGFloat, width: CGFloat, windowStart: Double, windowEnd: Double) -> Double {
+        guard width > 0 else { return 0 }
+        let ratio = min(max(0, x / width), 1.0)
+        let duration = max(0.0001, windowEnd - windowStart)
+        return min(totalDurationSeconds, max(0, windowStart + (Double(ratio) * duration)))
     }
 
     var body: some View {
@@ -1643,12 +1747,15 @@ struct WaveformView: View {
                 Canvas { context, size in
                     guard !samples.isEmpty else { return }
                     let n = max(samples.count - 1, 1)
+                    let startIndex = max(0, Int((visibleStartSeconds / totalDurationSeconds) * Double(n)))
+                    let endIndex = min(n, max(startIndex + 1, Int((visibleEndSeconds / totalDurationSeconds) * Double(n))))
                     let midY = size.height / 2.0
                     let halfHeight = max(1.0, (size.height - 8.0) / 2.0)
 
                     var path = Path()
-                    for idx in samples.indices {
-                        let x = (CGFloat(idx) / CGFloat(n)) * size.width
+                    let count = max(1, endIndex - startIndex)
+                    for idx in startIndex...endIndex {
+                        let x = (CGFloat(idx - startIndex) / CGFloat(count)) * size.width
                         let normalized = max(0.02, min(1.0, samples[idx]))
                         let amp = CGFloat(normalized) * halfHeight
                         path.move(to: CGPoint(x: x, y: midY - amp))
@@ -1669,15 +1776,32 @@ struct WaveformView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.gray.opacity(0.25), lineWidth: 1)
             )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if dragWindowStart == nil || dragWindowEnd == nil {
+                            dragWindowStart = visibleStartSeconds
+                            dragWindowEnd = visibleEndSeconds
+                        }
+                        let windowStart = dragWindowStart ?? visibleStartSeconds
+                        let windowEnd = dragWindowEnd ?? visibleEndSeconds
+                        onSeek(timeValue(for: value.location.x, width: width, windowStart: windowStart, windowEnd: windowEnd))
+                    }
+                    .onEnded { _ in
+                        dragWindowStart = nil
+                        dragWindowEnd = nil
+                    }
+            )
             .overlay(alignment: .bottomLeading) {
-                Text(formatSeconds(startSeconds))
+                Text(formatSeconds(visibleStartSeconds))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .padding(.leading, 6)
                     .padding(.bottom, 4)
             }
             .overlay(alignment: .bottomTrailing) {
-                Text(formatSeconds(endSeconds))
+                Text(formatSeconds(visibleEndSeconds))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .padding(.trailing, 6)
@@ -1691,18 +1815,27 @@ struct UnifiedClipTimelineSelector: View {
     @Binding var startSeconds: Double
     @Binding var playheadSeconds: Double
     @Binding var endSeconds: Double
-    let durationSeconds: Double
+    let totalDurationSeconds: Double
+    let visibleStartSeconds: Double
+    let visibleEndSeconds: Double
     let onSeek: (Double) -> Void
+    @State private var seekDragWindowStart: Double?
+    @State private var seekDragWindowEnd: Double?
 
-    private func xPosition(for value: Double, width: CGFloat) -> CGFloat {
-        guard durationSeconds > 0 else { return 0 }
-        return CGFloat(min(max(0, value / durationSeconds), 1.0)) * width
+    private var visibleDuration: Double {
+        max(0.0001, visibleEndSeconds - visibleStartSeconds)
     }
 
-    private func timeValue(for x: CGFloat, width: CGFloat) -> Double {
+    private func xPosition(for value: Double, width: CGFloat) -> CGFloat {
+        let local = value - visibleStartSeconds
+        return CGFloat(min(max(0, local / visibleDuration), 1.0)) * width
+    }
+
+    private func timeValue(for x: CGFloat, width: CGFloat, windowStart: Double, windowEnd: Double) -> Double {
         guard width > 0 else { return 0 }
         let ratio = min(max(0, x / width), 1.0)
-        return Double(ratio) * durationSeconds
+        let duration = max(0.0001, windowEnd - windowStart)
+        return min(totalDurationSeconds, max(0, windowStart + (Double(ratio) * duration)))
     }
 
     var body: some View {
@@ -1730,8 +1863,18 @@ struct UnifiedClipTimelineSelector: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                let newValue = timeValue(for: value.location.x, width: width)
+                                if seekDragWindowStart == nil || seekDragWindowEnd == nil {
+                                    seekDragWindowStart = visibleStartSeconds
+                                    seekDragWindowEnd = visibleEndSeconds
+                                }
+                                let windowStart = seekDragWindowStart ?? visibleStartSeconds
+                                let windowEnd = seekDragWindowEnd ?? visibleEndSeconds
+                                let newValue = timeValue(for: value.location.x, width: width, windowStart: windowStart, windowEnd: windowEnd)
                                 onSeek(newValue)
+                            }
+                            .onEnded { _ in
+                                seekDragWindowStart = nil
+                                seekDragWindowEnd = nil
                             }
                     )
 
@@ -1742,7 +1885,7 @@ struct UnifiedClipTimelineSelector: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                let newValue = min(timeValue(for: value.location.x, width: width), endSeconds)
+                                let newValue = min(timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds), endSeconds)
                                 startSeconds = max(0, newValue)
                             }
                     )
@@ -1754,8 +1897,8 @@ struct UnifiedClipTimelineSelector: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                let newValue = max(timeValue(for: value.location.x, width: width), startSeconds)
-                                endSeconds = min(durationSeconds, newValue)
+                                let newValue = max(timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds), startSeconds)
+                                endSeconds = min(totalDurationSeconds, newValue)
                             }
                     )
             }
@@ -1763,8 +1906,18 @@ struct UnifiedClipTimelineSelector: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        let newValue = timeValue(for: value.location.x, width: width)
+                        if seekDragWindowStart == nil || seekDragWindowEnd == nil {
+                            seekDragWindowStart = visibleStartSeconds
+                            seekDragWindowEnd = visibleEndSeconds
+                        }
+                        let windowStart = seekDragWindowStart ?? visibleStartSeconds
+                        let windowEnd = seekDragWindowEnd ?? visibleEndSeconds
+                        let newValue = timeValue(for: value.location.x, width: width, windowStart: windowStart, windowEnd: windowEnd)
                         onSeek(newValue)
+                    }
+                    .onEnded { _ in
+                        seekDragWindowStart = nil
+                        seekDragWindowEnd = nil
                     }
             )
         }
