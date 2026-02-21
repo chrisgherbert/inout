@@ -1307,7 +1307,7 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(completionSound.rawValue, forKey: DefaultsKey.completionSound)
         }
     }
-    @Published var appearance: AppAppearance = .system {
+    @Published var appearance: AppAppearance = .dark {
         didSet {
             UserDefaults.standard.set(appearance.rawValue, forKey: DefaultsKey.appearance)
         }
