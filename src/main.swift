@@ -845,10 +845,18 @@ func runDetection(
     }
 
     if detectProfanity {
-        progressHandler(min(0.99, detectAudioSilence || detectBlackFrames ? 0.95 : 0.5))
-        let profanityResult = detectProfanityHits(file: file) {
-            shouldCancel()
-        }
+        let profanityBase = (detectAudioSilence || detectBlackFrames) ? 0.70 : 0.0
+        let profanitySpan = (detectAudioSilence || detectBlackFrames) ? 0.29 : 0.99
+        let profanityResult = detectProfanityHits(
+            file: file,
+            shouldCancel: {
+                shouldCancel()
+            },
+            progressHandler: { profanityProgress in
+                let clamped = min(1, max(0, profanityProgress))
+                progressHandler(min(0.99, profanityBase + (clamped * profanitySpan)))
+            }
+        )
         switch profanityResult {
         case .success(let hits):
             profanityHits = hits
@@ -1001,6 +1009,16 @@ private func normalizedToken(_ token: String) -> String {
         .lowercased()
 }
 
+private func extractPercentProgress(from line: String) -> Double? {
+    let pattern = #"([0-9]{1,3})(?:\.[0-9]+)?\s*%"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let range = NSRange(line.startIndex..<line.endIndex, in: line)
+    guard let match = regex.firstMatch(in: line, range: range),
+          let percentRange = Range(match.range(at: 1), in: line),
+          let percent = Double(line[percentRange]) else { return nil }
+    return min(max(percent / 100.0, 0.0), 1.0)
+}
+
 private func findWhisperExecutable() -> URL? {
     if let bundled = Bundle.main.url(forResource: "whisper-cli", withExtension: nil),
        FileManager.default.isExecutableFile(atPath: bundled.path) {
@@ -1081,6 +1099,95 @@ private func runSynchronousProcess(
     return .failure(.failed(errorText))
 }
 
+private func runSynchronousProcessWithProgress(
+    executableURL: URL,
+    arguments: [String],
+    shouldCancel: @escaping @Sendable () -> Bool,
+    progressHandler: @escaping @Sendable (Double) -> Void
+) -> Result<(stdout: String, stderr: String), DetectionError> {
+    let process = Process()
+    process.executableURL = executableURL
+    process.arguments = arguments
+
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+
+    var stdoutData = Data()
+    var stderrData = Data()
+    let lock = NSLock()
+
+    func consume(_ data: Data) {
+        guard !data.isEmpty else { return }
+        if let text = String(data: data, encoding: .utf8) {
+            for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+                if let progress = extractPercentProgress(from: String(line)) {
+                    progressHandler(progress)
+                }
+            }
+        }
+    }
+
+    stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        guard !chunk.isEmpty else { return }
+        lock.lock()
+        stdoutData.append(chunk)
+        lock.unlock()
+        consume(chunk)
+    }
+
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        guard !chunk.isEmpty else { return }
+        lock.lock()
+        stderrData.append(chunk)
+        lock.unlock()
+        consume(chunk)
+    }
+
+    do {
+        try process.run()
+    } catch {
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+        return .failure(.failed("Failed to run \(executableURL.lastPathComponent): \(error.localizedDescription)"))
+    }
+
+    while process.isRunning {
+        if shouldCancel() {
+            process.terminate()
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            return .failure(.cancelled)
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+
+    stdoutPipe.fileHandleForReading.readabilityHandler = nil
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
+    lock.lock()
+    let trailingStdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+    let trailingStderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+    stdoutData.append(trailingStdout)
+    stderrData.append(trailingStderr)
+    let stdout = String(decoding: stdoutData, as: UTF8.self)
+    let stderr = String(decoding: stderrData, as: UTF8.self)
+    lock.unlock()
+
+    if process.terminationStatus == 0 {
+        progressHandler(1.0)
+        return .success((stdout: stdout, stderr: stderr))
+    }
+
+    let errorText = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    if errorText.isEmpty {
+        return .failure(.failed("\(executableURL.lastPathComponent) exited with status \(process.terminationStatus)"))
+    }
+    return .failure(.failed(errorText))
+}
+
 private func detectProfanityFromTranscriptionJSON(_ jsonData: Data) -> [ProfanityHit] {
     guard let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
         return []
@@ -1118,7 +1225,8 @@ private func detectProfanityFromTranscriptionJSON(_ jsonData: Data) -> [Profanit
 
 func detectProfanityHits(
     file: URL,
-    shouldCancel: @escaping @Sendable () -> Bool = { false }
+    shouldCancel: @escaping @Sendable () -> Bool = { false },
+    progressHandler: @escaping @Sendable (Double) -> Void = { _ in }
 ) -> Result<[ProfanityHit], DetectionError> {
     if shouldCancel() {
         return .failure(.cancelled)
@@ -1168,16 +1276,17 @@ func detectProfanityHits(
         break
     }
 
-    let whisperResult = runSynchronousProcess(
+    let whisperResult = runSynchronousProcessWithProgress(
         executableURL: whisperURL,
         arguments: [
             "-m", modelURL.path,
             "-f", wavURL.path,
             "-of", outputPrefix.path,
             "-oj",
-            "-np"
+            "-pp"
         ],
-        shouldCancel: shouldCancel
+        shouldCancel: shouldCancel,
+        progressHandler: progressHandler
     )
     switch whisperResult {
     case .success:
@@ -1185,7 +1294,7 @@ func detectProfanityHits(
     case .failure(.cancelled):
         return .failure(.cancelled)
     case .failure(.failed(let reason)):
-        let cpuRetry = runSynchronousProcess(
+        let cpuRetry = runSynchronousProcessWithProgress(
             executableURL: whisperURL,
             arguments: [
                 "-ng",
@@ -1194,9 +1303,10 @@ func detectProfanityHits(
                 "-f", wavURL.path,
                 "-of", outputPrefix.path,
                 "-oj",
-                "-np"
+                "-pp"
             ],
-            shouldCancel: shouldCancel
+            shouldCancel: shouldCancel,
+            progressHandler: progressHandler
         )
 
         switch cpuRetry {
@@ -2577,7 +2687,8 @@ final class WorkspaceViewModel: ObservableObject {
                 executableURL: ffmpegURL,
                 arguments: ffmpegArgs,
                 durationSeconds: clipDuration,
-                statusPrefix: advancedStatusPrefix
+                statusPrefix: advancedStatusPrefix,
+                progressRange: self.clipAdvancedBurnInCaptions ? (0.55...1.0) : nil
             )
 
             await MainActor.run {
@@ -2649,7 +2760,7 @@ final class WorkspaceViewModel: ObservableObject {
         let start = String(format: "%.3f", startSeconds)
         let duration = String(format: "%.3f", max(0.001, durationSeconds))
 
-        let extractError = await runProcess(
+        let extractError = await runFFmpegProcessWithProgress(
             executableURL: ffmpegURL,
             arguments: [
                 "-y",
@@ -2664,6 +2775,10 @@ final class WorkspaceViewModel: ObservableObject {
                 "-f", "wav",
                 wavURL.path
             ]
+            ,
+            durationSeconds: max(0.001, durationSeconds),
+            statusPrefix: "Generating captions",
+            progressRange: 0.10...0.35
         )
         if exportCancellationRequested {
             return (nil, "Cancelled")
@@ -2677,21 +2792,28 @@ final class WorkspaceViewModel: ObservableObject {
             "-f", wavURL.path,
             "-of", outputPrefix.path,
             "-osrt",
-            "-np"
+            "-pp"
         ]
-        let whisperError = await runProcess(executableURL: whisperURL, arguments: whisperArgs)
+        let whisperError = await runWhisperProcessWithProgress(
+            executableURL: whisperURL,
+            arguments: whisperArgs,
+            statusPrefix: "Generating captions",
+            progressRange: 0.35...0.55
+        )
         if exportCancellationRequested {
             return (nil, "Cancelled")
         }
 
         if whisperError != nil {
             // Retry with CPU-safe flags; some runtime combinations fail on first accelerated attempt.
-            let retryError = await runProcess(
+            let retryError = await runWhisperProcessWithProgress(
                 executableURL: whisperURL,
                 arguments: [
                     "-ng",
                     "-nfa"
-                ] + whisperArgs
+                ] + whisperArgs,
+                statusPrefix: "Generating captions",
+                progressRange: 0.35...0.55
             )
             if exportCancellationRequested {
                 return (nil, "Cancelled")
@@ -2748,11 +2870,93 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func runWhisperProcessWithProgress(
+        executableURL: URL,
+        arguments: [String],
+        statusPrefix: String,
+        progressRange: ClosedRange<Double>
+    ) async -> String? {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = executableURL
+            process.arguments = arguments
+
+            let stderr = Pipe()
+            let stdout = Pipe()
+            process.standardError = stderr
+            process.standardOutput = stdout
+
+            func emitProgress(_ progress: Double) {
+                Task { @MainActor in
+                    guard self.isExporting else { return }
+                    let clamped = min(max(progress, 0), 1)
+                    let mapped = progressRange.lowerBound + ((progressRange.upperBound - progressRange.lowerBound) * clamped)
+                    self.exportProgress = min(max(mapped, 0), 1)
+                    self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
+                }
+            }
+
+            let parseChunk: (Data) -> Void = { data in
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
+                    if let progress = extractPercentProgress(from: String(rawLine)) {
+                        emitProgress(progress)
+                    }
+                }
+            }
+
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                parseChunk(handle.availableData)
+            }
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                parseChunk(handle.availableData)
+            }
+
+            do {
+                try process.run()
+                Task { @MainActor in
+                    self.activeProcess = process
+                }
+            } catch {
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                continuation.resume(returning: error.localizedDescription)
+                return
+            }
+
+            process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                Task { @MainActor in
+                    if self.activeProcess === proc {
+                        self.activeProcess = nil
+                    }
+                }
+
+                let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+                parseChunk(stdoutData)
+                parseChunk(stderrData)
+
+                let stderrText = String(decoding: stderrData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                if proc.terminationStatus == 0 {
+                    emitProgress(1.0)
+                    continuation.resume(returning: nil)
+                } else if stderrText.isEmpty {
+                    continuation.resume(returning: "\(executableURL.lastPathComponent) exited with status \(proc.terminationStatus)")
+                } else {
+                    continuation.resume(returning: stderrText)
+                }
+            }
+        }
+    }
+
     private func runFFmpegProcessWithProgress(
         executableURL: URL,
         arguments: [String],
         durationSeconds: Double,
-        statusPrefix: String
+        statusPrefix: String,
+        progressRange: ClosedRange<Double>? = nil
     ) async -> String? {
         await withCheckedContinuation { continuation in
             let process = Process()
@@ -2772,7 +2976,12 @@ final class WorkspaceViewModel: ObservableObject {
                     guard let self else { return }
                     guard self.isExporting else { return }
                     let clamped = min(max(progress, 0), 1)
-                    self.exportProgress = clamped
+                    if let range = progressRange {
+                        let mapped = range.lowerBound + ((range.upperBound - range.lowerBound) * clamped)
+                        self.exportProgress = min(max(mapped, 0), 1)
+                    } else {
+                        self.exportProgress = clamped
+                    }
                     self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
                 }
             }
@@ -3181,6 +3390,13 @@ struct AnalyzeToolView: View {
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var blackFrameToggleBinding: Binding<Bool> {
+        Binding(
+            get: { model.hasVideoTrack ? model.analyzeBlackFrames : false },
+            set: { model.analyzeBlackFrames = $0 }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.sourceURL != nil {
@@ -3204,7 +3420,7 @@ struct AnalyzeToolView: View {
                     }
                 }
 
-                Toggle("Detect black frames", isOn: $model.analyzeBlackFrames)
+                Toggle("Detect black frames", isOn: blackFrameToggleBinding)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .disabled(model.isAnalyzing || !model.hasVideoTrack)
@@ -5695,6 +5911,12 @@ struct CheckBlackFramesApp: App {
                 .keyboardShortcut("x", modifiers: [])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
 
+                Button("Export Clip") {
+                    model.startClipExport()
+                }
+                .keyboardShortcut("e", modifiers: [.command])
+                .disabled(model.selectedTool != .clip || !model.canExportClip)
+
                 Button("Jump to Clip Start") {
                     NotificationCenter.default.post(name: .clipJumpToStart, object: nil)
                 }
@@ -5755,7 +5977,6 @@ struct CheckBlackFramesApp: App {
                 Button("Export Clip…") {
                     model.startClipExport()
                 }
-                .keyboardShortcut("e", modifiers: [.command, .option])
                 .disabled(!model.canExportClip)
 
                 Divider()
