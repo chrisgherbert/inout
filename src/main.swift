@@ -3940,11 +3940,11 @@ struct ClipToolView: View {
 
                                 Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAudioOnlyBoostAudio)
                                     .toggleStyle(.switch)
-                                    .controlSize(.small)
+                                    .controlSize(.mini)
 
                                 Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAudioOnlyAddFadeInOut)
                                     .toggleStyle(.switch)
-                                    .controlSize(.small)
+                                    .controlSize(.mini)
 
                                 Text("Audio-only mode exports only the selected range's audio track.")
                                     .font(.caption)
@@ -4045,15 +4045,15 @@ struct ClipToolView: View {
 
                                 Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAdvancedBoostAudio)
                                     .toggleStyle(.switch)
-                                    .controlSize(.small)
+                                    .controlSize(.mini)
 
                                 Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAdvancedAddFadeInOut)
                                     .toggleStyle(.switch)
-                                    .controlSize(.small)
+                                    .controlSize(.mini)
 
                                 Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
                                     .toggleStyle(.switch)
-                                    .controlSize(.small)
+                                    .controlSize(.mini)
                                     .disabled(!model.whisperTranscriptionAvailable)
 
                                 if !model.whisperTranscriptionAvailable {
