@@ -4248,9 +4248,6 @@ struct ClipToolView: View {
                                     .toggleStyle(.switch)
                                     .controlSize(.mini)
 
-                                Text("Audio-only mode exports only the selected range's audio track.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                             } else {
                                 LabeledContent("Format") {
                                     Picker("Format", selection: $model.selectedClipFormat) {
@@ -4271,11 +4268,7 @@ struct ClipToolView: View {
                                 }
                             }
 
-                            if model.clipEncodingMode == .fast {
-                                Text("Fast mode uses passthrough (original codecs/bitrate) and supports MP4/MOV.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else if model.clipEncodingMode == .compressed {
+                            if model.clipEncodingMode == .compressed {
                                 if model.selectedClipFormat != .webm {
                                     LabeledContent("Video codec") {
                                         Picker("Video codec", selection: $model.clipAdvancedVideoCodec) {
@@ -4364,9 +4357,6 @@ struct ClipToolView: View {
                                         .foregroundStyle(.secondary)
                                 }
 
-                                Text("Advanced mode uses configurable codecs, bitrate, and container.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
