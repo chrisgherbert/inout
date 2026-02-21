@@ -954,6 +954,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     @Published var selectedTool: WorkspaceTool = .clip
     @Published var sourceURL: URL?
+    @Published var sourceSessionID = UUID()
     @Published var analysis: FileAnalysis?
     @Published var sourceInfo: SourceMediaInfo?
 
@@ -1228,9 +1229,21 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func setSource(_ url: URL) {
-        guard !isAnalyzing && !isExporting else { return }
         guard FileManager.default.fileExists(atPath: url.path) else { return }
+
+        if (isAnalyzing || isExporting) && sourceURL?.path != url.path {
+            guard confirmReplaceSourceDuringActiveJob(newURL: url) else { return }
+        }
+
+        if isAnalyzing || isExporting {
+            stopCurrentActivity()
+        }
+
+        waveformCache.removeAll(keepingCapacity: false)
+        waveformCacheOrder.removeAll(keepingCapacity: false)
+
         sourceURL = url
+        sourceSessionID = UUID()
         analysis = FileAnalysis(fileURL: url)
         sourceInfo = loadSourceMediaInfo(for: url)
         clipEncodingMode = defaultClipEncodingMode
@@ -1243,11 +1256,27 @@ final class WorkspaceViewModel: ObservableObject {
         resetClipRange()
     }
 
+    private func confirmReplaceSourceDuringActiveJob(newURL: URL) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Replace Current File?"
+        let activeTask = isAnalyzing ? "analysis" : "export"
+        alert.informativeText = "A \(activeTask) is currently running. Replacing the file will stop the current job and load “\(newURL.lastPathComponent)”."
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     func clearSource() {
-        guard !isAnalyzing && !isExporting else { return }
+        if isAnalyzing || isExporting {
+            stopCurrentActivity()
+        }
         sourceURL = nil
+        sourceSessionID = UUID()
         analysis = nil
         sourceInfo = nil
+        waveformCache.removeAll(keepingCapacity: false)
+        waveformCacheOrder.removeAll(keepingCapacity: false)
         outputURL = nil
         uiMessage = "Ready"
         resetClipRange()
@@ -2461,6 +2490,7 @@ struct ToolContentView: View {
             ScrollView {
                 ClipToolView(model: model, isCompactLayout: isCompactLayout)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .id("clip-\(model.sourceSessionID.uuidString)")
             }
             .padding(10)
             .scrollIndicators(.automatic)
@@ -2470,6 +2500,7 @@ struct ToolContentView: View {
             ScrollView {
                 AnalyzeToolView(model: model, isCompactLayout: isCompactLayout)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .id("analyze-\(model.sourceSessionID.uuidString)")
             }
             .padding(10)
             .scrollIndicators(.automatic)
@@ -2479,6 +2510,7 @@ struct ToolContentView: View {
             ScrollView {
                 ConvertToolView(model: model, isCompactLayout: isCompactLayout)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .id("convert-\(model.sourceSessionID.uuidString)")
             }
             .padding(10)
             .scrollIndicators(.automatic)
@@ -2493,6 +2525,7 @@ struct ToolContentView: View {
                     isCompactLayout: isCompactLayout
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .id("inspect-\(model.sourceSessionID.uuidString)")
             }
             .padding(10)
             .scrollIndicators(.automatic)
