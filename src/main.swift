@@ -1294,6 +1294,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipAdvancedVideoCodec: AdvancedVideoCodec = .h264
     @Published var clipAdvancedBoostAudio = false
     @Published var clipAdvancedAddFadeInOut = false
+    @Published var clipAdvancedBurnInCaptions = false
     @Published var clipAudioOnlyBoostAudio = false
     @Published var clipAudioOnlyAddFadeInOut = false
     @Published var clipAudioOnlyFormat: ClipAudioOnlyFormat = .mp3
@@ -1441,6 +1442,10 @@ final class WorkspaceViewModel: ObservableObject {
 
     var effectiveAnalyzeProfanity: Bool {
         analyzeProfanity && hasAudioTrack
+    }
+
+    var whisperTranscriptionAvailable: Bool {
+        findWhisperExecutable() != nil && findWhisperModel() != nil
     }
 
     var hasAudioTrack: Bool {
@@ -2470,6 +2475,12 @@ final class WorkspaceViewModel: ObservableObject {
             let audioCodec = isWebM ? "libopus" : "aac"
             var videoFilters: [String] = []
             var audioFilters: [String] = []
+            var captionTempDirectory: URL?
+            defer {
+                if let captionTempDirectory {
+                    try? FileManager.default.removeItem(at: captionTempDirectory)
+                }
+            }
             var ffmpegArgs = [
                 "-y",
                 "-hide_banner",
@@ -2486,6 +2497,43 @@ final class WorkspaceViewModel: ObservableObject {
 
             if let scaleFilter = self.clipCompatibleMaxResolution.scaleFilter {
                 videoFilters.append(scaleFilter)
+            }
+
+            if self.clipAdvancedBurnInCaptions {
+                await MainActor.run {
+                    self.exportProgress = max(self.exportProgress, 0.12)
+                    self.exportStatusText = "Generating captions…"
+                }
+                let captionPrep = await self.prepareWhisperBurnInCaptions(
+                    sourceURL: sourceURL,
+                    ffmpegURL: ffmpegURL,
+                    startSeconds: self.clipStartSeconds,
+                    durationSeconds: clipDuration
+                )
+                if let prepared = captionPrep.preparation {
+                    captionTempDirectory = prepared.tempDirectory
+                    let escapedPath = self.escapeSubtitlesFilterPath(prepared.srtURL.path)
+                    videoFilters.append("subtitles='\(escapedPath)'")
+                } else {
+                    let reason = captionPrep.error ?? "Unknown caption generation failure."
+                    await MainActor.run {
+                        self.exportTask = nil
+                        self.isExporting = false
+                        self.exportProgress = 0
+                        if self.exportCancellationRequested {
+                            self.exportStatusText = "Clip export cancelled"
+                            self.uiMessage = self.exportStatusText
+                            self.lastActivityState = .cancelled
+                            self.notifyCompletion("Compatible Clip Export Stopped", message: self.exportStatusText)
+                        } else {
+                            self.exportStatusText = "Clip export failed: \(reason)"
+                            self.uiMessage = self.exportStatusText
+                            self.lastActivityState = .failed
+                            self.notifyCompletion("Compatible Clip Export Failed", message: self.exportStatusText)
+                        }
+                    }
+                    return
+                }
             }
 
             if applyAudioFade && hasSourceAudio {
@@ -2524,11 +2572,12 @@ final class WorkspaceViewModel: ObservableObject {
 
             ffmpegArgs.append(destination.path)
 
+            let advancedStatusPrefix = self.clipAdvancedBurnInCaptions ? "Burning captions" : "Encoding advanced clip"
             let encodeError = await self.runFFmpegProcessWithProgress(
                 executableURL: ffmpegURL,
                 arguments: ffmpegArgs,
                 durationSeconds: clipDuration,
-                statusPrefix: "Encoding advanced clip"
+                statusPrefix: advancedStatusPrefix
             )
 
             await MainActor.run {
@@ -2560,6 +2609,103 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private struct BurnInCaptionPreparation {
+        let srtURL: URL
+        let tempDirectory: URL
+    }
+
+    private func escapeSubtitlesFilterPath(_ path: String) -> String {
+        path
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: ":", with: "\\:")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: ",", with: "\\,")
+    }
+
+    private func prepareWhisperBurnInCaptions(
+        sourceURL: URL,
+        ffmpegURL: URL,
+        startSeconds: Double,
+        durationSeconds: Double
+    ) async -> (preparation: BurnInCaptionPreparation?, error: String?) {
+        guard let whisperURL = findWhisperExecutable(),
+              let whisperModelURL = findWhisperModel() else {
+            return (nil, "Whisper resources are not bundled. Rebuild the app with bundled whisper-cli and model.")
+        }
+
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bvt-burnin-captions-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        } catch {
+            return (nil, "Unable to create temporary caption directory: \(error.localizedDescription)")
+        }
+
+        let wavURL = tempDirectory.appendingPathComponent("caption-audio.wav")
+        let outputPrefix = tempDirectory.appendingPathComponent("caption-track")
+        let srtURL = tempDirectory.appendingPathComponent("caption-track.srt")
+        let start = String(format: "%.3f", startSeconds)
+        let duration = String(format: "%.3f", max(0.001, durationSeconds))
+
+        let extractError = await runProcess(
+            executableURL: ffmpegURL,
+            arguments: [
+                "-y",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-ss", start,
+                "-t", duration,
+                "-i", sourceURL.path,
+                "-vn",
+                "-ac", "1",
+                "-ar", "16000",
+                "-f", "wav",
+                wavURL.path
+            ]
+        )
+        if exportCancellationRequested {
+            return (nil, "Cancelled")
+        }
+        if let extractError {
+            return (nil, "Caption audio extraction failed: \(extractError)")
+        }
+
+        let whisperArgs = [
+            "-m", whisperModelURL.path,
+            "-f", wavURL.path,
+            "-of", outputPrefix.path,
+            "-osrt",
+            "-np"
+        ]
+        let whisperError = await runProcess(executableURL: whisperURL, arguments: whisperArgs)
+        if exportCancellationRequested {
+            return (nil, "Cancelled")
+        }
+
+        if whisperError != nil {
+            // Retry with CPU-safe flags; some runtime combinations fail on first accelerated attempt.
+            let retryError = await runProcess(
+                executableURL: whisperURL,
+                arguments: [
+                    "-ng",
+                    "-nfa"
+                ] + whisperArgs
+            )
+            if exportCancellationRequested {
+                return (nil, "Cancelled")
+            }
+            if let retryError {
+                return (nil, "Whisper transcription failed: \(retryError)")
+            }
+        }
+
+        guard FileManager.default.fileExists(atPath: srtURL.path) else {
+            return (nil, "Whisper did not produce subtitle output.")
+        }
+
+        return (BurnInCaptionPreparation(srtURL: srtURL, tempDirectory: tempDirectory), nil)
     }
 
     private func runProcess(executableURL: URL, arguments: [String]) async -> String? {
@@ -3904,6 +4050,17 @@ struct ClipToolView: View {
                                 Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAdvancedAddFadeInOut)
                                     .toggleStyle(.switch)
                                     .controlSize(.small)
+
+                                Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
+                                    .toggleStyle(.switch)
+                                    .controlSize(.small)
+                                    .disabled(!model.whisperTranscriptionAvailable)
+
+                                if !model.whisperTranscriptionAvailable {
+                                    Text("Whisper binary/model not available in app bundle.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
 
                                 Text("Advanced mode uses configurable codecs, bitrate, and container.")
                                     .font(.caption)
