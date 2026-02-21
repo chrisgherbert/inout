@@ -21,6 +21,7 @@ extension Notification.Name {
 private let minDurationSeconds = 0.001
 private let defaultMinSilenceDurationSeconds = 1.0
 private let silenceAmplitudeThreshold = 0.01
+private let defaultAdvancedClipFilenameTemplate = "{source_name}_clip_{in_tc}_to_{out_tc}"
 private let defaultProfanityWords: Set<String> = [
     "ass", "asshole", "bastard", "bitch", "bullshit", "crap", "damn",
     "dick", "douche", "douchebag", "fucker", "fucking", "fuck", "goddamn",
@@ -172,6 +173,31 @@ enum AdvancedVideoCodec: String, CaseIterable, Identifiable {
     case hevc = "HEVC (H.265)"
 
     var id: String { rawValue }
+}
+
+enum AdvancedFilenamePreset: String, CaseIterable, Identifiable {
+    case sourceClipInOut = "Source + Clip Range"
+    case sourceInOutDate = "Source + Range + Date"
+    case dateSourceRange = "Date + Source + Range"
+    case sourceCodecRange = "Source + Codec + Range"
+    case sourceResolutionRange = "Source + Resolution + Range"
+
+    var id: String { rawValue }
+
+    var template: String {
+        switch self {
+        case .sourceClipInOut:
+            return "{source_name}_clip_{in_tc}_to_{out_tc}"
+        case .sourceInOutDate:
+            return "{source_name}_{in_tc}_to_{out_tc}_{date}"
+        case .dateSourceRange:
+            return "{date}_{source_name}_{in_tc}_to_{out_tc}"
+        case .sourceCodecRange:
+            return "{source_name}_{codec}_{in_tc}_to_{out_tc}"
+        case .sourceResolutionRange:
+            return "{source_name}_{resolution}_{in_tc}_to_{out_tc}"
+        }
+    }
 }
 
 enum CompletionSound: String, CaseIterable, Identifiable {
@@ -1030,6 +1056,15 @@ private func normalizedProfanityWordsStorageString(_ raw: String) -> String {
     profanityWordsFromString(raw).sorted().joined(separator: ", ")
 }
 
+private func sanitizeFilenameComponent(_ value: String) -> String {
+    let invalid = CharacterSet(charactersIn: "/\\?%*|\"<>:")
+    let sanitizedScalars = value.unicodeScalars.map { invalid.contains($0) ? "_" : Character($0) }
+    let sanitized = String(sanitizedScalars)
+        .replacingOccurrences(of: "\n", with: "_")
+        .replacingOccurrences(of: "\r", with: "_")
+    return sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
 private func extractPercentProgress(from line: String) -> Double? {
     let pattern = #"([0-9]{1,3})(?:\.[0-9]+)?\s*%"#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
@@ -1371,6 +1406,8 @@ final class WorkspaceViewModel: ObservableObject {
     private enum DefaultsKey {
         static let audioBitrateKbps = "prefs.audioBitrateKbps"
         static let defaultClipEncodingMode = "prefs.defaultClipEncodingMode"
+        static let advancedClipFilenamePreset = "prefs.advancedClipFilenamePreset"
+        static let advancedClipFilenameTemplate = "prefs.advancedClipFilenameTemplate"
         static let jumpIntervalSeconds = "prefs.jumpIntervalSeconds"
         static let completionSound = "prefs.completionSound"
         static let appearance = "prefs.appearance"
@@ -1439,6 +1476,28 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipAudioOnlyBoostAudio = false
     @Published var clipAudioOnlyAddFadeInOut = false
     @Published var clipAudioOnlyFormat: ClipAudioOnlyFormat = .mp3
+    @Published var advancedClipFilenamePreset: AdvancedFilenamePreset = .sourceClipInOut {
+        didSet {
+            UserDefaults.standard.set(advancedClipFilenamePreset.rawValue, forKey: DefaultsKey.advancedClipFilenamePreset)
+            advancedClipFilenameTemplate = advancedClipFilenamePreset.template
+        }
+    }
+    @Published var advancedClipFilenameTemplate: String = defaultAdvancedClipFilenameTemplate {
+        didSet {
+            let trimmed = advancedClipFilenameTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                if advancedClipFilenameTemplate != defaultAdvancedClipFilenameTemplate {
+                    advancedClipFilenameTemplate = defaultAdvancedClipFilenameTemplate
+                }
+                return
+            }
+            if trimmed != advancedClipFilenameTemplate {
+                advancedClipFilenameTemplate = trimmed
+                return
+            }
+            UserDefaults.standard.set(trimmed, forKey: DefaultsKey.advancedClipFilenameTemplate)
+        }
+    }
     @Published var jumpIntervalSeconds: Int = 5 {
         didSet {
             UserDefaults.standard.set(jumpIntervalSeconds, forKey: DefaultsKey.jumpIntervalSeconds)
@@ -1543,6 +1602,16 @@ final class WorkspaceViewModel: ObservableObject {
         }
         clipEncodingMode = defaultClipEncodingMode
 
+        if let savedPreset = defaults.string(forKey: DefaultsKey.advancedClipFilenamePreset),
+           let preset = AdvancedFilenamePreset(rawValue: savedPreset) {
+            advancedClipFilenamePreset = preset
+        } else if let savedTemplate = defaults.string(forKey: DefaultsKey.advancedClipFilenameTemplate),
+                  let preset = AdvancedFilenamePreset.allCases.first(where: { $0.template == savedTemplate }) {
+            advancedClipFilenamePreset = preset
+        } else {
+            advancedClipFilenameTemplate = advancedClipFilenamePreset.template
+        }
+
         let savedJump = defaults.integer(forKey: DefaultsKey.jumpIntervalSeconds)
         if savedJump > 0 {
             jumpIntervalSeconds = min(max(1, savedJump), 30)
@@ -1622,6 +1691,26 @@ final class WorkspaceViewModel: ObservableObject {
 
     var selectedProfanityWordsCount: Int {
         selectedProfanityWords.count
+    }
+
+    var advancedClipFilenamePreview: String {
+        let sampleSource = sourceURL?.deletingPathExtension().lastPathComponent ?? "source"
+        let sampleStart = clipStartSeconds
+        let sampleEnd = max(clipEndSeconds, clipStartSeconds + 1.0)
+        let codecToken = selectedClipFormat == .webm ? "vp9" : (clipAdvancedVideoCodec == .hevc ? "hevc" : "h264")
+        let resolutionToken: String
+        if clipCompatibleMaxResolution == .original {
+            resolutionToken = sourceInfo?.resolution ?? "original"
+        } else {
+            resolutionToken = clipCompatibleMaxResolution.rawValue
+        }
+        return advancedClipFilenameBase(
+            sourceName: sampleSource,
+            startSeconds: sampleStart,
+            endSeconds: sampleEnd,
+            codec: codecToken,
+            resolution: resolutionToken
+        ) + ".\(selectedClipFormat.fileExtension.lowercased())"
     }
 
     var canExport: Bool {
@@ -1794,6 +1883,51 @@ final class WorkspaceViewModel: ObservableObject {
 
     func resetProfanityWordsToDefaults() {
         profanityWordsText = defaultProfanityWordsStorageString
+    }
+
+    func resetAdvancedClipFilenameTemplateToDefaults() {
+        advancedClipFilenamePreset = .sourceClipInOut
+    }
+
+    private func advancedClipFilenameBase(
+        sourceName: String,
+        startSeconds: Double,
+        endSeconds: Double,
+        codec: String,
+        resolution: String
+    ) -> String {
+        let tcStart = formatSeconds(startSeconds).replacingOccurrences(of: ":", with: "-")
+        let tcEnd = formatSeconds(endSeconds).replacingOccurrences(of: ":", with: "-")
+        let duration = String(format: "%.3f", max(0, endSeconds - startSeconds))
+
+        let now = Date()
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        timeFormatter.dateFormat = "HH-mm-ss"
+
+        let replacements: [String: String] = [
+            "{source_name}": sanitizeFilenameComponent(sourceName),
+            "{in_tc}": sanitizeFilenameComponent(tcStart),
+            "{out_tc}": sanitizeFilenameComponent(tcEnd),
+            "{duration}": sanitizeFilenameComponent(duration),
+            "{date}": dateFormatter.string(from: now),
+            "{time}": timeFormatter.string(from: now),
+            "{codec}": sanitizeFilenameComponent(codec.lowercased()),
+            "{resolution}": sanitizeFilenameComponent(resolution.lowercased().replacingOccurrences(of: " ", with: ""))
+        ]
+
+        var rendered = advancedClipFilenameTemplate
+        for (token, value) in replacements {
+            rendered = rendered.replacingOccurrences(of: token, with: value)
+        }
+        rendered = sanitizeFilenameComponent(rendered)
+        if rendered.isEmpty {
+            rendered = "\(sanitizeFilenameComponent(sourceName))_clip_\(tcStart)_to_\(tcEnd)"
+        }
+        return rendered
     }
 
     func resetClipRange() {
@@ -2404,10 +2538,29 @@ final class WorkspaceViewModel: ObservableObject {
         guard clipDurationSeconds > 0 else { return }
 
         let outputExtension = clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.fileExtension : selectedClipFormat.fileExtension
-        let defaultName = sourceURL.deletingPathExtension().lastPathComponent +
-            "_clip_" + formatSeconds(clipStartSeconds).replacingOccurrences(of: ":", with: "-") +
-            "_to_" + formatSeconds(clipEndSeconds).replacingOccurrences(of: ":", with: "-") +
-            "." + outputExtension
+        let defaultBaseName: String
+        if clipEncodingMode == .compressed {
+            let codecToken = selectedClipFormat == .webm ? "vp9" : (clipAdvancedVideoCodec == .hevc ? "hevc" : "h264")
+            let resolutionToken: String
+            if clipCompatibleMaxResolution == .original {
+                resolutionToken = sourceInfo?.resolution ?? "original"
+            } else {
+                resolutionToken = clipCompatibleMaxResolution.rawValue
+            }
+            defaultBaseName = advancedClipFilenameBase(
+                sourceName: sourceURL.deletingPathExtension().lastPathComponent,
+                startSeconds: clipStartSeconds,
+                endSeconds: clipEndSeconds,
+                codec: codecToken,
+                resolution: resolutionToken
+            )
+        } else {
+            defaultBaseName = sourceURL.deletingPathExtension().lastPathComponent +
+                "_clip_" + formatSeconds(clipStartSeconds).replacingOccurrences(of: ":", with: "-") +
+                "_to_" + formatSeconds(clipEndSeconds).replacingOccurrences(of: ":", with: "-")
+        }
+
+        let defaultName = URL(fileURLWithPath: defaultBaseName).deletingPathExtension().lastPathComponent + "." + outputExtension
 
         let panel = NSSavePanel()
         panel.nameFieldStringValue = defaultName
@@ -5959,6 +6112,43 @@ struct PreferencesView: View {
                 } header: {
                     Text("Frame Capture")
                 }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent("Preset") {
+                            Picker("Preset", selection: $model.advancedClipFilenamePreset) {
+                                ForEach(AdvancedFilenamePreset.allCases) { preset in
+                                    Text(preset.rawValue).tag(preset)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 260)
+                        }
+
+                        HStack(spacing: 8) {
+                            Text("Preview:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(model.advancedClipFilenamePreview)
+                                .font(.system(.caption, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                            Spacer()
+                            Button("Reset to Defaults") {
+                                model.resetAdvancedClipFilenameTemplateToDefaults()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+
+                        Text("Preset-based naming keeps exports consistent for non-technical users.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                } header: {
+                    Text("Advanced Export Filename")
+                }
             }
             .formStyle(.grouped)
             .tabItem {
@@ -5984,7 +6174,7 @@ struct PreferencesView: View {
             }
         }
         .padding(14)
-        .frame(width: 540, height: 320)
+        .frame(width: 620, height: 460)
     }
 }
 
