@@ -265,6 +265,11 @@ struct Segment: Identifiable {
     }
 }
 
+struct CaptureTimelineMarker: Identifiable, Equatable {
+    let id = UUID()
+    let seconds: Double
+}
+
 struct ProfanityHit: Identifiable {
     let id = UUID()
     let start: Double
@@ -1446,6 +1451,8 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var exportProgress = 0.0
     @Published var exportStatusText = "No export yet"
     @Published var outputURL: URL?
+    @Published private(set) var captureTimelineMarkers: [CaptureTimelineMarker] = []
+    @Published var highlightedCaptureTimelineMarkerID: UUID?
 
     @Published var clipStartSeconds: Double = 0
     @Published var clipEndSeconds: Double = 0
@@ -1842,6 +1849,8 @@ final class WorkspaceViewModel: ObservableObject {
         wasCancelled = false
         analyzeProgress = 0
         exportProgress = 0
+        captureTimelineMarkers = []
+        highlightedCaptureTimelineMarkerID = nil
         resetClipRange()
     }
 
@@ -1867,6 +1876,8 @@ final class WorkspaceViewModel: ObservableObject {
         waveformCache.removeAll(keepingCapacity: false)
         waveformCacheOrder.removeAll(keepingCapacity: false)
         outputURL = nil
+        captureTimelineMarkers = []
+        highlightedCaptureTimelineMarkerID = nil
         uiMessage = "Ready"
         resetClipRange()
     }
@@ -3437,11 +3448,62 @@ final class WorkspaceViewModel: ObservableObject {
 
             try pngData.write(to: destinationURL, options: .atomic)
             outputURL = destinationURL
+            addCaptureTimelineMarker(at: clampedTime)
             uiMessage = "Frame saved: \(destinationURL.lastPathComponent)"
             lastActivityState = .success
+            playFrameCaptureSound()
         } catch {
             uiMessage = "Frame capture failed: \(error.localizedDescription)"
             lastActivityState = .failed
+        }
+    }
+
+    private func addCaptureTimelineMarker(at seconds: Double) {
+        let clamped = max(0, min(seconds, max(sourceDurationSeconds, seconds)))
+
+        if let existing = captureTimelineMarkers.first(where: { abs($0.seconds - clamped) < 0.001 }) {
+            highlightedCaptureTimelineMarkerID = existing.id
+            scheduleCaptureMarkerHighlightClear(markerID: existing.id)
+            return
+        }
+
+        let marker = CaptureTimelineMarker(seconds: clamped)
+        captureTimelineMarkers.append(marker)
+        captureTimelineMarkers.sort { $0.seconds < $1.seconds }
+        if captureTimelineMarkers.count > 300 {
+            captureTimelineMarkers.removeFirst(captureTimelineMarkers.count - 300)
+        }
+        highlightedCaptureTimelineMarkerID = marker.id
+        scheduleCaptureMarkerHighlightClear(markerID: marker.id)
+    }
+
+    private func scheduleCaptureMarkerHighlightClear(markerID: UUID) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 420_000_000)
+            guard let self, self.highlightedCaptureTimelineMarkerID == markerID else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                self.highlightedCaptureTimelineMarkerID = nil
+            }
+        }
+    }
+
+    private func playFrameCaptureSound() {
+        if let bundledURL = Bundle.main.url(forResource: "FrameShutter", withExtension: "aiff"),
+           let bundledSound = NSSound(contentsOf: bundledURL, byReference: true) {
+            bundledSound.play()
+            return
+        }
+
+        let preferred: [NSSound.Name] = [
+            NSSound.Name("Grab"),   // macOS screenshot/Grab-style shutter sound
+            NSSound.Name("Glass"),  // fallback
+            NSSound.Name("Funk")    // fallback
+        ]
+        for name in preferred {
+            if let sound = NSSound(named: name) {
+                sound.play()
+                return
+            }
         }
     }
 
@@ -4197,6 +4259,8 @@ struct ClipToolView: View {
                                 totalDurationSeconds: totalDurationSeconds,
                                 visibleStartSeconds: visibleStartSeconds,
                                 visibleEndSeconds: visibleEndSeconds,
+                                captureMarkers: model.captureTimelineMarkers,
+                                highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
                                 onSeek: { seekPlayer(to: $0) }
                             )
                             .frame(height: 58)
@@ -4222,6 +4286,8 @@ struct ClipToolView: View {
                             totalDurationSeconds: totalDurationSeconds,
                             visibleStartSeconds: visibleStartSeconds,
                             visibleEndSeconds: visibleEndSeconds,
+                            captureMarkers: model.captureTimelineMarkers,
+                            highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
                             onSeek: { seekPlayer(to: $0) }
                         )
                         .frame(height: 44)
@@ -4661,6 +4727,8 @@ struct WaveformView: View {
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
+    let captureMarkers: [CaptureTimelineMarker]
+    let highlightedMarkerID: UUID?
     let onSeek: (Double) -> Void
     @State private var dragWindowStart: Double?
     @State private var dragWindowEnd: Double?
@@ -4765,6 +4833,20 @@ struct WaveformView: View {
                     .fill(Color.accentColor)
                     .frame(width: 2, height: height)
                     .offset(x: playheadX - 1)
+
+                ForEach(captureMarkers) { marker in
+                    let markerX = xPosition(for: marker.seconds, width: width)
+                    let isHighlighted = marker.id == highlightedMarkerID
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(isHighlighted ? Color.orange : Color.orange.opacity(0.72))
+                        .frame(width: isHighlighted ? 5 : 3, height: isHighlighted ? height - 8 : height - 16)
+                        .scaleEffect(isHighlighted ? 1.16 : 1.0, anchor: .center)
+                        .shadow(
+                            color: isHighlighted ? Color.orange.opacity(0.55) : Color.clear,
+                            radius: isHighlighted ? 4 : 0
+                        )
+                        .offset(x: markerX - (isHighlighted ? 2.5 : 1.5), y: isHighlighted ? 4 : 8)
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
             .overlay(
@@ -4775,6 +4857,7 @@ struct WaveformView: View {
             .onHover { hovering in
                 isHovered = hovering
             }
+            .animation(.spring(response: 0.24, dampingFraction: 0.72), value: highlightedMarkerID)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
@@ -4816,6 +4899,8 @@ struct UnifiedClipTimelineSelector: View {
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
+    let captureMarkers: [CaptureTimelineMarker]
+    let highlightedMarkerID: UUID?
     let onSeek: (Double) -> Void
     @State private var seekDragWindowStart: Double?
     @State private var seekDragWindowEnd: Double?
@@ -4870,6 +4955,20 @@ struct UnifiedClipTimelineSelector: View {
                             .frame(width: max(2, endX - startX), height: 10)
                             .offset(x: startX, y: 15)
                     )
+
+                ForEach(captureMarkers) { marker in
+                    let markerX = xPosition(for: marker.seconds, width: width)
+                    let isHighlighted = marker.id == highlightedMarkerID
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(isHighlighted ? Color.orange : Color.orange.opacity(0.74))
+                        .frame(width: isHighlighted ? 5 : 3, height: isHighlighted ? 24 : 18)
+                        .scaleEffect(isHighlighted ? 1.12 : 1.0, anchor: .center)
+                        .shadow(
+                            color: isHighlighted ? Color.orange.opacity(0.5) : Color.clear,
+                            radius: isHighlighted ? 4 : 0
+                        )
+                        .offset(x: markerX - (isHighlighted ? 2.5 : 1.5), y: isHighlighted ? 8 : 11)
+                }
 
                 Rectangle()
                     .fill(Color.white.opacity(0.95))
@@ -4933,6 +5032,7 @@ struct UnifiedClipTimelineSelector: View {
             .onHover { hovering in
                 isHovered = hovering
             }
+            .animation(.spring(response: 0.24, dampingFraction: 0.72), value: highlightedMarkerID)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
