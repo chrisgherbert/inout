@@ -19,8 +19,13 @@ extension Notification.Name {
 }
 
 private let minDurationSeconds = 0.001
-private let minSilenceDurationSeconds = 1.0
+private let defaultMinSilenceDurationSeconds = 1.0
 private let silenceAmplitudeThreshold = 0.01
+private let profanityWords: Set<String> = [
+    "ass", "asshole", "bastard", "bitch", "bullshit", "crap", "damn",
+    "dick", "douche", "douchebag", "fucker", "fucking", "fuck", "goddamn",
+    "hell", "motherfucker", "pissed", "shit", "shitty", "slut", "whore"
+]
 private let picThreshold = 0.90
 private let pixelBlackThreshold = 0.10
 private let maxSampleDimension = 640
@@ -233,6 +238,18 @@ struct Segment: Identifiable {
     }
 }
 
+struct ProfanityHit: Identifiable {
+    let id = UUID()
+    let start: Double
+    let end: Double
+    let duration: Double
+    let word: String
+
+    var formatted: String {
+        "\(formatSeconds(start)) → \(formatSeconds(end)) (\(word))"
+    }
+}
+
 enum FileStatus {
     case idle
     case running
@@ -280,6 +297,7 @@ final class CancellationFlag {
 struct DetectionOutput {
     let segments: [Segment]
     let silentSegments: [Segment]
+    let profanityHits: [ProfanityHit]
     let mediaDuration: Double?
 }
 
@@ -287,8 +305,11 @@ struct FileAnalysis {
     let fileURL: URL
     var segments: [Segment] = []
     var silentSegments: [Segment] = []
+    var profanityHits: [ProfanityHit] = []
     var includedBlackDetection: Bool = true
     var includedSilenceDetection: Bool = true
+    var includedProfanityDetection: Bool = false
+    var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds
     var mediaDuration: Double?
     var progress: Double = 0
     var status: FileStatus = .idle
@@ -323,6 +344,13 @@ struct FileAnalysis {
                     pieces.append("\(silentSegments.count) silent gap(s), \(String(format: "%.3f", totalSilentDuration))s")
                 }
             }
+            if includedProfanityDetection {
+                if profanityHits.isEmpty {
+                    pieces.append("No profanity detected")
+                } else {
+                    pieces.append("\(profanityHits.count) profanity hit(s)")
+                }
+            }
             return pieces.isEmpty ? "No analysis type enabled" : pieces.joined(separator: " • ")
         case .failed(let reason):
             return "Failed: \(reason)"
@@ -337,13 +365,18 @@ struct FileAnalysis {
         silentSegments.map(\.formatted).joined(separator: "\n")
     }
 
+    var formattedProfanityList: String {
+        profanityHits.map(\.formatted).joined(separator: "\n")
+    }
+
     var timelineDuration: Double? {
         if let mediaDuration, mediaDuration > 0 {
             return mediaDuration
         }
         let maxBlackEnd = segments.map(\.end).max() ?? 0
         let maxSilentEnd = silentSegments.map(\.end).max() ?? 0
-        let maxEnd = max(maxBlackEnd, maxSilentEnd)
+        let maxProfanityEnd = profanityHits.map(\.end).max() ?? 0
+        let maxEnd = max(maxBlackEnd, max(maxSilentEnd, maxProfanityEnd))
         return maxEnd > 0 ? maxEnd : nil
     }
 }
@@ -680,6 +713,11 @@ func runDetection(
     file: URL,
     detectBlackFrames: Bool,
     detectAudioSilence: Bool,
+    detectProfanity: Bool,
+    silenceMinDuration: Double = defaultMinSilenceDurationSeconds,
+    onBlackSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
+    onSilentSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
+    onProfanityDetected: @escaping @Sendable (ProfanityHit) -> Void = { _ in },
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
     shouldCancel: @escaping @Sendable () -> Bool = { false }
 ) -> Result<DetectionOutput, DetectionError> {
@@ -756,12 +794,20 @@ func runDetection(
                 }
             } else if inBlack {
                 intervals.append((start: currentStart, end: pts))
+                let duration = max(0, pts - currentStart)
+                if duration >= minDurationSeconds {
+                    onBlackSegmentDetected(Segment(start: currentStart, end: pts, duration: duration))
+                }
                 inBlack = false
             }
         }
 
         if inBlack {
             intervals.append((start: currentStart, end: lastTimestamp))
+            let duration = max(0, lastTimestamp - currentStart)
+            if duration >= minDurationSeconds {
+                onBlackSegmentDetected(Segment(start: currentStart, end: lastTimestamp, duration: duration))
+            }
         }
 
         if reader.status == .failed {
@@ -773,12 +819,16 @@ func runDetection(
     let outputDuration = mediaDuration.isFinite && mediaDuration > 0 ? mediaDuration : (lastTimestamp > 0 ? lastTimestamp : nil)
     let segments = detectBlackFrames ? buildSegments(blackIntervals: intervals, minDuration: minDurationSeconds) : []
     var silentSegments: [Segment] = []
+    var profanityHits: [ProfanityHit] = []
 
     if detectAudioSilence {
         let audioResult = detectAudioSilenceSegments(
             file: file,
-            minDuration: minSilenceDurationSeconds,
-            amplitudeThreshold: silenceAmplitudeThreshold
+            minDuration: silenceMinDuration,
+            amplitudeThreshold: silenceAmplitudeThreshold,
+            onSegmentDetected: { segment in
+                onSilentSegmentDetected(segment)
+            }
         ) { audioProgress in
             let clamped = min(1, max(0, audioProgress))
             progressHandler(min(0.99, 0.7 + (clamped * 0.3)))
@@ -794,14 +844,29 @@ func runDetection(
         }
     }
 
+    if detectProfanity {
+        progressHandler(min(0.99, detectAudioSilence || detectBlackFrames ? 0.95 : 0.5))
+        let profanityResult = detectProfanityHits(file: file) {
+            shouldCancel()
+        }
+        switch profanityResult {
+        case .success(let hits):
+            profanityHits = hits
+            hits.forEach { onProfanityDetected($0) }
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
     progressHandler(1.0)
-    return .success(DetectionOutput(segments: segments, silentSegments: silentSegments, mediaDuration: outputDuration))
+    return .success(DetectionOutput(segments: segments, silentSegments: silentSegments, profanityHits: profanityHits, mediaDuration: outputDuration))
 }
 
 func detectAudioSilenceSegments(
     file: URL,
     minDuration: Double,
     amplitudeThreshold: Double,
+    onSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
     shouldCancel: @escaping @Sendable () -> Bool = { false }
 ) -> Result<[Segment], DetectionError> {
@@ -900,6 +965,10 @@ func detectAudioSilenceSegments(
                 }
             } else if inSilence {
                 intervals.append((start: currentStart, end: sampleTime))
+                let duration = max(0, sampleTime - currentStart)
+                if duration >= minDuration {
+                    onSegmentDetected(Segment(start: currentStart, end: sampleTime, duration: duration))
+                }
                 inSilence = false
             }
         }
@@ -911,6 +980,10 @@ func detectAudioSilenceSegments(
 
     if inSilence {
         intervals.append((start: currentStart, end: lastTimestamp))
+        let duration = max(0, lastTimestamp - currentStart)
+        if duration >= minDuration {
+            onSegmentDetected(Segment(start: currentStart, end: lastTimestamp, duration: duration))
+        }
     }
 
     if reader.status == .failed {
@@ -920,6 +993,227 @@ func detectAudioSilenceSegments(
 
     progressHandler(1.0)
     return .success(buildSegments(blackIntervals: intervals, minDuration: minDuration))
+}
+
+private func normalizedToken(_ token: String) -> String {
+    token
+        .trimmingCharacters(in: .punctuationCharacters.union(.symbols).union(.whitespacesAndNewlines))
+        .lowercased()
+}
+
+private func findWhisperExecutable() -> URL? {
+    if let bundled = Bundle.main.url(forResource: "whisper-cli", withExtension: nil),
+       FileManager.default.isExecutableFile(atPath: bundled.path) {
+        return bundled
+    }
+    return nil
+}
+
+private func findWhisperModel() -> URL? {
+    if let bundled = Bundle.main.url(forResource: "profanity-model", withExtension: "bin"),
+       FileManager.default.fileExists(atPath: bundled.path) {
+        return bundled
+    }
+    return nil
+}
+
+private func findSystemFFmpegExecutable() -> URL? {
+    if let bundled = Bundle.main.url(forResource: "ffmpeg", withExtension: nil),
+       FileManager.default.isExecutableFile(atPath: bundled.path) {
+        return bundled
+    }
+
+    var candidates = [
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg"
+    ]
+    if let path = ProcessInfo.processInfo.environment["PATH"] {
+        for entry in path.split(separator: ":") {
+            candidates.append(String(entry) + "/ffmpeg")
+        }
+    }
+
+    for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
+        return URL(fileURLWithPath: candidate)
+    }
+    return nil
+}
+
+private func runSynchronousProcess(
+    executableURL: URL,
+    arguments: [String],
+    shouldCancel: @escaping @Sendable () -> Bool
+) -> Result<(stdout: String, stderr: String), DetectionError> {
+    let process = Process()
+    process.executableURL = executableURL
+    process.arguments = arguments
+
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+
+    do {
+        try process.run()
+    } catch {
+        return .failure(.failed("Failed to run \(executableURL.lastPathComponent): \(error.localizedDescription)"))
+    }
+
+    while process.isRunning {
+        if shouldCancel() {
+            process.terminate()
+            return .failure(.cancelled)
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+
+    let stdout = String(decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    let stderr = String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    if process.terminationStatus == 0 {
+        return .success((stdout: stdout, stderr: stderr))
+    }
+
+    let errorText = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    if errorText.isEmpty {
+        return .failure(.failed("\(executableURL.lastPathComponent) exited with status \(process.terminationStatus)"))
+    }
+    return .failure(.failed(errorText))
+}
+
+private func detectProfanityFromTranscriptionJSON(_ jsonData: Data) -> [ProfanityHit] {
+    guard let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+        return []
+    }
+
+    var hits: [ProfanityHit] = []
+    let transcription = object["transcription"] as? [[String: Any]] ?? object["segments"] as? [[String: Any]] ?? []
+    for segment in transcription {
+        let text = (segment["text"] as? String ?? "")
+        let tokens = text.split(whereSeparator: { $0.isWhitespace }).map { normalizedToken(String($0)) }
+        let matchedWords = tokens.filter { profanityWords.contains($0) }
+        if matchedWords.isEmpty { continue }
+
+        let startMs: Double? = ((segment["offsets"] as? [String: Any])?["from"] as? Double)
+        let endMs: Double? = ((segment["offsets"] as? [String: Any])?["to"] as? Double)
+        let startSecAlt = segment["start"] as? Double
+        let endSecAlt = segment["end"] as? Double
+
+        let start = max(0, (startMs ?? (startSecAlt ?? 0)) / (startMs != nil ? 1000.0 : 1.0))
+        let endRaw = (endMs ?? (endSecAlt ?? (start + 0.2))) / (endMs != nil ? 1000.0 : 1.0)
+        let end = max(start + 0.05, endRaw)
+        let duration = end - start
+
+        for word in matchedWords {
+            hits.append(ProfanityHit(start: start, end: end, duration: duration, word: word))
+        }
+    }
+
+    hits.sort { lhs, rhs in
+        if abs(lhs.start - rhs.start) > 0.0001 { return lhs.start < rhs.start }
+        return lhs.word < rhs.word
+    }
+    return hits
+}
+
+func detectProfanityHits(
+    file: URL,
+    shouldCancel: @escaping @Sendable () -> Bool = { false }
+) -> Result<[ProfanityHit], DetectionError> {
+    if shouldCancel() {
+        return .failure(.cancelled)
+    }
+
+    guard let ffmpegURL = findSystemFFmpegExecutable() else {
+        return .failure(.failed("No ffmpeg executable found for profanity transcription."))
+    }
+    guard let whisperURL = findWhisperExecutable() else {
+        return .failure(.failed("Bundled whisper-cli not found (Contents/Resources/whisper-cli)."))
+    }
+    guard let modelURL = findWhisperModel() else {
+        return .failure(.failed("Bundled Whisper model not found (Contents/Resources/profanity-model.bin)."))
+    }
+
+    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("bvt-profanity-\(UUID().uuidString)", isDirectory: true)
+    do {
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+    } catch {
+        return .failure(.failed("Failed to create temp directory: \(error.localizedDescription)"))
+    }
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+    let wavURL = tempRoot.appendingPathComponent("audio.wav")
+    let outputPrefix = tempRoot.appendingPathComponent("transcript")
+    let outputJSON = tempRoot.appendingPathComponent("transcript.json")
+
+    let ffmpegResult = runSynchronousProcess(
+        executableURL: ffmpegURL,
+        arguments: [
+            "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-i", file.path,
+            "-vn",
+            "-ac", "1",
+            "-ar", "16000",
+            "-f", "wav",
+            wavURL.path
+        ],
+        shouldCancel: shouldCancel
+    )
+    switch ffmpegResult {
+    case .failure(let error):
+        return .failure(error)
+    case .success:
+        break
+    }
+
+    let whisperResult = runSynchronousProcess(
+        executableURL: whisperURL,
+        arguments: [
+            "-m", modelURL.path,
+            "-f", wavURL.path,
+            "-of", outputPrefix.path,
+            "-oj",
+            "-np"
+        ],
+        shouldCancel: shouldCancel
+    )
+    switch whisperResult {
+    case .success:
+        break
+    case .failure(.cancelled):
+        return .failure(.cancelled)
+    case .failure(.failed(let reason)):
+        let cpuRetry = runSynchronousProcess(
+            executableURL: whisperURL,
+            arguments: [
+                "-ng",
+                "-nfa",
+                "-m", modelURL.path,
+                "-f", wavURL.path,
+                "-of", outputPrefix.path,
+                "-oj",
+                "-np"
+            ],
+            shouldCancel: shouldCancel
+        )
+
+        switch cpuRetry {
+        case .success:
+            break
+        case .failure(.cancelled):
+            return .failure(.cancelled)
+        case .failure(.failed(let retryReason)):
+            return .failure(.failed("Whisper transcription failed: \(retryReason). Initial error: \(reason)."))
+        }
+    }
+
+    guard let jsonData = try? Data(contentsOf: outputJSON) else {
+        return .failure(.failed("Whisper did not produce transcript JSON output."))
+    }
+
+    return .success(detectProfanityFromTranscriptionJSON(jsonData))
 }
 
 func copyToClipboard(_ text: String) {
@@ -948,6 +1242,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let jumpIntervalSeconds = "prefs.jumpIntervalSeconds"
         static let completionSound = "prefs.completionSound"
         static let appearance = "prefs.appearance"
+        static let silenceMinDurationSeconds = "prefs.silenceMinDurationSeconds"
         static let frameSaveLocationMode = "prefs.frameSaveLocationMode"
         static let customFrameSaveDirectoryPath = "prefs.customFrameSaveDirectoryPath"
     }
@@ -1018,7 +1313,18 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
     @Published var analyzeBlackFrames = true
+    @Published var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds {
+        didSet {
+            let clamped = min(5.0, max(0.5, silenceMinDurationSeconds))
+            if abs(clamped - silenceMinDurationSeconds) > 0.0001 {
+                silenceMinDurationSeconds = clamped
+                return
+            }
+            UserDefaults.standard.set(clamped, forKey: DefaultsKey.silenceMinDurationSeconds)
+        }
+    }
     @Published var analyzeAudioSilence = true
+    @Published var analyzeProfanity = false
     @Published var frameSaveLocationMode: FrameSaveLocationMode = .askEachTime {
         didSet {
             UserDefaults.standard.set(frameSaveLocationMode.rawValue, forKey: DefaultsKey.frameSaveLocationMode)
@@ -1099,6 +1405,11 @@ final class WorkspaceViewModel: ObservableObject {
             appearance = savedAppearance
         }
 
+        let savedSilenceDuration = defaults.double(forKey: DefaultsKey.silenceMinDurationSeconds)
+        if savedSilenceDuration > 0 {
+            silenceMinDurationSeconds = min(5.0, max(0.5, savedSilenceDuration))
+        }
+
         if let rawFrameSaveMode = defaults.string(forKey: DefaultsKey.frameSaveLocationMode),
            let mode = FrameSaveLocationMode(rawValue: rawFrameSaveMode) {
             frameSaveLocationMode = mode
@@ -1108,7 +1419,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var canAnalyze: Bool {
-        sourceURL != nil && !isAnalyzing && !isExporting && (effectiveAnalyzeBlackFrames || analyzeAudioSilence)
+        sourceURL != nil && !isAnalyzing && !isExporting && (effectiveAnalyzeBlackFrames || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
     }
 
     var hasVideoTrack: Bool {
@@ -1122,6 +1433,27 @@ final class WorkspaceViewModel: ObservableObject {
 
     var effectiveAnalyzeBlackFrames: Bool {
         analyzeBlackFrames && hasVideoTrack
+    }
+
+    var effectiveAnalyzeAudioSilence: Bool {
+        analyzeAudioSilence && hasAudioTrack
+    }
+
+    var effectiveAnalyzeProfanity: Bool {
+        analyzeProfanity && hasAudioTrack
+    }
+
+    var hasAudioTrack: Bool {
+        guard let sourceInfo else { return false }
+        if let bitrate = sourceInfo.audioBitrateBps, bitrate > 0 { return true }
+        if let sampleRate = sourceInfo.sampleRateHz, sampleRate > 0 { return true }
+        if let channels = sourceInfo.channels, channels > 0 { return true }
+        if let codec = sourceInfo.audioCodec, !codec.isEmpty { return true }
+        return false
+    }
+
+    var silenceMinDurationLabel: String {
+        String(format: "%.1f", silenceMinDurationSeconds)
     }
 
     var canExport: Bool {
@@ -1416,20 +1748,28 @@ final class WorkspaceViewModel: ObservableObject {
         analyzeStatusText = "Analyzing \(url.lastPathComponent)… 0%"
         cancelFlag.reset()
 
+        let knownDuration = sourceInfo?.durationSeconds
+
         if var existing = analysis {
             existing.status = .running
             existing.progress = 0
             existing.segments = []
             existing.silentSegments = []
+            existing.profanityHits = []
             existing.includedBlackDetection = effectiveAnalyzeBlackFrames
-            existing.includedSilenceDetection = analyzeAudioSilence
-            existing.mediaDuration = nil
+            existing.includedSilenceDetection = effectiveAnalyzeAudioSilence
+            existing.includedProfanityDetection = effectiveAnalyzeProfanity
+            existing.silenceMinDurationSeconds = silenceMinDurationSeconds
+            existing.mediaDuration = knownDuration
             analysis = existing
         } else {
             analysis = FileAnalysis(
                 fileURL: url,
                 includedBlackDetection: effectiveAnalyzeBlackFrames,
-                includedSilenceDetection: analyzeAudioSilence,
+                includedSilenceDetection: effectiveAnalyzeAudioSilence,
+                includedProfanityDetection: effectiveAnalyzeProfanity,
+                silenceMinDurationSeconds: silenceMinDurationSeconds,
+                mediaDuration: knownDuration,
                 status: .running
             )
         }
@@ -1438,9 +1778,32 @@ final class WorkspaceViewModel: ObservableObject {
             guard let self else { return }
             let flag = cancelFlag
             let detectBlack = self.effectiveAnalyzeBlackFrames
-            let detectSilence = self.analyzeAudioSilence
+            let detectSilence = self.effectiveAnalyzeAudioSilence
+            let detectProfanity = self.effectiveAnalyzeProfanity
+            let silenceMinDuration = self.silenceMinDurationSeconds
             let result = await Task.detached(priority: .userInitiated) {
-                runDetection(file: url, detectBlackFrames: detectBlack, detectAudioSilence: detectSilence) { progress in
+                runDetection(
+                    file: url,
+                    detectBlackFrames: detectBlack,
+                    detectAudioSilence: detectSilence,
+                    detectProfanity: detectProfanity,
+                    silenceMinDuration: silenceMinDuration,
+                    onBlackSegmentDetected: { segment in
+                        Task { @MainActor [weak self] in
+                            self?.appendDetectedBlackSegment(segment)
+                        }
+                    },
+                    onSilentSegmentDetected: { segment in
+                        Task { @MainActor [weak self] in
+                            self?.appendDetectedSilentSegment(segment)
+                        }
+                    },
+                    onProfanityDetected: { hit in
+                        Task { @MainActor [weak self] in
+                            self?.appendDetectedProfanityHit(hit)
+                        }
+                    }
+                ) { progress in
                     Task { @MainActor [weak self] in
                         self?.setAnalyzeProgress(progress, fileName: url.lastPathComponent)
                     }
@@ -1449,7 +1812,7 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             }.value
 
-            self.applyAnalysisResult(result, includedBlack: detectBlack, includedSilence: detectSilence)
+            self.applyAnalysisResult(result, includedBlack: detectBlack, includedSilence: detectSilence, includedProfanity: detectProfanity)
         }
     }
 
@@ -1469,10 +1832,49 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func appendDetectedBlackSegment(_ segment: Segment) {
+        guard var current = analysis else { return }
+        guard case .running = current.status else { return }
+        if !containsSegment(current.segments, segment) {
+            current.segments.append(segment)
+            analysis = current
+        }
+    }
+
+    private func appendDetectedSilentSegment(_ segment: Segment) {
+        guard var current = analysis else { return }
+        guard case .running = current.status else { return }
+        if !containsSegment(current.silentSegments, segment) {
+            current.silentSegments.append(segment)
+            analysis = current
+        }
+    }
+
+    private func appendDetectedProfanityHit(_ hit: ProfanityHit) {
+        guard var current = analysis else { return }
+        guard case .running = current.status else { return }
+        if !current.profanityHits.contains(where: {
+            abs($0.start - hit.start) < 0.001 &&
+            abs($0.end - hit.end) < 0.001 &&
+            $0.word == hit.word
+        }) {
+            current.profanityHits.append(hit)
+            analysis = current
+        }
+    }
+
+    private func containsSegment(_ list: [Segment], _ candidate: Segment) -> Bool {
+        list.contains {
+            abs($0.start - candidate.start) < 0.001 &&
+            abs($0.end - candidate.end) < 0.001
+        }
+    }
+
     private func applyAnalysisResult(
         _ result: Result<DetectionOutput, DetectionError>,
         includedBlack: Bool,
-        includedSilence: Bool
+        includedSilence: Bool,
+        includedProfanity: Bool
     ) {
         isAnalyzing = false
         analyzeTask = nil
@@ -1483,20 +1885,20 @@ final class WorkspaceViewModel: ObservableObject {
         case .success(let output):
             current.segments = output.segments
             current.silentSegments = output.silentSegments
+            current.profanityHits = output.profanityHits
             current.includedBlackDetection = includedBlack
             current.includedSilenceDetection = includedSilence
+            current.includedProfanityDetection = includedProfanity
             current.mediaDuration = output.mediaDuration
             current.progress = 1
             current.status = .done
             analysis = current
-            if current.segments.isEmpty && current.silentSegments.isEmpty {
-                if includedBlack && includedSilence {
-                    uiMessage = "No black segments or silent gaps found."
-                } else if includedBlack {
-                    uiMessage = "No black segments found."
-                } else {
-                    uiMessage = "No silent gaps found."
-                }
+            if current.segments.isEmpty && current.silentSegments.isEmpty && current.profanityHits.isEmpty {
+                var noneParts: [String] = []
+                if includedBlack { noneParts.append("black segments") }
+                if includedSilence { noneParts.append("silent gaps") }
+                if includedProfanity { noneParts.append("profanity") }
+                uiMessage = noneParts.isEmpty ? "No analysis type enabled." : "No \(noneParts.joined(separator: ", ")) found."
             } else {
                 var parts: [String] = []
                 if includedBlack {
@@ -1511,6 +1913,13 @@ final class WorkspaceViewModel: ObservableObject {
                         parts.append("No silent gaps")
                     } else {
                         parts.append("\(current.silentSegments.count) silent gap(s)")
+                    }
+                }
+                if includedProfanity {
+                    if current.profanityHits.isEmpty {
+                        parts.append("No profanity")
+                    } else {
+                        parts.append("\(current.profanityHits.count) profanity hit(s)")
                     }
                 }
                 uiMessage = "Detected: " + parts.joined(separator: ", ")
@@ -2580,10 +2989,15 @@ struct AnalyzeToolView: View {
                     .controlSize(.small)
                     .disabled(model.isAnalyzing || !model.hasVideoTrack)
 
-                Toggle("Detect silent audio gaps (over 1.0s)", isOn: $model.analyzeAudioSilence)
+                Toggle("Detect silent audio gaps (over \(model.silenceMinDurationLabel)s)", isOn: $model.analyzeAudioSilence)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                    .disabled(model.isAnalyzing)
+                    .disabled(model.isAnalyzing || !model.hasAudioTrack)
+
+                Toggle("Detect profanity (Whisper transcription)", isOn: $model.analyzeProfanity)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(model.isAnalyzing || !model.hasAudioTrack)
 
                 if let analysis = model.analysis {
                     Text(analysis.summary)
@@ -4046,24 +4460,6 @@ struct InspectToolView: View {
                     )
                 }
 
-                GroupBox("Analysis Snapshot") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Detected segments: \(analysis?.segments.count ?? 0)")
-                        Text("Total black duration: \(String(format: "%.3f", analysis?.totalDuration ?? 0))s")
-                    }
-                    .font(.caption)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(
-                        adaptiveContainerFill(
-                            material: .thinMaterial,
-                            fallback: Color(nsColor: .controlBackgroundColor),
-                            reduceTransparency: reduceTransparency
-                        ),
-                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    )
-                }
-
                 GroupBox("Video") {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Codec: \(sourceInfo?.videoCodec ?? "—")")
@@ -4229,20 +4625,24 @@ struct StatusFooterStripView: View {
 }
 
 struct SegmentTimelineView: View {
-    let segments: [Segment]
+    let blackSegments: [Segment]
+    let silentSegments: [Segment]
+    let profanitySegments: [Segment]
     let duration: Double
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Timeline")
-                .font(.caption.weight(.semibold))
+    @ViewBuilder
+    private func lane(label: String, segments: [Segment], color: Color) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .frame(width: 64, alignment: .leading)
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                         .fill(Color.gray.opacity(0.18))
-                        .frame(height: 18)
+                        .frame(height: 12)
 
                     ForEach(segments) { segment in
                         let safeDuration = max(duration, 0.001)
@@ -4252,16 +4652,31 @@ struct SegmentTimelineView: View {
                         let w = max(2, geometry.size.width * widthRatio)
 
                         RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                            .fill(Color.black.opacity(0.85))
-                            .frame(width: w, height: 18)
+                            .fill(color)
+                            .frame(width: w, height: 12)
                             .offset(x: x)
                     }
                 }
             }
-            .frame(height: 18)
+            .frame(height: 12)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Timeline")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 5) {
+                lane(label: "Black", segments: blackSegments, color: Color.black.opacity(0.9))
+                lane(label: "Silence", segments: silentSegments, color: Color.orange.opacity(0.85))
+                lane(label: "Profanity", segments: profanitySegments, color: Color.red.opacity(0.9))
+            }
 
             HStack {
                 Text("00:00:00.000")
+                    .padding(.leading, 72)
                 Spacer()
                 Text(formatSeconds(duration))
             }
@@ -4296,6 +4711,7 @@ struct DetailView: View {
     @State private var isPlaying = false
     @State private var hoveredBlackSegmentID: UUID?
     @State private var hoveredSilentSegmentID: UUID?
+    @State private var hoveredProfanityHitID: UUID?
 
     private func loadPlayerItem() {
         let item = AVPlayerItem(url: file.fileURL)
@@ -4325,6 +4741,228 @@ struct DetailView: View {
         } else {
             player.play()
             isPlaying = true
+        }
+    }
+
+    @ViewBuilder
+    private func analysisSections(showCopyButtons: Bool, showEmptySections: Bool = false) -> some View {
+        if let timelineDuration = file.timelineDuration {
+            SegmentTimelineView(
+                blackSegments: file.includedBlackDetection ? file.segments : [],
+                silentSegments: file.includedSilenceDetection ? file.silentSegments : [],
+                profanitySegments: file.includedProfanityDetection ? file.profanityHits.map { Segment(start: $0.start, end: $0.end, duration: $0.duration) } : [],
+                duration: timelineDuration
+            )
+        }
+
+        if file.includedBlackDetection && (showEmptySections || !file.segments.isEmpty) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Black Segments")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if showCopyButtons {
+                        Button("Copy Black List") {
+                            copyToClipboard(file.formattedList)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                if file.segments.isEmpty {
+                    Text("No black segments detected yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 4)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 4) {
+                            ForEach(file.segments) { segment in
+                                HStack {
+                                    Text(formatSeconds(segment.start))
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 130, alignment: .leading)
+                                    Text("→")
+                                        .foregroundStyle(.secondary)
+                                    Text(formatSeconds(segment.end))
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 130, alignment: .leading)
+                                    Spacer()
+                                    Text(String(format: "%.3fs", segment.duration))
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                        .fill(hoveredBlackSegmentID == segment.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                        .stroke(
+                                            hoveredBlackSegmentID == segment.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
+                                            lineWidth: hoveredBlackSegmentID == segment.id ? 0.9 : 0.4
+                                        )
+                                )
+                                .contentShape(Rectangle())
+                                .onHover { isHovering in
+                                    hoveredBlackSegmentID = isHovering ? segment.id : (hoveredBlackSegmentID == segment.id ? nil : hoveredBlackSegmentID)
+                                }
+                                .onTapGesture(count: 2) {
+                                    play(from: segment.start)
+                                }
+                                .help("Double-click to play from this segment start")
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                }
+            }
+        }
+
+        if file.includedSilenceDetection && (showEmptySections || !file.silentSegments.isEmpty) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Silent Gaps (> \(String(format: "%.1f", file.silenceMinDurationSeconds))s)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if showCopyButtons {
+                        Button("Copy Silence List") {
+                            copyToClipboard(file.formattedSilentList)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                if file.silentSegments.isEmpty {
+                    Text("No silent gaps detected yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 4)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 4) {
+                            ForEach(file.silentSegments) { segment in
+                                HStack {
+                                    Text(formatSeconds(segment.start))
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 130, alignment: .leading)
+                                    Text("→")
+                                        .foregroundStyle(.secondary)
+                                    Text(formatSeconds(segment.end))
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 130, alignment: .leading)
+                                    Spacer()
+                                    Text(String(format: "%.3fs", segment.duration))
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                        .fill(hoveredSilentSegmentID == segment.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                        .stroke(
+                                            hoveredSilentSegmentID == segment.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
+                                            lineWidth: hoveredSilentSegmentID == segment.id ? 0.9 : 0.4
+                                        )
+                                )
+                                .contentShape(Rectangle())
+                                .onHover { isHovering in
+                                    hoveredSilentSegmentID = isHovering ? segment.id : (hoveredSilentSegmentID == segment.id ? nil : hoveredSilentSegmentID)
+                                }
+                                .onTapGesture(count: 2) {
+                                    play(from: segment.start)
+                                }
+                                .help("Double-click to play from this silent-gap start")
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                }
+            }
+        }
+
+        if file.includedProfanityDetection && (showEmptySections || !file.profanityHits.isEmpty) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Profanity Hits")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if showCopyButtons {
+                        Button("Copy Profanity List") {
+                            copyToClipboard(file.formattedProfanityList)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                if file.profanityHits.isEmpty {
+                    Text("No profanity detected yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 4)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 4) {
+                            ForEach(file.profanityHits) { hit in
+                                HStack {
+                                    Text(formatSeconds(hit.start))
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 130, alignment: .leading)
+                                    Text("→")
+                                        .foregroundStyle(.secondary)
+                                    Text(formatSeconds(hit.end))
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 130, alignment: .leading)
+                                    Spacer()
+                                    Text(hit.word)
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                        .fill(hoveredProfanityHitID == hit.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                        .stroke(
+                                            hoveredProfanityHitID == hit.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
+                                            lineWidth: hoveredProfanityHitID == hit.id ? 0.9 : 0.4
+                                        )
+                                )
+                                .contentShape(Rectangle())
+                                .onHover { isHovering in
+                                    hoveredProfanityHitID = isHovering ? hit.id : (hoveredProfanityHitID == hit.id ? nil : hoveredProfanityHitID)
+                                }
+                                .onTapGesture(count: 2) {
+                                    play(from: hit.start)
+                                }
+                                .help("Double-click to play from this profanity hit")
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                }
+            }
         }
     }
 
@@ -4379,15 +5017,63 @@ struct DetailView: View {
 
             switch file.status {
             case .running:
-                HStack {
-                    Spacer()
-                    VStack(spacing: 8) {
-                        ProgressView()
-                        Text("Analyzing \(file.fileURL.lastPathComponent)…")
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 8) {
+                            ProgressView()
+                            Text("Analyzing \(file.fileURL.lastPathComponent)…")
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
                     }
-                    Spacer()
+
+                    if !file.segments.isEmpty || !file.silentSegments.isEmpty || !file.profanityHits.isEmpty {
+                        Text("Detections so far")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        if !file.segments.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Black segments: \(file.segments.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                ForEach(Array(file.segments.suffix(8))) { segment in
+                                    Text(segment.formatted)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        if !file.silentSegments.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Silent gaps: \(file.silentSegments.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                ForEach(Array(file.silentSegments.suffix(8))) { segment in
+                                    Text(segment.formatted)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        if !file.profanityHits.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Profanity hits: \(file.profanityHits.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                ForEach(Array(file.profanityHits.suffix(8))) { hit in
+                                    Text(hit.formatted)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
                 }
+                analysisSections(showCopyButtons: false, showEmptySections: true)
             case .failed(let reason):
                 Text("Analysis failed: \(reason)")
                     .foregroundStyle(.red)
@@ -4414,123 +5100,17 @@ struct DetailView: View {
                                 .foregroundStyle(.orange)
                         }
                     }
-                }
-
-                if file.includedBlackDetection, let timelineDuration = file.timelineDuration {
-                    SegmentTimelineView(segments: file.segments, duration: timelineDuration)
-                }
-
-                if !file.segments.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Detected Segments")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        ScrollView {
-                            LazyVStack(spacing: 4) {
-                                ForEach(file.segments) { segment in
-                                    HStack {
-                                        Text(formatSeconds(segment.start))
-                                            .font(.system(.body, design: .monospaced))
-                                            .frame(width: 130, alignment: .leading)
-                                        Text("→")
-                                            .foregroundStyle(.secondary)
-                                        Text(formatSeconds(segment.end))
-                                            .font(.system(.body, design: .monospaced))
-                                            .frame(width: 130, alignment: .leading)
-                                        Spacer()
-                                        Text(String(format: "%.3fs", segment.duration))
-                                            .font(.system(.body, design: .monospaced))
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                            .fill(hoveredBlackSegmentID == segment.id ? Color.accentColor.opacity(0.16) : Color.clear)
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                            .stroke(
-                                                hoveredBlackSegmentID == segment.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
-                                                lineWidth: hoveredBlackSegmentID == segment.id ? 0.9 : 0.4
-                                            )
-                                    )
-                                    .contentShape(Rectangle())
-                                    .onHover { isHovering in
-                                        hoveredBlackSegmentID = isHovering ? segment.id : (hoveredBlackSegmentID == segment.id ? nil : hoveredBlackSegmentID)
-                                    }
-                                    .onTapGesture(count: 2) {
-                                        play(from: segment.start)
-                                    }
-                                    .help("Double-click to play from this segment start")
-                                }
-                            }
+                    if file.includedProfanityDetection {
+                        if file.profanityHits.isEmpty {
+                            Label("No profanity detected", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("Profanity hits detected: \(file.profanityHits.count)", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
                         }
-                        .frame(minHeight: 150)
                     }
                 }
-
-                if !file.silentSegments.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Silent Gaps (> 1.0s)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Copy Silence List") {
-                                copyToClipboard(file.formattedSilentList)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-
-                        ScrollView {
-                            LazyVStack(spacing: 4) {
-                                ForEach(file.silentSegments) { segment in
-                                    HStack {
-                                        Text(formatSeconds(segment.start))
-                                            .font(.system(.body, design: .monospaced))
-                                            .frame(width: 130, alignment: .leading)
-                                        Text("→")
-                                            .foregroundStyle(.secondary)
-                                        Text(formatSeconds(segment.end))
-                                            .font(.system(.body, design: .monospaced))
-                                            .frame(width: 130, alignment: .leading)
-                                        Spacer()
-                                        Text(String(format: "%.3fs", segment.duration))
-                                            .font(.system(.body, design: .monospaced))
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                            .fill(hoveredSilentSegmentID == segment.id ? Color.accentColor.opacity(0.16) : Color.clear)
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                            .stroke(
-                                                hoveredSilentSegmentID == segment.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
-                                                lineWidth: hoveredSilentSegmentID == segment.id ? 0.9 : 0.4
-                                            )
-                                    )
-                                    .contentShape(Rectangle())
-                                    .onHover { isHovering in
-                                        hoveredSilentSegmentID = isHovering ? segment.id : (hoveredSilentSegmentID == segment.id ? nil : hoveredSilentSegmentID)
-                                    }
-                                    .onTapGesture(count: 2) {
-                                        play(from: segment.start)
-                                    }
-                                    .help("Double-click to play from this silent-gap start")
-                                }
-                            }
-                        }
-                        .frame(minHeight: 120)
-                    }
-                }
+                analysisSections(showCopyButtons: true)
             }
 
             Spacer()
@@ -4699,6 +5279,24 @@ struct PreferencesView: View {
             .formStyle(.grouped)
             .tabItem {
                 Label("General", systemImage: "gearshape")
+            }
+
+            Form {
+                Section {
+                    LabeledContent("Silence Gap Threshold") {
+                        Stepper(value: $model.silenceMinDurationSeconds, in: 0.5...5.0, step: 0.5) {
+                            Text("\(model.silenceMinDurationLabel)s")
+                                .font(.system(.body, design: .monospaced))
+                        }
+                        .frame(width: 160, alignment: .trailing)
+                    }
+                } header: {
+                    Text("Detection")
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("Analyze", systemImage: "waveform.path.ecg")
             }
 
             Form {

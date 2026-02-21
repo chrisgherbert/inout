@@ -133,4 +133,61 @@ else
   echo "ffmpeg not bundled (set BUNDLED_FFMPEG_PATH to include one)."
 fi
 
+WHISPER_SOURCE="${BUNDLED_WHISPER_PATH:-}"
+if [[ -z "$WHISPER_SOURCE" ]]; then
+  local_vendor_nocoreml="$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml/bin/whisper-cli"
+  if [[ -x "$local_vendor_nocoreml" ]]; then
+    WHISPER_SOURCE="$local_vendor_nocoreml"
+  elif [[ -d "$ROOT_DIR/vendor/whisper.cpp" ]] && command -v cmake >/dev/null 2>&1; then
+    echo "Building local no-CoreML whisper-cli for app bundling..."
+    cmake -S "$ROOT_DIR/vendor/whisper.cpp" -B "$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml" -DWHISPER_COREML=OFF >/dev/null 2>&1 || true
+    cmake --build "$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml" -j >/dev/null 2>&1 || true
+    if [[ -x "$local_vendor_nocoreml" ]]; then
+      WHISPER_SOURCE="$local_vendor_nocoreml"
+    fi
+  fi
+fi
+if [[ -z "$WHISPER_SOURCE" ]]; then
+  local_vendor_whisper="$ROOT_DIR/vendor/whisper.cpp/build/bin/whisper-cli"
+  if [[ -x "$local_vendor_whisper" ]]; then
+    WHISPER_SOURCE="$local_vendor_whisper"
+  fi
+fi
+if [[ -z "$WHISPER_SOURCE" ]]; then
+  for candidate in /opt/homebrew/bin/whisper-cli /usr/local/bin/whisper-cli; do
+    if [[ -x "$candidate" ]]; then
+      WHISPER_SOURCE="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -n "$WHISPER_SOURCE" && -x "$WHISPER_SOURCE" ]]; then
+  cp "$WHISPER_SOURCE" "$APP_RESOURCES/whisper-cli"
+  chmod +x "$APP_RESOURCES/whisper-cli"
+  echo "Bundled whisper-cli: $WHISPER_SOURCE"
+else
+  echo "whisper-cli not bundled (set BUNDLED_WHISPER_PATH to include one)."
+fi
+
+WHISPER_MODEL_SOURCE="${BUNDLED_WHISPER_MODEL_PATH:-}"
+if [[ -n "$WHISPER_MODEL_SOURCE" && -f "$WHISPER_MODEL_SOURCE" ]]; then
+  cp "$WHISPER_MODEL_SOURCE" "$APP_RESOURCES/profanity-model.bin"
+  echo "Bundled Whisper model: $WHISPER_MODEL_SOURCE"
+else
+  local_vendor_model=""
+  if [[ -f "$ROOT_DIR/vendor/models/ggml-tiny.en.bin" ]]; then
+    local_vendor_model="$ROOT_DIR/vendor/models/ggml-tiny.en.bin"
+  else
+    local_vendor_model="$(ls "$ROOT_DIR"/vendor/models/ggml-*.bin 2>/dev/null | head -n 1 || true)"
+  fi
+
+  if [[ -n "$local_vendor_model" && -f "$local_vendor_model" ]]; then
+    cp "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"
+    echo "Bundled Whisper model: $local_vendor_model"
+  else
+    echo "Whisper model not bundled (set BUNDLED_WHISPER_MODEL_PATH or place a model in $ROOT_DIR/vendor/models)."
+  fi
+fi
+
 echo "Built: $APP"
