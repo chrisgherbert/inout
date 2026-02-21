@@ -1041,6 +1041,9 @@ final class WorkspaceViewModel: ObservableObject {
     private var exportCancellationRequested = false
     private var notificationAuthRequested = false
     private var originalModeDefaultBitrateMbps: Double = 4.0
+    private var waveformCache: [String: [Double]] = [:]
+    private var waveformCacheOrder: [String] = []
+    private let maxWaveformCacheEntries = 6
 
     init() {
         willTerminateObserver = NotificationCenter.default.addObserver(
@@ -2226,6 +2229,26 @@ final class WorkspaceViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([outputURL])
     }
 
+    func waveformSamplesFromCache(for url: URL, sampleCount: Int) -> [Double]? {
+        waveformCache[waveformCacheKey(for: url, sampleCount: sampleCount)]
+    }
+
+    func cacheWaveformSamples(_ samples: [Double], for url: URL, sampleCount: Int) {
+        let key = waveformCacheKey(for: url, sampleCount: sampleCount)
+        waveformCache[key] = samples
+        waveformCacheOrder.removeAll { $0 == key }
+        waveformCacheOrder.append(key)
+
+        if waveformCacheOrder.count > maxWaveformCacheEntries, let oldest = waveformCacheOrder.first {
+            waveformCache.removeValue(forKey: oldest)
+            waveformCacheOrder.removeFirst()
+        }
+    }
+
+    private func waveformCacheKey(for url: URL, sampleCount: Int) -> String {
+        "\(url.path)|\(sampleCount)"
+    }
+
     func chooseCustomFrameSaveDirectory() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -2695,14 +2718,22 @@ struct ClipToolView: View {
 
     private func loadWaveform(for url: URL) {
         waveformTask?.cancel()
-        waveformSamples = []
-        isWaveformLoading = true
 
         let targetSampleCount = Int(min(24_000, max(4_000, model.sourceDurationSeconds * 40.0)))
+
+        if let cachedSamples = model.waveformSamplesFromCache(for: url, sampleCount: targetSampleCount), !cachedSamples.isEmpty {
+            waveformSamples = cachedSamples
+            isWaveformLoading = false
+            return
+        }
+
+        waveformSamples = []
+        isWaveformLoading = true
 
         waveformTask = Task.detached(priority: .userInitiated) {
             let samples = generateWaveformSamples(for: url, sampleCount: targetSampleCount)
             await MainActor.run {
+                self.model.cacheWaveformSamples(samples, for: url, sampleCount: targetSampleCount)
                 self.waveformSamples = samples
                 self.isWaveformLoading = false
             }
