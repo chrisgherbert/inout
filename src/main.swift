@@ -19,7 +19,7 @@ extension Notification.Name {
 }
 
 private let minDurationSeconds = 0.001
-private let minSilenceDurationSeconds = 0.5
+private let minSilenceDurationSeconds = 1.0
 private let silenceAmplitudeThreshold = 0.01
 private let picThreshold = 0.90
 private let pixelBlackThreshold = 0.10
@@ -312,13 +312,11 @@ struct FileAnalysis {
             var pieces: [String] = []
             if !segments.isEmpty {
                 pieces.append("\(segments.count) black segment(s), \(String(format: "%.3f", totalDuration))s")
-            } else {
-                pieces.append("No black segments")
             }
             if !silentSegments.isEmpty {
                 pieces.append("\(silentSegments.count) silent gap(s), \(String(format: "%.3f", totalSilentDuration))s")
             }
-            return pieces.joined(separator: " • ")
+            return pieces.isEmpty ? "No black segments or silent gaps" : pieces.joined(separator: " • ")
         case .failed(let reason):
             return "Failed: \(reason)"
         }
@@ -673,95 +671,100 @@ func buildSegments(blackIntervals: [(start: Double, end: Double)], minDuration: 
 
 func runDetection(
     file: URL,
+    detectBlackFrames: Bool,
     detectAudioSilence: Bool,
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
     shouldCancel: @escaping @Sendable () -> Bool = { false }
 ) -> Result<DetectionOutput, DetectionError> {
     let asset = AVAsset(url: file)
-    guard let track = asset.tracks(withMediaType: .video).first else {
-        return .failure(.failed("No video track found"))
-    }
-
-    let outputSettings: [String: Any] = [
-        kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
-    ]
-
-    let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
-    output.alwaysCopiesSampleData = false
-
-    let reader: AVAssetReader
-    do {
-        reader = try AVAssetReader(asset: asset)
-    } catch {
-        return .failure(.failed("Failed to create asset reader: \(error.localizedDescription)"))
-    }
-
-    if reader.canAdd(output) {
-        reader.add(output)
-    } else {
-        return .failure(.failed("Unable to configure video reader output"))
-    }
-
-    if !reader.startReading() {
-        let reason = reader.error?.localizedDescription ?? "Unknown reader error"
-        return .failure(.failed("Failed to start reading: \(reason)"))
-    }
 
     var intervals: [(start: Double, end: Double)] = []
-    var inBlack = false
-    var currentStart = 0.0
     var lastTimestamp = 0.0
-
-    var estimatedFrameDuration = CMTimeGetSeconds(track.minFrameDuration)
-    if !estimatedFrameDuration.isFinite || estimatedFrameDuration <= 0 {
-        estimatedFrameDuration = 1.0 / max(track.nominalFrameRate > 0 ? Double(track.nominalFrameRate) : 30.0, 1.0)
-    }
 
     let mediaDuration = CMTimeGetSeconds(asset.duration)
     let safeDuration = mediaDuration.isFinite && mediaDuration > 0 ? mediaDuration : nil
 
-    while let sample = output.copyNextSampleBuffer() {
-        if shouldCancel() {
-            return .failure(.cancelled)
+    if detectBlackFrames {
+        guard let track = asset.tracks(withMediaType: .video).first else {
+            return .failure(.failed("No video track found"))
         }
 
-        let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
-        var frameDuration = CMTimeGetSeconds(CMSampleBufferGetDuration(sample))
-        if !frameDuration.isFinite || frameDuration <= 0 {
-            frameDuration = estimatedFrameDuration
+        let outputSettings: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ]
+
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
+        output.alwaysCopiesSampleData = false
+
+        let reader: AVAssetReader
+        do {
+            reader = try AVAssetReader(asset: asset)
+        } catch {
+            return .failure(.failed("Failed to create asset reader: \(error.localizedDescription)"))
         }
 
-        let frameEnd = pts + frameDuration
-        lastTimestamp = max(lastTimestamp, frameEnd)
-
-        if let safeDuration {
-            let phaseProgress = min(1.0, max(0, frameEnd / safeDuration))
-            let mappedProgress = detectAudioSilence ? (phaseProgress * 0.7) : phaseProgress
-            progressHandler(min(0.99, mappedProgress))
+        if reader.canAdd(output) {
+            reader.add(output)
+        } else {
+            return .failure(.failed("Unable to configure video reader output"))
         }
 
-        if isFrameMostlyBlack(sample) {
-            if !inBlack {
-                inBlack = true
-                currentStart = pts
+        if !reader.startReading() {
+            let reason = reader.error?.localizedDescription ?? "Unknown reader error"
+            return .failure(.failed("Failed to start reading: \(reason)"))
+        }
+
+        var inBlack = false
+        var currentStart = 0.0
+
+        var estimatedFrameDuration = CMTimeGetSeconds(track.minFrameDuration)
+        if !estimatedFrameDuration.isFinite || estimatedFrameDuration <= 0 {
+            estimatedFrameDuration = 1.0 / max(track.nominalFrameRate > 0 ? Double(track.nominalFrameRate) : 30.0, 1.0)
+        }
+
+        while let sample = output.copyNextSampleBuffer() {
+            if shouldCancel() {
+                return .failure(.cancelled)
             }
-        } else if inBlack {
-            intervals.append((start: currentStart, end: pts))
-            inBlack = false
+
+            let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
+            var frameDuration = CMTimeGetSeconds(CMSampleBufferGetDuration(sample))
+            if !frameDuration.isFinite || frameDuration <= 0 {
+                frameDuration = estimatedFrameDuration
+            }
+
+            let frameEnd = pts + frameDuration
+            lastTimestamp = max(lastTimestamp, frameEnd)
+
+            if let safeDuration {
+                let phaseProgress = min(1.0, max(0, frameEnd / safeDuration))
+                let mappedProgress = detectAudioSilence ? (phaseProgress * 0.7) : phaseProgress
+                progressHandler(min(0.99, mappedProgress))
+            }
+
+            if isFrameMostlyBlack(sample) {
+                if !inBlack {
+                    inBlack = true
+                    currentStart = pts
+                }
+            } else if inBlack {
+                intervals.append((start: currentStart, end: pts))
+                inBlack = false
+            }
         }
-    }
 
-    if inBlack {
-        intervals.append((start: currentStart, end: lastTimestamp))
-    }
+        if inBlack {
+            intervals.append((start: currentStart, end: lastTimestamp))
+        }
 
-    if reader.status == .failed {
-        let reason = reader.error?.localizedDescription ?? "Unknown reader failure"
-        return .failure(.failed("Reader failed: \(reason)"))
+        if reader.status == .failed {
+            let reason = reader.error?.localizedDescription ?? "Unknown reader failure"
+            return .failure(.failed("Reader failed: \(reason)"))
+        }
     }
 
     let outputDuration = mediaDuration.isFinite && mediaDuration > 0 ? mediaDuration : (lastTimestamp > 0 ? lastTimestamp : nil)
-    let segments = buildSegments(blackIntervals: intervals, minDuration: minDurationSeconds)
+    let segments = detectBlackFrames ? buildSegments(blackIntervals: intervals, minDuration: minDurationSeconds) : []
     var silentSegments: [Segment] = []
 
     if detectAudioSilence {
@@ -1006,6 +1009,7 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(appearance.rawValue, forKey: DefaultsKey.appearance)
         }
     }
+    @Published var analyzeBlackFrames = true
     @Published var analyzeAudioSilence = true
     @Published var frameSaveLocationMode: FrameSaveLocationMode = .askEachTime {
         didSet {
@@ -1093,7 +1097,20 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var canAnalyze: Bool {
-        sourceURL != nil && !isAnalyzing && !isExporting
+        sourceURL != nil && !isAnalyzing && !isExporting && (effectiveAnalyzeBlackFrames || analyzeAudioSilence)
+    }
+
+    var hasVideoTrack: Bool {
+        guard let sourceInfo else { return false }
+        if let bitrate = sourceInfo.videoBitrateBps, bitrate > 0 { return true }
+        if let frameRate = sourceInfo.frameRate, frameRate > 0 { return true }
+        if let resolution = sourceInfo.resolution, !resolution.isEmpty { return true }
+        if let codec = sourceInfo.videoCodec, !codec.isEmpty { return true }
+        return false
+    }
+
+    var effectiveAnalyzeBlackFrames: Bool {
+        analyzeBlackFrames && hasVideoTrack
     }
 
     var canExport: Bool {
@@ -1374,9 +1391,10 @@ final class WorkspaceViewModel: ObservableObject {
         analyzeTask = Task { [weak self] in
             guard let self else { return }
             let flag = cancelFlag
+            let detectBlack = self.effectiveAnalyzeBlackFrames
             let detectSilence = self.analyzeAudioSilence
             let result = await Task.detached(priority: .userInitiated) {
-                runDetection(file: url, detectAudioSilence: detectSilence) { progress in
+                runDetection(file: url, detectBlackFrames: detectBlack, detectAudioSilence: detectSilence) { progress in
                     Task { @MainActor [weak self] in
                         self?.setAnalyzeProgress(progress, fileName: url.lastPathComponent)
                     }
@@ -1385,7 +1403,7 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             }.value
 
-            self.applyAnalysisResult(result)
+            self.applyAnalysisResult(result, includedBlack: detectBlack, includedSilence: detectSilence)
         }
     }
 
@@ -1405,7 +1423,11 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    private func applyAnalysisResult(_ result: Result<DetectionOutput, DetectionError>) {
+    private func applyAnalysisResult(
+        _ result: Result<DetectionOutput, DetectionError>,
+        includedBlack: Bool,
+        includedSilence: Bool
+    ) {
         isAnalyzing = false
         analyzeTask = nil
         analyzeProgress = 0
@@ -1420,15 +1442,23 @@ final class WorkspaceViewModel: ObservableObject {
             current.status = .done
             analysis = current
             if current.segments.isEmpty && current.silentSegments.isEmpty {
-                uiMessage = analyzeAudioSilence ? "No black segments or silent gaps found." : "No black segments found."
+                if includedBlack && includedSilence {
+                    uiMessage = "No black segments or silent gaps found."
+                } else if includedBlack {
+                    uiMessage = "No black segments found."
+                } else {
+                    uiMessage = "No silent gaps found."
+                }
             } else {
                 var parts: [String] = []
-                if current.segments.isEmpty {
-                    parts.append("No black segments")
-                } else {
-                    parts.append("\(current.segments.count) black segment(s)")
+                if includedBlack {
+                    if current.segments.isEmpty {
+                        parts.append("No black segments")
+                    } else {
+                        parts.append("\(current.segments.count) black segment(s)")
+                    }
                 }
-                if analyzeAudioSilence {
+                if includedSilence {
                     if current.silentSegments.isEmpty {
                         parts.append("No silent gaps")
                     } else {
@@ -2457,7 +2487,7 @@ struct AnalyzeToolView: View {
                     Button {
                         model.startAnalysis()
                     } label: {
-                        Label(model.isAnalyzing ? "Analyzing…" : "Run Black Frame Analysis", systemImage: "waveform.path.ecg")
+                        Label(model.isAnalyzing ? "Analyzing…" : "Run Analysis", systemImage: "waveform.path.ecg")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canAnalyze)
@@ -2473,7 +2503,12 @@ struct AnalyzeToolView: View {
                     }
                 }
 
-                Toggle("Detect silent audio gaps (over 0.5s)", isOn: $model.analyzeAudioSilence)
+                Toggle("Detect black frames", isOn: $model.analyzeBlackFrames)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(model.isAnalyzing || !model.hasVideoTrack)
+
+                Toggle("Detect silent audio gaps (over 1.0s)", isOn: $model.analyzeAudioSilence)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .disabled(model.isAnalyzing)
@@ -4135,6 +4170,8 @@ struct DetailView: View {
 
     @State private var player = AVPlayer()
     @State private var isPlaying = false
+    @State private var hoveredBlackSegmentID: UUID?
+    @State private var hoveredSilentSegmentID: UUID?
 
     private func loadPlayerItem() {
         let item = AVPlayerItem(url: file.fileURL)
@@ -4271,9 +4308,19 @@ struct DetailView: View {
                                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+                                            .fill(hoveredBlackSegmentID == segment.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                            .stroke(
+                                                hoveredBlackSegmentID == segment.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
+                                                lineWidth: hoveredBlackSegmentID == segment.id ? 0.9 : 0.4
+                                            )
                                     )
                                     .contentShape(Rectangle())
+                                    .onHover { isHovering in
+                                        hoveredBlackSegmentID = isHovering ? segment.id : (hoveredBlackSegmentID == segment.id ? nil : hoveredBlackSegmentID)
+                                    }
                                     .onTapGesture(count: 2) {
                                         play(from: segment.start)
                                     }
@@ -4288,7 +4335,7 @@ struct DetailView: View {
                 if !file.silentSegments.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Silent Gaps (> 0.5s)")
+                            Text("Silent Gaps (> 1.0s)")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             Spacer()
@@ -4321,9 +4368,19 @@ struct DetailView: View {
                                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+                                            .fill(hoveredSilentSegmentID == segment.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                            .stroke(
+                                                hoveredSilentSegmentID == segment.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
+                                                lineWidth: hoveredSilentSegmentID == segment.id ? 0.9 : 0.4
+                                            )
                                     )
                                     .contentShape(Rectangle())
+                                    .onHover { isHovering in
+                                        hoveredSilentSegmentID = isHovering ? segment.id : (hoveredSilentSegmentID == segment.id ? nil : hoveredSilentSegmentID)
+                                    }
                                     .onTapGesture(count: 2) {
                                         play(from: segment.start)
                                     }
@@ -4686,7 +4743,7 @@ struct CheckBlackFramesApp: App {
             }
 
             CommandMenu("Analyze") {
-                Button("Run Black Frame Analysis") {
+                Button("Run Analysis") {
                     model.startAnalysis()
                 }
                 .keyboardShortcut("r", modifiers: [.command])
