@@ -3592,10 +3592,10 @@ struct ConvertToolView: View {
                                 if model.selectedAudioFormat == .mp3 {
                                     HStack(spacing: 8) {
                                         Label("Estimated output size", systemImage: "ruler")
-                                            .font(.caption2)
+                                            .font(.body.weight(.medium))
                                             .foregroundStyle(.tertiary)
                                         Text(formatFileSize(model.estimatedAudioExportSizeBytes))
-                                            .font(.caption.monospacedDigit())
+                                            .font(.system(.body, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                     }
                                 }
@@ -4376,19 +4376,19 @@ struct ClipToolView: View {
                             if model.clipEncodingMode == .audioOnly, model.clipAudioOnlyFormat != .wav {
                                 HStack(spacing: 8) {
                                     Label("Estimated output size", systemImage: "ruler")
-                                        .font(.caption2)
+                                        .font(.body.weight(.medium))
                                         .foregroundStyle(.tertiary)
                                     Text(formatFileSize(model.estimatedClipAudioOnlySizeBytes))
-                                        .font(.caption.monospacedDigit())
+                                        .font(.system(.body, design: .monospaced))
                                         .foregroundStyle(.secondary)
                                 }
                             } else if model.clipEncodingMode == .compressed {
                                 HStack(spacing: 8) {
                                     Label("Estimated output size", systemImage: "ruler")
-                                        .font(.caption2)
+                                        .font(.body.weight(.medium))
                                         .foregroundStyle(.tertiary)
                                     Text(formatFileSize(model.estimatedClipAdvancedSizeBytes))
-                                        .font(.caption.monospacedDigit())
+                                        .font(.system(.body, design: .monospaced))
                                         .foregroundStyle(.secondary)
                                 }
                             }
