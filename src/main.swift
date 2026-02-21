@@ -3589,12 +3589,28 @@ struct WaveformView: View {
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(Color.gray.opacity(isHovered ? 0.18 : 0.12))
+                    .fill(Color.black.opacity(isHovered ? 0.16 : 0.12))
 
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.12))
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.cyan.opacity(0.42),
+                                Color.accentColor.opacity(0.48),
+                                Color.blue.opacity(0.44)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                     .frame(width: max(1, endX - startX))
                     .offset(x: startX)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                            .stroke(Color.white.opacity(0.26), lineWidth: 0.7)
+                            .frame(width: max(1, endX - startX))
+                            .offset(x: startX)
+                    )
 
                 Canvas { context, size in
                     guard !samples.isEmpty else { return }
@@ -3727,17 +3743,33 @@ struct UnifiedClipTimelineSelector: View {
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(Color.gray.opacity(isHovered ? 0.26 : 0.2))
+                    .fill(Color.black.opacity(isHovered ? 0.30 : 0.24))
                     .frame(height: 10)
                     .offset(y: 15)
 
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.35))
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.cyan.opacity(0.85),
+                                Color.accentColor.opacity(0.95),
+                                Color.blue.opacity(0.85)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                     .frame(width: max(2, endX - startX), height: 10)
                     .offset(x: startX, y: 15)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                            .stroke(Color.white.opacity(0.35), lineWidth: 0.8)
+                            .frame(width: max(2, endX - startX), height: 10)
+                            .offset(x: startX, y: 15)
+                    )
 
                 Rectangle()
-                    .fill(Color.accentColor)
+                    .fill(Color.white.opacity(0.95))
                     .frame(width: 2, height: 24)
                     .offset(x: playheadX - 1, y: 8)
                     .gesture(
@@ -3759,9 +3791,15 @@ struct UnifiedClipTimelineSelector: View {
                     )
 
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(Color.white)
                     .frame(width: 14, height: 14)
                     .offset(x: startX - 7, y: 13)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.accentColor.opacity(0.95), lineWidth: 2)
+                            .frame(width: 14, height: 14)
+                            .offset(x: startX - 7, y: 13)
+                    )
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
@@ -3771,9 +3809,15 @@ struct UnifiedClipTimelineSelector: View {
                     )
 
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(Color.white)
                     .frame(width: 14, height: 14)
                     .offset(x: endX - 7, y: 13)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.accentColor.opacity(0.95), lineWidth: 2)
+                            .frame(width: 14, height: 14)
+                            .offset(x: endX - 7, y: 13)
+                    )
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
