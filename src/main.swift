@@ -21,11 +21,12 @@ extension Notification.Name {
 private let minDurationSeconds = 0.001
 private let defaultMinSilenceDurationSeconds = 1.0
 private let silenceAmplitudeThreshold = 0.01
-private let profanityWords: Set<String> = [
+private let defaultProfanityWords: Set<String> = [
     "ass", "asshole", "bastard", "bitch", "bullshit", "crap", "damn",
     "dick", "douche", "douchebag", "fucker", "fucking", "fuck", "goddamn",
     "hell", "motherfucker", "pissed", "shit", "shitty", "slut", "whore"
 ]
+private let defaultProfanityWordsStorageString = defaultProfanityWords.sorted().joined(separator: ", ")
 private let picThreshold = 0.90
 private let pixelBlackThreshold = 0.10
 private let maxSampleDimension = 640
@@ -309,6 +310,7 @@ struct FileAnalysis {
     var includedBlackDetection: Bool = true
     var includedSilenceDetection: Bool = true
     var includedProfanityDetection: Bool = false
+    var profanityWordsSnapshot: String = defaultProfanityWordsStorageString
     var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds
     var mediaDuration: Double?
     var progress: Double = 0
@@ -714,7 +716,9 @@ func runDetection(
     detectBlackFrames: Bool,
     detectAudioSilence: Bool,
     detectProfanity: Bool,
+    profanityWords: Set<String> = defaultProfanityWords,
     silenceMinDuration: Double = defaultMinSilenceDurationSeconds,
+    onStatusUpdate: @escaping @Sendable (String) -> Void = { _ in },
     onBlackSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
     onSilentSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
     onProfanityDetected: @escaping @Sendable (ProfanityHit) -> Void = { _ in },
@@ -730,6 +734,7 @@ func runDetection(
     let safeDuration = mediaDuration.isFinite && mediaDuration > 0 ? mediaDuration : nil
 
     if detectBlackFrames {
+        onStatusUpdate("Scanning video for black frames")
         guard let track = asset.tracks(withMediaType: .video).first else {
             return .failure(.failed("No video track found"))
         }
@@ -822,6 +827,7 @@ func runDetection(
     var profanityHits: [ProfanityHit] = []
 
     if detectAudioSilence {
+        onStatusUpdate("Analyzing audio for silent gaps")
         let audioResult = detectAudioSilenceSegments(
             file: file,
             minDuration: silenceMinDuration,
@@ -845,10 +851,12 @@ func runDetection(
     }
 
     if detectProfanity {
+        onStatusUpdate("Transcribing audio for profanity")
         let profanityBase = (detectAudioSilence || detectBlackFrames) ? 0.70 : 0.0
         let profanitySpan = (detectAudioSilence || detectBlackFrames) ? 0.29 : 0.99
         let profanityResult = detectProfanityHits(
             file: file,
+            profanityWords: profanityWords,
             shouldCancel: {
                 shouldCancel()
             },
@@ -1007,6 +1015,19 @@ private func normalizedToken(_ token: String) -> String {
     token
         .trimmingCharacters(in: .punctuationCharacters.union(.symbols).union(.whitespacesAndNewlines))
         .lowercased()
+}
+
+private func profanityWordsFromString(_ raw: String) -> Set<String> {
+    let separators = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;"))
+    return Set(
+        raw.components(separatedBy: separators)
+            .map(normalizedToken)
+            .filter { !$0.isEmpty }
+    )
+}
+
+private func normalizedProfanityWordsStorageString(_ raw: String) -> String {
+    profanityWordsFromString(raw).sorted().joined(separator: ", ")
 }
 
 private func extractPercentProgress(from line: String) -> Double? {
@@ -1188,7 +1209,7 @@ private func runSynchronousProcessWithProgress(
     return .failure(.failed(errorText))
 }
 
-private func detectProfanityFromTranscriptionJSON(_ jsonData: Data) -> [ProfanityHit] {
+private func detectProfanityFromTranscriptionJSON(_ jsonData: Data, profanityWords: Set<String>) -> [ProfanityHit] {
     guard let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
         return []
     }
@@ -1225,6 +1246,7 @@ private func detectProfanityFromTranscriptionJSON(_ jsonData: Data) -> [Profanit
 
 func detectProfanityHits(
     file: URL,
+    profanityWords: Set<String>,
     shouldCancel: @escaping @Sendable () -> Bool = { false },
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in }
 ) -> Result<[ProfanityHit], DetectionError> {
@@ -1323,7 +1345,7 @@ func detectProfanityHits(
         return .failure(.failed("Whisper did not produce transcript JSON output."))
     }
 
-    return .success(detectProfanityFromTranscriptionJSON(jsonData))
+    return .success(detectProfanityFromTranscriptionJSON(jsonData, profanityWords: profanityWords))
 }
 
 func copyToClipboard(_ text: String) {
@@ -1353,6 +1375,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let completionSound = "prefs.completionSound"
         static let appearance = "prefs.appearance"
         static let silenceMinDurationSeconds = "prefs.silenceMinDurationSeconds"
+        static let profanityWords = "prefs.profanityWords"
         static let frameSaveLocationMode = "prefs.frameSaveLocationMode"
         static let customFrameSaveDirectoryPath = "prefs.customFrameSaveDirectoryPath"
     }
@@ -1366,6 +1389,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var isAnalyzing = false
     @Published var analyzeProgress = 0.0
     @Published var analyzeStatusText = ""
+    @Published var analyzePhaseText = "Preparing analysis"
     @Published var wasCancelled = false
 
     @Published var selectedAudioFormat: AudioFormat = .mp3
@@ -1436,6 +1460,16 @@ final class WorkspaceViewModel: ObservableObject {
     }
     @Published var analyzeAudioSilence = true
     @Published var analyzeProfanity = false
+    @Published var profanityWordsText: String = defaultProfanityWordsStorageString {
+        didSet {
+            let normalized = normalizedProfanityWordsStorageString(profanityWordsText)
+            if normalized != profanityWordsText {
+                profanityWordsText = normalized
+                return
+            }
+            UserDefaults.standard.set(normalized, forKey: DefaultsKey.profanityWords)
+        }
+    }
     @Published var frameSaveLocationMode: FrameSaveLocationMode = .askEachTime {
         didSet {
             UserDefaults.standard.set(frameSaveLocationMode.rawValue, forKey: DefaultsKey.frameSaveLocationMode)
@@ -1521,6 +1555,9 @@ final class WorkspaceViewModel: ObservableObject {
             silenceMinDurationSeconds = min(5.0, max(0.5, savedSilenceDuration))
         }
 
+        let savedProfanityWords = defaults.string(forKey: DefaultsKey.profanityWords) ?? defaultProfanityWordsStorageString
+        profanityWordsText = normalizedProfanityWordsStorageString(savedProfanityWords)
+
         if let rawFrameSaveMode = defaults.string(forKey: DefaultsKey.frameSaveLocationMode),
            let mode = FrameSaveLocationMode(rawValue: rawFrameSaveMode) {
             frameSaveLocationMode = mode
@@ -1569,6 +1606,14 @@ final class WorkspaceViewModel: ObservableObject {
 
     var silenceMinDurationLabel: String {
         String(format: "%.1f", silenceMinDurationSeconds)
+    }
+
+    var selectedProfanityWords: Set<String> {
+        profanityWordsFromString(profanityWordsText)
+    }
+
+    var selectedProfanityWordsCount: Int {
+        selectedProfanityWords.count
     }
 
     var canExport: Bool {
@@ -1739,6 +1784,10 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func resetProfanityWordsToDefaults() {
+        profanityWordsText = defaultProfanityWordsStorageString
+    }
+
     func resetClipRange() {
         let duration = max(0, sourceInfo?.durationSeconds ?? analysis?.mediaDuration ?? 0)
         clipStartSeconds = 0
@@ -1859,6 +1908,8 @@ final class WorkspaceViewModel: ObservableObject {
         let requestedBlack = effectiveAnalyzeBlackFrames
         let requestedSilence = effectiveAnalyzeAudioSilence
         let requestedProfanity = effectiveAnalyzeProfanity
+        let requestedProfanityWordsSnapshot = normalizedProfanityWordsStorageString(profanityWordsText)
+        let requestedProfanityWordsSet = selectedProfanityWords
 
         let previous = analysis
         let hasCompletedPrevious: Bool
@@ -1876,7 +1927,9 @@ final class WorkspaceViewModel: ObservableObject {
         let hasCachedSilence = hasCompletedPrevious
             && (previous?.includedSilenceDetection == true)
             && abs((previous?.silenceMinDurationSeconds ?? 0) - silenceMinDurationSeconds) < 0.0001
-        let hasCachedProfanity = hasCompletedPrevious && (previous?.includedProfanityDetection == true)
+        let hasCachedProfanity = hasCompletedPrevious
+            && (previous?.includedProfanityDetection == true)
+            && (previous?.profanityWordsSnapshot == requestedProfanityWordsSnapshot)
 
         let runBlack = requestedBlack && !hasCachedBlack
         let runSilence = requestedSilence && !hasCachedSilence
@@ -1895,6 +1948,7 @@ final class WorkspaceViewModel: ObservableObject {
                 includedBlackDetection: requestedBlack,
                 includedSilenceDetection: requestedSilence,
                 includedProfanityDetection: requestedProfanity,
+                profanityWordsSnapshot: requestedProfanityWordsSnapshot,
                 silenceMinDurationSeconds: silenceMinDurationSeconds,
                 mediaDuration: sourceInfo?.durationSeconds ?? previous?.mediaDuration,
                 progress: 1.0,
@@ -1911,7 +1965,8 @@ final class WorkspaceViewModel: ObservableObject {
         lastActivityState = .running
         wasCancelled = false
         analyzeProgress = 0
-        analyzeStatusText = "Analyzing \(url.lastPathComponent)… 0%"
+        analyzePhaseText = "Preparing analysis"
+        updateAnalyzeStatusText(fileName: url.lastPathComponent, progress: 0)
         cancelFlag.reset()
 
         let knownDuration = sourceInfo?.durationSeconds
@@ -1925,6 +1980,7 @@ final class WorkspaceViewModel: ObservableObject {
             existing.includedBlackDetection = requestedBlack
             existing.includedSilenceDetection = requestedSilence
             existing.includedProfanityDetection = requestedProfanity
+            existing.profanityWordsSnapshot = requestedProfanityWordsSnapshot
             existing.silenceMinDurationSeconds = silenceMinDurationSeconds
             existing.mediaDuration = knownDuration
             analysis = existing
@@ -1937,6 +1993,7 @@ final class WorkspaceViewModel: ObservableObject {
                 includedBlackDetection: requestedBlack,
                 includedSilenceDetection: requestedSilence,
                 includedProfanityDetection: requestedProfanity,
+                profanityWordsSnapshot: requestedProfanityWordsSnapshot,
                 silenceMinDurationSeconds: silenceMinDurationSeconds,
                 mediaDuration: knownDuration,
                 status: .running
@@ -1950,13 +2007,20 @@ final class WorkspaceViewModel: ObservableObject {
             let detectSilence = runSilence
             let detectProfanity = runProfanity
             let silenceMinDuration = self.silenceMinDurationSeconds
+            let profanityWords = requestedProfanityWordsSet
             let result = await Task.detached(priority: .userInitiated) {
                 runDetection(
                     file: url,
                     detectBlackFrames: detectBlack,
                     detectAudioSilence: detectSilence,
                     detectProfanity: detectProfanity,
+                    profanityWords: profanityWords,
                     silenceMinDuration: silenceMinDuration,
+                    onStatusUpdate: { status in
+                        Task { @MainActor [weak self] in
+                            self?.setAnalyzePhase(status, fileName: url.lastPathComponent)
+                        }
+                    },
                     onBlackSegmentDetected: { segment in
                         Task { @MainActor [weak self] in
                             self?.appendDetectedBlackSegment(segment)
@@ -1991,7 +2055,8 @@ final class WorkspaceViewModel: ObservableObject {
                 ranProfanity: runProfanity,
                 cachedBlackSegments: cachedBlackSegments,
                 cachedSilentSegments: cachedSilentSegments,
-                cachedProfanityHits: cachedProfanityHits
+                cachedProfanityHits: cachedProfanityHits,
+                profanityWordsSnapshot: requestedProfanityWordsSnapshot
             )
         }
     }
@@ -2005,11 +2070,21 @@ final class WorkspaceViewModel: ObservableObject {
     private func setAnalyzeProgress(_ progress: Double, fileName: String) {
         let clamped = min(1, max(0, progress))
         analyzeProgress = clamped
-        analyzeStatusText = "Analyzing \(fileName)… \(Int((clamped * 100).rounded()))%"
+        updateAnalyzeStatusText(fileName: fileName, progress: clamped)
         if var current = analysis {
             current.progress = clamped
             analysis = current
         }
+    }
+
+    private func setAnalyzePhase(_ phase: String, fileName: String) {
+        analyzePhaseText = phase
+        updateAnalyzeStatusText(fileName: fileName, progress: analyzeProgress)
+    }
+
+    private func updateAnalyzeStatusText(fileName: String, progress: Double) {
+        let percent = Int((min(1, max(0, progress)) * 100).rounded())
+        analyzeStatusText = "\(analyzePhaseText)… \(percent)% • \(fileName)"
     }
 
     private func appendDetectedBlackSegment(_ segment: Segment) {
@@ -2060,11 +2135,13 @@ final class WorkspaceViewModel: ObservableObject {
         ranProfanity: Bool,
         cachedBlackSegments: [Segment],
         cachedSilentSegments: [Segment],
-        cachedProfanityHits: [ProfanityHit]
+        cachedProfanityHits: [ProfanityHit],
+        profanityWordsSnapshot: String
     ) {
         isAnalyzing = false
         analyzeTask = nil
         analyzeProgress = 0
+        analyzePhaseText = "Preparing analysis"
 
         guard var current = analysis else { return }
         switch result {
@@ -2075,6 +2152,7 @@ final class WorkspaceViewModel: ObservableObject {
             current.includedBlackDetection = includedBlack
             current.includedSilenceDetection = includedSilence
             current.includedProfanityDetection = includedProfanity
+            current.profanityWordsSnapshot = profanityWordsSnapshot
             current.mediaDuration = output.mediaDuration
             current.progress = 1
             current.status = .done
@@ -5489,8 +5567,9 @@ struct DetailView: View {
                         Spacer()
                         VStack(spacing: 8) {
                             ProgressView()
-                            Text("Analyzing \(file.fileURL.lastPathComponent)…")
+                            Text(model.analyzeStatusText.isEmpty ? "Preparing analysis…" : model.analyzeStatusText)
                                 .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
                         }
                         Spacer()
                     }
@@ -5759,6 +5838,34 @@ struct PreferencesView: View {
                     }
                 } header: {
                     Text("Detection")
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Words (\(model.selectedProfanityWordsCount))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        TextEditor(text: $model.profanityWordsText)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(minHeight: 92)
+                            .padding(6)
+                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+
+                        HStack {
+                            Text("Use comma, space, or newline separators.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Reset to Defaults") {
+                                model.resetProfanityWordsToDefaults()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                } header: {
+                    Text("Profanity Words")
                 }
             }
             .formStyle(.grouped)
