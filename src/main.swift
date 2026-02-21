@@ -19,6 +19,8 @@ extension Notification.Name {
 }
 
 private let minDurationSeconds = 0.001
+private let minSilenceDurationSeconds = 0.5
+private let silenceAmplitudeThreshold = 0.01
 private let picThreshold = 0.90
 private let pixelBlackThreshold = 0.10
 private let maxSampleDimension = 640
@@ -277,18 +279,24 @@ final class CancellationFlag {
 
 struct DetectionOutput {
     let segments: [Segment]
+    let silentSegments: [Segment]
     let mediaDuration: Double?
 }
 
 struct FileAnalysis {
     let fileURL: URL
     var segments: [Segment] = []
+    var silentSegments: [Segment] = []
     var mediaDuration: Double?
     var progress: Double = 0
     var status: FileStatus = .idle
 
     var totalDuration: Double {
         segments.reduce(0.0) { $0 + $1.duration }
+    }
+
+    var totalSilentDuration: Double {
+        silentSegments.reduce(0.0) { $0 + $1.duration }
     }
 
     var summary: String {
@@ -298,10 +306,19 @@ struct FileAnalysis {
         case .running:
             return "Analyzing… \(Int((progress * 100).rounded()))%"
         case .done:
-            if segments.isEmpty {
-                return "No black segments"
+            if segments.isEmpty && silentSegments.isEmpty {
+                return "No black segments or silent gaps"
             }
-            return "\(segments.count) segment(s), total \(String(format: "%.3f", totalDuration))s"
+            var pieces: [String] = []
+            if !segments.isEmpty {
+                pieces.append("\(segments.count) black segment(s), \(String(format: "%.3f", totalDuration))s")
+            } else {
+                pieces.append("No black segments")
+            }
+            if !silentSegments.isEmpty {
+                pieces.append("\(silentSegments.count) silent gap(s), \(String(format: "%.3f", totalSilentDuration))s")
+            }
+            return pieces.joined(separator: " • ")
         case .failed(let reason):
             return "Failed: \(reason)"
         }
@@ -311,11 +328,17 @@ struct FileAnalysis {
         segments.map(\.formatted).joined(separator: "\n")
     }
 
+    var formattedSilentList: String {
+        silentSegments.map(\.formatted).joined(separator: "\n")
+    }
+
     var timelineDuration: Double? {
         if let mediaDuration, mediaDuration > 0 {
             return mediaDuration
         }
-        let maxEnd = segments.map(\.end).max() ?? 0
+        let maxBlackEnd = segments.map(\.end).max() ?? 0
+        let maxSilentEnd = silentSegments.map(\.end).max() ?? 0
+        let maxEnd = max(maxBlackEnd, maxSilentEnd)
         return maxEnd > 0 ? maxEnd : nil
     }
 }
@@ -650,6 +673,7 @@ func buildSegments(blackIntervals: [(start: Double, end: Double)], minDuration: 
 
 func runDetection(
     file: URL,
+    detectAudioSilence: Bool,
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
     shouldCancel: @escaping @Sendable () -> Bool = { false }
 ) -> Result<DetectionOutput, DetectionError> {
@@ -711,7 +735,9 @@ func runDetection(
         lastTimestamp = max(lastTimestamp, frameEnd)
 
         if let safeDuration {
-            progressHandler(min(0.99, max(0, frameEnd / safeDuration)))
+            let phaseProgress = min(1.0, max(0, frameEnd / safeDuration))
+            let mappedProgress = detectAudioSilence ? (phaseProgress * 0.7) : phaseProgress
+            progressHandler(min(0.99, mappedProgress))
         }
 
         if isFrameMostlyBlack(sample) {
@@ -734,10 +760,156 @@ func runDetection(
         return .failure(.failed("Reader failed: \(reason)"))
     }
 
-    progressHandler(1.0)
     let outputDuration = mediaDuration.isFinite && mediaDuration > 0 ? mediaDuration : (lastTimestamp > 0 ? lastTimestamp : nil)
     let segments = buildSegments(blackIntervals: intervals, minDuration: minDurationSeconds)
-    return .success(DetectionOutput(segments: segments, mediaDuration: outputDuration))
+    var silentSegments: [Segment] = []
+
+    if detectAudioSilence {
+        let audioResult = detectAudioSilenceSegments(
+            file: file,
+            minDuration: minSilenceDurationSeconds,
+            amplitudeThreshold: silenceAmplitudeThreshold
+        ) { audioProgress in
+            let clamped = min(1, max(0, audioProgress))
+            progressHandler(min(0.99, 0.7 + (clamped * 0.3)))
+        } shouldCancel: {
+            shouldCancel()
+        }
+
+        switch audioResult {
+        case .success(let detected):
+            silentSegments = detected
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    progressHandler(1.0)
+    return .success(DetectionOutput(segments: segments, silentSegments: silentSegments, mediaDuration: outputDuration))
+}
+
+func detectAudioSilenceSegments(
+    file: URL,
+    minDuration: Double,
+    amplitudeThreshold: Double,
+    progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
+    shouldCancel: @escaping @Sendable () -> Bool = { false }
+) -> Result<[Segment], DetectionError> {
+    let asset = AVURLAsset(url: file)
+    guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
+        return .success([])
+    }
+
+    let outputSettings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false
+    ]
+
+    let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
+    output.alwaysCopiesSampleData = false
+
+    let reader: AVAssetReader
+    do {
+        reader = try AVAssetReader(asset: asset)
+    } catch {
+        return .failure(.failed("Failed to create audio reader: \(error.localizedDescription)"))
+    }
+
+    guard reader.canAdd(output) else {
+        return .failure(.failed("Unable to configure audio reader output"))
+    }
+    reader.add(output)
+
+    guard reader.startReading() else {
+        let reason = reader.error?.localizedDescription ?? "Unknown audio reader error"
+        return .failure(.failed("Failed to start audio reading: \(reason)"))
+    }
+
+    let mediaDuration = CMTimeGetSeconds(asset.duration)
+    let safeDuration = mediaDuration.isFinite && mediaDuration > 0 ? mediaDuration : nil
+
+    var intervals: [(start: Double, end: Double)] = []
+    var inSilence = false
+    var currentStart = 0.0
+    var lastTimestamp = 0.0
+
+    while let sampleBuffer = output.copyNextSampleBuffer() {
+        if shouldCancel() {
+            return .failure(.cancelled)
+        }
+
+        guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+              asbd.mSampleRate > 0 else {
+            continue
+        }
+
+        let startTime = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        if !startTime.isFinite { continue }
+
+        guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
+
+        var length = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+        let status = CMBlockBufferGetDataPointer(
+            dataBuffer,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &length,
+            dataPointerOut: &dataPointer
+        )
+        guard status == kCMBlockBufferNoErr, let dataPointer, length > 0 else { continue }
+
+        let channels = max(Int(asbd.mChannelsPerFrame), 1)
+        let bytesPerFrame = max(Int(asbd.mBytesPerFrame), channels * 2)
+        let frameCount = length / bytesPerFrame
+        if frameCount <= 0 { continue }
+
+        let int16Pointer = UnsafeRawPointer(dataPointer).assumingMemoryBound(to: Int16.self)
+        let frameStep = 1.0 / asbd.mSampleRate
+
+        for frame in 0..<frameCount {
+            let sampleTime = startTime + (Double(frame) * frameStep)
+            let sampleEnd = sampleTime + frameStep
+            lastTimestamp = max(lastTimestamp, sampleEnd)
+
+            var peak = 0.0
+            for channel in 0..<channels {
+                let sampleIndex = frame * channels + channel
+                let v = Double(abs(Int(int16Pointer[sampleIndex]))) / Double(Int16.max)
+                peak = max(peak, v)
+            }
+
+            if peak <= amplitudeThreshold {
+                if !inSilence {
+                    inSilence = true
+                    currentStart = sampleTime
+                }
+            } else if inSilence {
+                intervals.append((start: currentStart, end: sampleTime))
+                inSilence = false
+            }
+        }
+
+        if let safeDuration {
+            progressHandler(min(0.99, max(0, lastTimestamp / safeDuration)))
+        }
+    }
+
+    if inSilence {
+        intervals.append((start: currentStart, end: lastTimestamp))
+    }
+
+    if reader.status == .failed {
+        let reason = reader.error?.localizedDescription ?? "Unknown audio reader failure"
+        return .failure(.failed("Audio reader failed: \(reason)"))
+    }
+
+    progressHandler(1.0)
+    return .success(buildSegments(blackIntervals: intervals, minDuration: minDuration))
 }
 
 func copyToClipboard(_ text: String) {
@@ -834,6 +1006,7 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(appearance.rawValue, forKey: DefaultsKey.appearance)
         }
     }
+    @Published var analyzeAudioSilence = true
     @Published var frameSaveLocationMode: FrameSaveLocationMode = .askEachTime {
         didSet {
             UserDefaults.standard.set(frameSaveLocationMode.rawValue, forKey: DefaultsKey.frameSaveLocationMode)
@@ -1191,6 +1364,7 @@ final class WorkspaceViewModel: ObservableObject {
             existing.status = .running
             existing.progress = 0
             existing.segments = []
+            existing.silentSegments = []
             existing.mediaDuration = nil
             analysis = existing
         } else {
@@ -1200,8 +1374,9 @@ final class WorkspaceViewModel: ObservableObject {
         analyzeTask = Task { [weak self] in
             guard let self else { return }
             let flag = cancelFlag
+            let detectSilence = self.analyzeAudioSilence
             let result = await Task.detached(priority: .userInitiated) {
-                runDetection(file: url) { progress in
+                runDetection(file: url, detectAudioSilence: detectSilence) { progress in
                     Task { @MainActor [weak self] in
                         self?.setAnalyzeProgress(progress, fileName: url.lastPathComponent)
                     }
@@ -1239,11 +1414,29 @@ final class WorkspaceViewModel: ObservableObject {
         switch result {
         case .success(let output):
             current.segments = output.segments
+            current.silentSegments = output.silentSegments
             current.mediaDuration = output.mediaDuration
             current.progress = 1
             current.status = .done
             analysis = current
-            uiMessage = current.segments.isEmpty ? "No black segments found." : "Detected \(current.segments.count) black segment(s)."
+            if current.segments.isEmpty && current.silentSegments.isEmpty {
+                uiMessage = analyzeAudioSilence ? "No black segments or silent gaps found." : "No black segments found."
+            } else {
+                var parts: [String] = []
+                if current.segments.isEmpty {
+                    parts.append("No black segments")
+                } else {
+                    parts.append("\(current.segments.count) black segment(s)")
+                }
+                if analyzeAudioSilence {
+                    if current.silentSegments.isEmpty {
+                        parts.append("No silent gaps")
+                    } else {
+                        parts.append("\(current.silentSegments.count) silent gap(s)")
+                    }
+                }
+                uiMessage = "Detected: " + parts.joined(separator: ", ")
+            }
             analyzeStatusText = uiMessage
             lastActivityState = .success
             if let soundName = completionSound.soundName,
@@ -2279,6 +2472,11 @@ struct AnalyzeToolView: View {
                         .controlSize(.small)
                     }
                 }
+
+                Toggle("Detect silent audio gaps (over 0.5s)", isOn: $model.analyzeAudioSilence)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(model.isAnalyzing)
 
                 if let analysis = model.analysis {
                     Text(analysis.summary)
@@ -4036,18 +4234,9 @@ struct DetailView: View {
                 Text("Ready to analyze")
                     .foregroundStyle(.secondary)
             case .done:
-                if file.segments.isEmpty {
-                    Label("No black segments detected", systemImage: "checkmark.circle.fill")
+                if file.segments.isEmpty && file.silentSegments.isEmpty {
+                    Label("No black segments or silent gaps detected", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                } else {
-                    HStack {
-                        Text("Detected \(file.segments.count) segment(s)")
-                            .font(.headline)
-                        Spacer()
-                        Button("Copy List") {
-                            copyToClipboard(file.formattedList)
-                        }
-                    }
                 }
 
                 if let timelineDuration = file.timelineDuration {
@@ -4093,6 +4282,56 @@ struct DetailView: View {
                             }
                         }
                         .frame(minHeight: 150)
+                    }
+                }
+
+                if !file.silentSegments.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Silent Gaps (> 0.5s)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Copy Silence List") {
+                                copyToClipboard(file.formattedSilentList)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+
+                        ScrollView {
+                            LazyVStack(spacing: 4) {
+                                ForEach(file.silentSegments) { segment in
+                                    HStack {
+                                        Text(formatSeconds(segment.start))
+                                            .font(.system(.body, design: .monospaced))
+                                            .frame(width: 130, alignment: .leading)
+                                        Text("→")
+                                            .foregroundStyle(.secondary)
+                                        Text(formatSeconds(segment.end))
+                                            .font(.system(.body, design: .monospaced))
+                                            .frame(width: 130, alignment: .leading)
+                                        Spacer()
+                                        Text(String(format: "%.3fs", segment.duration))
+                                            .font(.system(.body, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture(count: 2) {
+                                        play(from: segment.start)
+                                    }
+                                    .help("Double-click to play from this silent-gap start")
+                                }
+                            }
+                        }
+                        .frame(minHeight: 120)
                     }
                 }
             }
