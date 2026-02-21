@@ -287,6 +287,8 @@ struct FileAnalysis {
     let fileURL: URL
     var segments: [Segment] = []
     var silentSegments: [Segment] = []
+    var includedBlackDetection: Bool = true
+    var includedSilenceDetection: Bool = true
     var mediaDuration: Double?
     var progress: Double = 0
     var status: FileStatus = .idle
@@ -306,17 +308,22 @@ struct FileAnalysis {
         case .running:
             return "Analyzing… \(Int((progress * 100).rounded()))%"
         case .done:
-            if segments.isEmpty && silentSegments.isEmpty {
-                return "No black segments or silent gaps"
-            }
             var pieces: [String] = []
-            if !segments.isEmpty {
-                pieces.append("\(segments.count) black segment(s), \(String(format: "%.3f", totalDuration))s")
+            if includedBlackDetection {
+                if segments.isEmpty {
+                    pieces.append("No black segments")
+                } else {
+                    pieces.append("\(segments.count) black segment(s), \(String(format: "%.3f", totalDuration))s")
+                }
             }
-            if !silentSegments.isEmpty {
-                pieces.append("\(silentSegments.count) silent gap(s), \(String(format: "%.3f", totalSilentDuration))s")
+            if includedSilenceDetection {
+                if silentSegments.isEmpty {
+                    pieces.append("No silent gaps")
+                } else {
+                    pieces.append("\(silentSegments.count) silent gap(s), \(String(format: "%.3f", totalSilentDuration))s")
+                }
             }
-            return pieces.isEmpty ? "No black segments or silent gaps" : pieces.joined(separator: " • ")
+            return pieces.isEmpty ? "No analysis type enabled" : pieces.joined(separator: " • ")
         case .failed(let reason):
             return "Failed: \(reason)"
         }
@@ -1382,10 +1389,17 @@ final class WorkspaceViewModel: ObservableObject {
             existing.progress = 0
             existing.segments = []
             existing.silentSegments = []
+            existing.includedBlackDetection = effectiveAnalyzeBlackFrames
+            existing.includedSilenceDetection = analyzeAudioSilence
             existing.mediaDuration = nil
             analysis = existing
         } else {
-            analysis = FileAnalysis(fileURL: url, status: .running)
+            analysis = FileAnalysis(
+                fileURL: url,
+                includedBlackDetection: effectiveAnalyzeBlackFrames,
+                includedSilenceDetection: analyzeAudioSilence,
+                status: .running
+            )
         }
 
         analyzeTask = Task { [weak self] in
@@ -1437,6 +1451,8 @@ final class WorkspaceViewModel: ObservableObject {
         case .success(let output):
             current.segments = output.segments
             current.silentSegments = output.silentSegments
+            current.includedBlackDetection = includedBlack
+            current.includedSilenceDetection = includedSilence
             current.mediaDuration = output.mediaDuration
             current.progress = 1
             current.status = .done
@@ -4271,12 +4287,28 @@ struct DetailView: View {
                 Text("Ready to analyze")
                     .foregroundStyle(.secondary)
             case .done:
-                if file.segments.isEmpty && file.silentSegments.isEmpty {
-                    Label("No black segments or silent gaps detected", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 4) {
+                    if file.includedBlackDetection {
+                        if file.segments.isEmpty {
+                            Label("No black segments detected", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("Black segments detected: \(file.segments.count)", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    if file.includedSilenceDetection {
+                        if file.silentSegments.isEmpty {
+                            Label("No silent gaps detected", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("Silent gaps detected: \(file.silentSegments.count)", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
                 }
 
-                if let timelineDuration = file.timelineDuration {
+                if file.includedBlackDetection, let timelineDuration = file.timelineDuration {
                     SegmentTimelineView(segments: file.segments, duration: timelineDuration)
                 }
 
