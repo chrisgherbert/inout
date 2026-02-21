@@ -1393,11 +1393,18 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var wasCancelled = false
 
     @Published var selectedAudioFormat: AudioFormat = .mp3
-    @Published var audioBitrateKbps = 128 {
+    @Published var defaultAudioBitrateKbps = 128 {
         didSet {
-            UserDefaults.standard.set(audioBitrateKbps, forKey: DefaultsKey.audioBitrateKbps)
+            let clamped = min(max(64, defaultAudioBitrateKbps), 320)
+            if clamped != defaultAudioBitrateKbps {
+                defaultAudioBitrateKbps = clamped
+                return
+            }
+            UserDefaults.standard.set(clamped, forKey: DefaultsKey.audioBitrateKbps)
+            exportAudioBitrateKbps = clamped
         }
     }
+    @Published var exportAudioBitrateKbps = 128
     @Published var isExporting = false
     @Published var exportProgress = 0.0
     @Published var exportStatusText = "No export yet"
@@ -1526,8 +1533,9 @@ final class WorkspaceViewModel: ObservableObject {
 
         let savedBitrate = defaults.integer(forKey: DefaultsKey.audioBitrateKbps)
         if savedBitrate > 0 {
-            audioBitrateKbps = min(max(64, savedBitrate), 320)
+            defaultAudioBitrateKbps = min(max(64, savedBitrate), 320)
         }
+        exportAudioBitrateKbps = defaultAudioBitrateKbps
 
         if let rawMode = defaults.string(forKey: DefaultsKey.defaultClipEncodingMode),
            let mode = ClipEncodingMode(rawValue: rawMode) {
@@ -1640,7 +1648,7 @@ final class WorkspaceViewModel: ObservableObject {
         guard selectedAudioFormat == .mp3 else { return nil }
         return estimateFileSizeBytes(
             durationSeconds: sourceDurationSeconds,
-            totalBitrateKbps: Double(audioBitrateKbps)
+            totalBitrateKbps: Double(exportAudioBitrateKbps)
         )
     }
 
@@ -2349,7 +2357,7 @@ final class WorkspaceViewModel: ObservableObject {
                         "-i", sourceURL.path,
                         "-vn",
                         "-acodec", "libmp3lame",
-                        "-b:a", "\(max(64, self.audioBitrateKbps))k",
+                        "-b:a", "\(max(64, self.exportAudioBitrateKbps))k",
                         destination.path
                     ],
                     durationSeconds: max(0.001, self.sourceDurationSeconds),
@@ -3562,11 +3570,11 @@ struct ConvertToolView: View {
                                 HStack {
                                     Text("Bitrate (MP3)")
                                     Slider(value: Binding(
-                                        get: { Double(model.audioBitrateKbps) },
-                                        set: { model.audioBitrateKbps = Int($0.rounded()) }
+                                        get: { Double(model.exportAudioBitrateKbps) },
+                                        set: { model.exportAudioBitrateKbps = Int($0.rounded()) }
                                     ), in: 96...320, step: 32)
                                     .controlSize(.small)
-                                    Text("\(model.audioBitrateKbps) kbps")
+                                    Text("\(model.exportAudioBitrateKbps) kbps")
                                         .font(.caption.monospacedDigit())
                                         .frame(width: 90, alignment: .trailing)
                                 }
@@ -5936,8 +5944,8 @@ struct PreferencesView: View {
             Form {
                 Section {
                     LabeledContent("Default MP3 Bitrate") {
-                        Stepper(value: $model.audioBitrateKbps, in: 64...320, step: 32) {
-                            Text("\(model.audioBitrateKbps) kbps")
+                        Stepper(value: $model.defaultAudioBitrateKbps, in: 64...320, step: 32) {
+                            Text("\(model.defaultAudioBitrateKbps) kbps")
                                 .font(.system(.body, design: .monospaced))
                         }
                         .frame(width: 180, alignment: .trailing)
