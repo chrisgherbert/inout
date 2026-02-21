@@ -1741,6 +1741,57 @@ final class WorkspaceViewModel: ObservableObject {
     func startAnalysis() {
         guard canAnalyze, let url = sourceURL else { return }
 
+        let requestedBlack = effectiveAnalyzeBlackFrames
+        let requestedSilence = effectiveAnalyzeAudioSilence
+        let requestedProfanity = effectiveAnalyzeProfanity
+
+        let previous = analysis
+        let hasCompletedPrevious: Bool
+        if let previous {
+            if case .done = previous.status {
+                hasCompletedPrevious = true
+            } else {
+                hasCompletedPrevious = false
+            }
+        } else {
+            hasCompletedPrevious = false
+        }
+
+        let hasCachedBlack = hasCompletedPrevious && (previous?.includedBlackDetection == true)
+        let hasCachedSilence = hasCompletedPrevious
+            && (previous?.includedSilenceDetection == true)
+            && abs((previous?.silenceMinDurationSeconds ?? 0) - silenceMinDurationSeconds) < 0.0001
+        let hasCachedProfanity = hasCompletedPrevious && (previous?.includedProfanityDetection == true)
+
+        let runBlack = requestedBlack && !hasCachedBlack
+        let runSilence = requestedSilence && !hasCachedSilence
+        let runProfanity = requestedProfanity && !hasCachedProfanity
+
+        let cachedBlackSegments: [Segment] = requestedBlack && hasCachedBlack ? (previous?.segments ?? []) : []
+        let cachedSilentSegments: [Segment] = requestedSilence && hasCachedSilence ? (previous?.silentSegments ?? []) : []
+        let cachedProfanityHits: [ProfanityHit] = requestedProfanity && hasCachedProfanity ? (previous?.profanityHits ?? []) : []
+
+        if !runBlack && !runSilence && !runProfanity {
+            analysis = FileAnalysis(
+                fileURL: url,
+                segments: cachedBlackSegments,
+                silentSegments: cachedSilentSegments,
+                profanityHits: cachedProfanityHits,
+                includedBlackDetection: requestedBlack,
+                includedSilenceDetection: requestedSilence,
+                includedProfanityDetection: requestedProfanity,
+                silenceMinDurationSeconds: silenceMinDurationSeconds,
+                mediaDuration: sourceInfo?.durationSeconds ?? previous?.mediaDuration,
+                progress: 1.0,
+                status: .done
+            )
+            analyzeProgress = 0
+            analyzeStatusText = "Using cached analysis results."
+            uiMessage = analysis?.summary ?? "Using cached analysis results."
+            lastActivityState = .success
+            return
+        }
+
         isAnalyzing = true
         lastActivityState = .running
         wasCancelled = false
@@ -1753,21 +1804,24 @@ final class WorkspaceViewModel: ObservableObject {
         if var existing = analysis {
             existing.status = .running
             existing.progress = 0
-            existing.segments = []
-            existing.silentSegments = []
-            existing.profanityHits = []
-            existing.includedBlackDetection = effectiveAnalyzeBlackFrames
-            existing.includedSilenceDetection = effectiveAnalyzeAudioSilence
-            existing.includedProfanityDetection = effectiveAnalyzeProfanity
+            existing.segments = runBlack ? [] : cachedBlackSegments
+            existing.silentSegments = runSilence ? [] : cachedSilentSegments
+            existing.profanityHits = runProfanity ? [] : cachedProfanityHits
+            existing.includedBlackDetection = requestedBlack
+            existing.includedSilenceDetection = requestedSilence
+            existing.includedProfanityDetection = requestedProfanity
             existing.silenceMinDurationSeconds = silenceMinDurationSeconds
             existing.mediaDuration = knownDuration
             analysis = existing
         } else {
             analysis = FileAnalysis(
                 fileURL: url,
-                includedBlackDetection: effectiveAnalyzeBlackFrames,
-                includedSilenceDetection: effectiveAnalyzeAudioSilence,
-                includedProfanityDetection: effectiveAnalyzeProfanity,
+                segments: runBlack ? [] : cachedBlackSegments,
+                silentSegments: runSilence ? [] : cachedSilentSegments,
+                profanityHits: runProfanity ? [] : cachedProfanityHits,
+                includedBlackDetection: requestedBlack,
+                includedSilenceDetection: requestedSilence,
+                includedProfanityDetection: requestedProfanity,
                 silenceMinDurationSeconds: silenceMinDurationSeconds,
                 mediaDuration: knownDuration,
                 status: .running
@@ -1777,9 +1831,9 @@ final class WorkspaceViewModel: ObservableObject {
         analyzeTask = Task { [weak self] in
             guard let self else { return }
             let flag = cancelFlag
-            let detectBlack = self.effectiveAnalyzeBlackFrames
-            let detectSilence = self.effectiveAnalyzeAudioSilence
-            let detectProfanity = self.effectiveAnalyzeProfanity
+            let detectBlack = runBlack
+            let detectSilence = runSilence
+            let detectProfanity = runProfanity
             let silenceMinDuration = self.silenceMinDurationSeconds
             let result = await Task.detached(priority: .userInitiated) {
                 runDetection(
@@ -1812,7 +1866,18 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             }.value
 
-            self.applyAnalysisResult(result, includedBlack: detectBlack, includedSilence: detectSilence, includedProfanity: detectProfanity)
+            self.applyAnalysisResult(
+                result,
+                includedBlack: requestedBlack,
+                includedSilence: requestedSilence,
+                includedProfanity: requestedProfanity,
+                ranBlack: runBlack,
+                ranSilence: runSilence,
+                ranProfanity: runProfanity,
+                cachedBlackSegments: cachedBlackSegments,
+                cachedSilentSegments: cachedSilentSegments,
+                cachedProfanityHits: cachedProfanityHits
+            )
         }
     }
 
@@ -1874,7 +1939,13 @@ final class WorkspaceViewModel: ObservableObject {
         _ result: Result<DetectionOutput, DetectionError>,
         includedBlack: Bool,
         includedSilence: Bool,
-        includedProfanity: Bool
+        includedProfanity: Bool,
+        ranBlack: Bool,
+        ranSilence: Bool,
+        ranProfanity: Bool,
+        cachedBlackSegments: [Segment],
+        cachedSilentSegments: [Segment],
+        cachedProfanityHits: [ProfanityHit]
     ) {
         isAnalyzing = false
         analyzeTask = nil
@@ -1883,9 +1954,9 @@ final class WorkspaceViewModel: ObservableObject {
         guard var current = analysis else { return }
         switch result {
         case .success(let output):
-            current.segments = output.segments
-            current.silentSegments = output.silentSegments
-            current.profanityHits = output.profanityHits
+            current.segments = ranBlack ? output.segments : cachedBlackSegments
+            current.silentSegments = ranSilence ? output.silentSegments : cachedSilentSegments
+            current.profanityHits = ranProfanity ? output.profanityHits : cachedProfanityHits
             current.includedBlackDetection = includedBlack
             current.includedSilenceDetection = includedSilence
             current.includedProfanityDetection = includedProfanity
