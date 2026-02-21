@@ -2656,7 +2656,11 @@ final class WorkspaceViewModel: ObservableObject {
 
             let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
             let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
-            let start = String(format: "%.3f", self.clipStartSeconds)
+            let hybridSeekPreRoll = 0.75
+            let coarseSeekSeconds = max(0.0, self.clipStartSeconds - hybridSeekPreRoll)
+            let fineSeekSeconds = max(0.0, self.clipStartSeconds - coarseSeekSeconds)
+            let coarseSeek = String(format: "%.6f", coarseSeekSeconds)
+            let fineSeek = String(format: "%.6f", fineSeekSeconds)
             let clipDuration = max(0.001, self.clipEndSeconds - self.clipStartSeconds)
             let durationStr = String(format: "%.3f", clipDuration)
             let fadeDuration = min(0.333, clipDuration / 2.0)
@@ -2681,9 +2685,10 @@ final class WorkspaceViewModel: ObservableObject {
                 "-y",
                 "-hide_banner",
                 "-loglevel", "error",
-                "-ss", start,
-                "-t", durationStr,
+                "-ss", coarseSeek,
                 "-i", sourceURL.path,
+                "-ss", fineSeek,
+                "-t", durationStr,
                 "-map", "0:v:0",
                 "-c:v", videoCodec,
                 "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
