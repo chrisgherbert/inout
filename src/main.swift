@@ -1553,7 +1553,7 @@ final class WorkspaceViewModel: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a video file"
+        panel.message = "Choose a media file"
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.urls.first {
             setSource(url)
@@ -1578,7 +1578,7 @@ final class WorkspaceViewModel: ObservableObject {
         sourceSessionID = UUID()
         analysis = FileAnalysis(fileURL: url)
         sourceInfo = loadSourceMediaInfo(for: url)
-        clipEncodingMode = defaultClipEncodingMode
+        clipEncodingMode = hasVideoTrack ? defaultClipEncodingMode : .audioOnly
         applySuggestedClipBitrateFromSource()
         outputURL = nil
         uiMessage = "Loaded \(url.lastPathComponent)"
@@ -2195,6 +2195,9 @@ final class WorkspaceViewModel: ObservableObject {
 
     func startClipExport() {
         guard canExportClip, let sourceURL else { return }
+        if !hasVideoTrack && clipEncodingMode != .audioOnly {
+            clipEncodingMode = .audioOnly
+        }
 
         clampClipRange()
         guard clipDurationSeconds > 0 else { return }
@@ -2773,7 +2776,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func captureFrame(at seconds: Double) {
-        guard let sourceURL else { return }
+        guard let sourceURL, hasVideoTrack else { return }
 
         let duration = sourceDurationSeconds
         let clampedTime = max(0, min(seconds, duration > 0 ? duration : seconds))
@@ -2899,7 +2902,7 @@ struct SourceHeaderView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(model.sourceURL == nil ? "Choose Video" : "Change Video") {
+            Button(model.sourceURL == nil ? "Choose Media" : "Change Media") {
                 model.chooseSource()
             }
 
@@ -3087,7 +3090,7 @@ struct AnalyzeToolView: View {
                 }
                 .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
             } else {
-                EmptyToolView(title: "Analyze", subtitle: "Choose a video and run black-frame analysis.")
+                EmptyToolView(title: "Analyze", subtitle: "Choose media and run analysis.")
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.sourceURL != nil)
@@ -3182,7 +3185,7 @@ struct ConvertToolView: View {
                 }
                 .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
             } else {
-                EmptyToolView(title: "Convert", subtitle: "Choose a source video to enable audio export.")
+                EmptyToolView(title: "Convert", subtitle: "Choose source media to enable audio export.")
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.sourceURL != nil)
@@ -3698,17 +3701,19 @@ struct ClipToolView: View {
                                 .allowsHitTesting(isTimelineHovered)
                                 .animation(.easeOut(duration: 0.15), value: isTimelineHovered)
 
-                                Button {
-                                    model.captureFrame(at: playheadSeconds)
-                                } label: {
-                                    Label("Capture Frame", systemImage: "camera")
+                                if model.hasVideoTrack {
+                                    Button {
+                                        model.captureFrame(at: playheadSeconds)
+                                    } label: {
+                                        Label("Capture Frame", systemImage: "camera")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                    .help("Save a PNG frame at the current playhead")
+                                    .labelStyle(.titleAndIcon)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .padding(.leading, 2)
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                                .help("Save a PNG frame at the current playhead")
-                                .labelStyle(.titleAndIcon)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .padding(.leading, 2)
                             }
                         }
                     }
@@ -3734,8 +3739,10 @@ struct ClipToolView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         VStack(alignment: .leading, spacing: 10) {
                             Picker("", selection: $model.clipEncodingMode) {
-                                Label("Fast", systemImage: "bolt.fill").tag(ClipEncodingMode.fast)
-                                Label("Advanced", systemImage: "slider.horizontal.3").tag(ClipEncodingMode.compressed)
+                                if model.hasVideoTrack {
+                                    Label("Fast", systemImage: "bolt.fill").tag(ClipEncodingMode.fast)
+                                    Label("Advanced", systemImage: "slider.horizontal.3").tag(ClipEncodingMode.compressed)
+                                }
                                 Label("Audio Only", systemImage: "waveform").tag(ClipEncodingMode.audioOnly)
                             }
                             .labelsHidden()
@@ -3963,7 +3970,7 @@ struct ClipToolView: View {
                     )
                 }
             } else {
-                EmptyToolView(title: "Clip", subtitle: "Choose a source video to create a new clip from a selected range.")
+                EmptyToolView(title: "Clip", subtitle: "Choose source media to create a new clip from a selected range.")
             }
 
             Spacer()
@@ -3982,6 +3989,10 @@ struct ClipToolView: View {
             loadPlayerItem()
         }
         .onChange(of: model.clipEncodingMode) { mode in
+            if !model.hasVideoTrack && mode != .audioOnly {
+                model.clipEncodingMode = .audioOnly
+                return
+            }
             if mode == .fast && !model.selectedClipFormat.supportsPassthrough {
                 model.selectedClipFormat = .mp4
             }
@@ -4593,7 +4604,7 @@ struct InspectToolView: View {
                     )
                 }
             } else {
-                EmptyToolView(title: "Inspect", subtitle: "Choose a source video to inspect metadata and results.")
+                EmptyToolView(title: "Inspect", subtitle: "Choose source media to inspect metadata and results.")
             }
 
             if !isCompactLayout {
@@ -5044,46 +5055,58 @@ struct DetailView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
 
-            InlinePlayerView(player: player)
-                .frame(
-                    minHeight: isCompactLayout ? 150 : 260,
-                    maxHeight: isCompactLayout ? 210 : 320
-                )
-                .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-
-            if !isCompactLayout {
-                HStack {
-                    Spacer()
-                    HStack(spacing: 10) {
-                        Button {
-                            jump(by: -Double(model.jumpIntervalSeconds))
-                        } label: {
-                            Label("Back \(model.jumpIntervalSeconds)s", systemImage: "gobackward")
-                                .labelStyle(.titleAndIcon)
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button {
-                            togglePlayPause()
-                        } label: {
-                            Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
-                                .labelStyle(.titleAndIcon)
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button {
-                            jump(by: Double(model.jumpIntervalSeconds))
-                        } label: {
-                            Label("Forward \(model.jumpIntervalSeconds)s", systemImage: "goforward")
-                                .labelStyle(.titleAndIcon)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
+            if model.hasVideoTrack {
+                InlinePlayerView(player: player)
+                    .frame(
+                        minHeight: isCompactLayout ? 150 : 260,
+                        maxHeight: isCompactLayout ? 210 : 320
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+            } else {
+                HStack(spacing: 10) {
+                    Image(systemName: "waveform")
+                        .foregroundStyle(.secondary)
+                    Text("Audio-only source")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Spacer()
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+            }
+
+            HStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        jump(by: -Double(model.jumpIntervalSeconds))
+                    } label: {
+                        Label("Back \(model.jumpIntervalSeconds)s", systemImage: "gobackward")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        togglePlayPause()
+                    } label: {
+                        Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        jump(by: Double(model.jumpIntervalSeconds))
+                    } label: {
+                        Label("Forward \(model.jumpIntervalSeconds)s", systemImage: "goforward")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                Spacer()
             }
 
             switch file.status {
@@ -5297,7 +5320,7 @@ struct ContentView: View {
                 Button {
                     model.chooseSource()
                 } label: {
-                    Label(model.sourceURL == nil ? "Choose Video" : "Change Video", systemImage: "video.badge.plus")
+                    Label(model.sourceURL == nil ? "Choose Media" : "Change Media", systemImage: "video.badge.plus")
                 }
             }
         }
@@ -5529,12 +5552,12 @@ struct CheckBlackFramesApp: App {
             }
 
             CommandGroup(replacing: .newItem) {
-                Button("Choose Video…") {
+                Button("Choose Media…") {
                     model.chooseSource()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
 
-                Button("Close Video") {
+                Button("Close Media") {
                     model.clearSource()
                 }
                 .disabled(model.sourceURL == nil || model.isAnalyzing || model.isExporting)
@@ -5584,7 +5607,7 @@ struct CheckBlackFramesApp: App {
                     NotificationCenter.default.post(name: .clipCaptureFrame, object: nil)
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil || model.isAnalyzing || model.isExporting)
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil || !model.hasVideoTrack || model.isAnalyzing || model.isExporting)
             }
         }
 
