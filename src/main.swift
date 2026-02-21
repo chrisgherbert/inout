@@ -15,6 +15,7 @@ extension Notification.Name {
     static let clipClearRange = Notification.Name("clipClearRange")
     static let clipJumpToStart = Notification.Name("clipJumpToStart")
     static let clipJumpToEnd = Notification.Name("clipJumpToEnd")
+    static let clipCaptureFrame = Notification.Name("clipCaptureFrame")
 }
 
 private let minDurationSeconds = 0.001
@@ -209,6 +210,14 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         case .dark: return .dark
         }
     }
+}
+
+enum FrameSaveLocationMode: String, CaseIterable, Identifiable {
+    case askEachTime = "Ask Each Time"
+    case sourceFolder = "Source Folder"
+    case customFolder = "Custom Folder"
+
+    var id: String { rawValue }
 }
 
 struct Segment: Identifiable {
@@ -757,6 +766,8 @@ final class WorkspaceViewModel: ObservableObject {
         static let jumpIntervalSeconds = "prefs.jumpIntervalSeconds"
         static let completionSound = "prefs.completionSound"
         static let appearance = "prefs.appearance"
+        static let frameSaveLocationMode = "prefs.frameSaveLocationMode"
+        static let customFrameSaveDirectoryPath = "prefs.customFrameSaveDirectoryPath"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -821,6 +832,16 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var appearance: AppAppearance = .system {
         didSet {
             UserDefaults.standard.set(appearance.rawValue, forKey: DefaultsKey.appearance)
+        }
+    }
+    @Published var frameSaveLocationMode: FrameSaveLocationMode = .askEachTime {
+        didSet {
+            UserDefaults.standard.set(frameSaveLocationMode.rawValue, forKey: DefaultsKey.frameSaveLocationMode)
+        }
+    }
+    @Published var customFrameSaveDirectoryPath: String = "" {
+        didSet {
+            UserDefaults.standard.set(customFrameSaveDirectoryPath, forKey: DefaultsKey.customFrameSaveDirectoryPath)
         }
     }
 
@@ -889,6 +910,13 @@ final class WorkspaceViewModel: ObservableObject {
            let savedAppearance = AppAppearance(rawValue: rawAppearance) {
             appearance = savedAppearance
         }
+
+        if let rawFrameSaveMode = defaults.string(forKey: DefaultsKey.frameSaveLocationMode),
+           let mode = FrameSaveLocationMode(rawValue: rawFrameSaveMode) {
+            frameSaveLocationMode = mode
+        }
+
+        customFrameSaveDirectoryPath = defaults.string(forKey: DefaultsKey.customFrameSaveDirectoryPath) ?? ""
     }
 
     var canAnalyze: Bool {
@@ -1959,6 +1987,104 @@ final class WorkspaceViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([outputURL])
     }
 
+    func chooseCustomFrameSaveDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose a default folder for captured frames"
+        panel.title = "Default Frame Save Location"
+        if panel.runModal() == .OK, let url = panel.url {
+            customFrameSaveDirectoryPath = url.path
+        }
+    }
+
+    func captureFrame(at seconds: Double) {
+        guard let sourceURL else { return }
+
+        let duration = sourceDurationSeconds
+        let clampedTime = max(0, min(seconds, duration > 0 ? duration : seconds))
+        let defaultName = sourceURL.deletingPathExtension().lastPathComponent +
+            "_frame_" + formatSeconds(clampedTime).replacingOccurrences(of: ":", with: "-") + ".png"
+
+        let destinationURL: URL
+        switch frameSaveLocationMode {
+        case .askEachTime:
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = defaultName
+            panel.allowedContentTypes = [.png]
+            panel.canCreateDirectories = true
+            panel.title = "Save Frame"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            destinationURL = url
+        case .sourceFolder:
+            let folder = sourceURL.deletingLastPathComponent()
+            destinationURL = uniqueURL(in: folder, preferredFileName: defaultName)
+        case .customFolder:
+            let configuredFolder = URL(fileURLWithPath: customFrameSaveDirectoryPath)
+            let folder: URL
+            if !customFrameSaveDirectoryPath.isEmpty,
+               FileManager.default.fileExists(atPath: configuredFolder.path) {
+                folder = configuredFolder
+            } else {
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = false
+                panel.canChooseDirectories = true
+                panel.allowsMultipleSelection = false
+                panel.canCreateDirectories = true
+                panel.prompt = "Choose"
+                panel.message = "Choose a default folder for captured frames"
+                panel.title = "Default Frame Save Location"
+                guard panel.runModal() == .OK, let picked = panel.url else { return }
+                customFrameSaveDirectoryPath = picked.path
+                folder = picked
+            }
+            destinationURL = uniqueURL(in: folder, preferredFileName: defaultName)
+        }
+
+        do {
+            let asset = AVURLAsset(url: sourceURL)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = CMTime(seconds: 1.0 / 120.0, preferredTimescale: 600)
+            generator.requestedTimeToleranceAfter = CMTime(seconds: 1.0 / 120.0, preferredTimescale: 600)
+
+            let cgImage = try generator.copyCGImage(
+                at: CMTime(seconds: clampedTime, preferredTimescale: 600),
+                actualTime: nil
+            )
+            let bitmap = NSBitmapImageRep(cgImage: cgImage)
+            guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
+                uiMessage = "Frame capture failed: Unable to encode PNG."
+                lastActivityState = .failed
+                return
+            }
+
+            try pngData.write(to: destinationURL, options: .atomic)
+            outputURL = destinationURL
+            uiMessage = "Frame saved: \(destinationURL.lastPathComponent)"
+            lastActivityState = .success
+        } catch {
+            uiMessage = "Frame capture failed: \(error.localizedDescription)"
+            lastActivityState = .failed
+        }
+    }
+
+    private func uniqueURL(in directory: URL, preferredFileName: String) -> URL {
+        let ext = (preferredFileName as NSString).pathExtension
+        let baseName = (preferredFileName as NSString).deletingPathExtension
+        var candidate = directory.appendingPathComponent(preferredFileName)
+        var index = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            let nextName = ext.isEmpty ? "\(baseName)-\(index)" : "\(baseName)-\(index).\(ext)"
+            candidate = directory.appendingPathComponent(nextName)
+            index += 1
+        }
+        return candidate
+    }
+
     private func notifyCompletion(_ title: String, message: String) {
         let center = UNUserNotificationCenter.current()
 
@@ -2773,6 +2899,18 @@ struct ClipToolView: View {
                                 .opacity(isTimelineHovered ? 0.95 : 0.0)
                                 .allowsHitTesting(isTimelineHovered)
                                 .animation(.easeOut(duration: 0.15), value: isTimelineHovered)
+
+                                Button {
+                                    model.captureFrame(at: playheadSeconds)
+                                } label: {
+                                    Label("Capture Frame", systemImage: "camera")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .help("Save a PNG frame at the current playhead")
+                                .labelStyle(.titleAndIcon)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.leading, 2)
                             }
                         }
                     }
@@ -3087,6 +3225,9 @@ struct ClipToolView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .clipJumpToEnd)) { _ in
             seekPlayerAndFocusViewport(to: model.clipEndSeconds)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipCaptureFrame)) { _ in
+            model.captureFrame(at: playheadSeconds)
         }
         .onDisappear {
             waveformTask?.cancel()
@@ -4146,6 +4287,38 @@ struct PreferencesView: View {
                 } header: {
                     Text("Timeline")
                 }
+
+                Section {
+                    LabeledContent("Save Location") {
+                        Picker("Save Location", selection: $model.frameSaveLocationMode) {
+                            ForEach(FrameSaveLocationMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
+                    }
+
+                    if model.frameSaveLocationMode == .customFolder {
+                        LabeledContent("Custom Folder") {
+                            HStack(spacing: 8) {
+                                Text(model.customFrameSaveDirectoryPath.isEmpty ? "Not set" : model.customFrameSaveDirectoryPath)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .foregroundStyle(model.customFrameSaveDirectoryPath.isEmpty ? .secondary : .primary)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                                Button("Choose…") {
+                                    model.chooseCustomFrameSaveDirectory()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            .frame(width: 340)
+                        }
+                    }
+                } header: {
+                    Text("Frame Capture")
+                }
             }
             .formStyle(.grouped)
             .tabItem {
@@ -4299,6 +4472,14 @@ struct CheckBlackFramesApp: App {
                 }
                 .keyboardShortcut("e", modifiers: [.command, .option])
                 .disabled(!model.canExportClip)
+
+                Divider()
+
+                Button("Capture Frame…") {
+                    NotificationCenter.default.post(name: .clipCaptureFrame, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil || model.isAnalyzing || model.isExporting)
             }
         }
 
