@@ -21,6 +21,11 @@ private let minDurationSeconds = 0.001
 private let picThreshold = 0.90
 private let pixelBlackThreshold = 0.10
 private let maxSampleDimension = 640
+private enum UIRadius {
+    static let small: CGFloat = 8
+    static let medium: CGFloat = 12
+    static let large: CGFloat = 16
+}
 
 enum WorkspaceTool: String, CaseIterable, Identifiable {
     case clip = "Clip"
@@ -1968,9 +1973,9 @@ struct SourceHeaderView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                         .stroke(Color.primary.opacity(0.10), lineWidth: 0.6)
                 )
                 .help(sourceURL.path)
@@ -1989,9 +1994,9 @@ struct SourceHeaderView: View {
             }
         }
         .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
                 .stroke(Color.primary.opacity(0.10), lineWidth: 0.7)
         )
         .shadow(color: .black.opacity(0.06), radius: 4, y: 1)
@@ -2473,7 +2478,7 @@ struct ClipToolView: View {
                         minHeight: isCompactLayout ? 150 : 260,
                         maxHeight: isCompactLayout ? 210 : 320
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
                     .onTapGesture {
                         dismissTimecodeFieldFocus()
                     }
@@ -2830,7 +2835,11 @@ struct ClipToolView: View {
                         .foregroundStyle(.secondary)
                         .tint(.secondary)
                         .padding(10)
-                        .background(Color.gray.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                .stroke(Color.primary.opacity(0.08), lineWidth: 0.6)
+                        )
 
                         Divider()
 
@@ -2957,10 +2966,10 @@ struct WaveformView: View {
             let playheadX = xPosition(for: playheadSeconds, width: width)
 
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.gray.opacity(isHovered ? 0.18 : 0.12))
 
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.accentColor.opacity(0.12))
                     .frame(width: max(1, endX - startX))
                     .offset(x: startX)
@@ -3016,9 +3025,9 @@ struct WaveformView: View {
                     .frame(width: 2, height: height)
                     .offset(x: playheadX - 1)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .stroke(isHovered ? Color.accentColor.opacity(0.35) : Color.gray.opacity(0.25), lineWidth: 1)
             )
             .contentShape(Rectangle())
@@ -3095,12 +3104,12 @@ struct UnifiedClipTimelineSelector: View {
             let endX = xPosition(for: endSeconds, width: width)
 
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.gray.opacity(isHovered ? 0.26 : 0.2))
                     .frame(height: 10)
                     .offset(y: 15)
 
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.accentColor.opacity(0.35))
                     .frame(width: max(2, endX - startX), height: 10)
                     .offset(x: startX, y: 15)
@@ -3490,10 +3499,11 @@ struct StatusFooterStripView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(.regularMaterial)
-        .overlay(alignment: .top) {
-            Divider()
-        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.7)
+        )
     }
 }
 
@@ -3509,7 +3519,7 @@ struct SegmentTimelineView: View {
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                         .fill(Color.gray.opacity(0.18))
                         .frame(height: 18)
 
@@ -3520,7 +3530,7 @@ struct SegmentTimelineView: View {
                         let x = geometry.size.width * startRatio
                         let w = max(2, geometry.size.width * widthRatio)
 
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                             .fill(Color.black.opacity(0.85))
                             .frame(width: w, height: 18)
                             .offset(x: x)
@@ -3607,7 +3617,7 @@ struct DetailView: View {
                     minHeight: isCompactLayout ? 150 : 260,
                     maxHeight: isCompactLayout ? 210 : 320
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
 
             if !isCompactLayout {
                 HStack {
@@ -3705,8 +3715,11 @@ struct DetailView: View {
                                     }
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
-                                    .background(Color.gray.opacity(0.10))
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                            .stroke(Color.primary.opacity(0.07), lineWidth: 0.5)
+                                    )
                                     .contentShape(Rectangle())
                                     .onTapGesture(count: 2) {
                                         play(from: segment.start)
@@ -3784,16 +3797,23 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { proxy in
             let isCompactLayout = proxy.size.height < 760
+            let contentPadding = isCompactLayout ? 8.0 : 12.0
 
-            VStack(alignment: .leading, spacing: isCompactLayout ? 8 : 10) {
-                SourceHeaderView(model: model)
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: isCompactLayout ? 8 : 10) {
+                    SourceHeaderView(model: model)
 
-                ToolContentView(model: model, isCompactLayout: isCompactLayout)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    ToolContentView(model: model, isCompactLayout: isCompactLayout)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+                .padding(.top, contentPadding)
+                .padding(.horizontal, contentPadding)
+                .padding(.bottom, contentPadding)
 
                 StatusFooterStripView(model: model)
+                    .padding(.horizontal, 0)
+                    .padding(.bottom, contentPadding / 2)
             }
-            .padding(isCompactLayout ? 8 : 12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(isDropTargeted ? Color.accentColor.opacity(0.12) : Color.clear)
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
