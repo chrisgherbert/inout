@@ -5956,6 +5956,110 @@ struct PreferencesView: View {
     }
 }
 
+struct HelpDocumentationView: View {
+    private struct HelpSection: Identifiable {
+        let id = UUID()
+        let title: String
+        let items: [String]
+    }
+
+    private let sections: [HelpSection] = [
+        HelpSection(
+            title: "Getting Started",
+            items: [
+                "Choose a media file with Choose Media, or drag a file into the main window.",
+                "Use the top tool tabs to switch between Clip, Analyze, Convert, and Inspect.",
+                "The footer always shows current activity, progress, and completion state."
+            ]
+        ),
+        HelpSection(
+            title: "Clip Tab",
+            items: [
+                "Create new clips by setting In/Out points on the timeline.",
+                "Set points with drag handles, direct timecode entry, keyboard shortcuts, or playhead actions.",
+                "Choose Fast, Advanced, or Audio Only export modes depending on speed and compatibility needs."
+            ]
+        ),
+        HelpSection(
+            title: "Analyze Tab",
+            items: [
+                "Run black-frame detection, silence-gap detection, and profanity detection.",
+                "Watch results populate while processing, including timeline markers and segment lists.",
+                "Double-click detected rows to jump playback to those timestamps."
+            ]
+        ),
+        HelpSection(
+            title: "Convert Tab",
+            items: [
+                "Export full-file audio using MP3 or M4A formats.",
+                "Set bitrate and export destination from one panel.",
+                "Use this tab for audio extraction without creating a timeline clip."
+            ]
+        ),
+        HelpSection(
+            title: "Inspect Tab",
+            items: [
+                "Review source metadata such as duration, bitrate, codec, frame rate, and resolution.",
+                "Use Show in Finder to jump to the current source file.",
+                "Use this tab as a quick technical snapshot before export or analysis."
+            ]
+        ),
+        HelpSection(
+            title: "Keyboard Shortcuts",
+            items: [
+                "I: Set clip start at playhead",
+                "O: Set clip end at playhead",
+                "X: Clear clip in/out",
+                "Up Arrow: Jump to clip start",
+                "Down Arrow: Jump to clip end",
+                "Cmd-E: Export clip",
+                "Cmd-Shift-E: Export audio",
+                "Cmd-R: Run analysis",
+                "Cmd-.: Stop active analysis/export"
+            ]
+        ),
+        HelpSection(
+            title: "Bundled Components",
+            items: [
+                "ffmpeg is bundled for conversion/export workflows.",
+                "whisper-cli + bundled model are used for profanity detection and caption generation.",
+                "If Whisper resources are missing, rebuild with bundled resources."
+            ]
+        )
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Bulwark Video Tools Help")
+                    .font(.title2.weight(.semibold))
+
+                Text("Quick guide to core workflows and shortcuts.")
+                    .foregroundStyle(.secondary)
+
+                ForEach(sections) { section in
+                    GroupBox(section.title) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(section.items, id: \.self) { item in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Text("•")
+                                    Text(item)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minWidth: 640, minHeight: 520)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private func firstExistingFileURL(from paths: [String]) -> URL? {
         for path in paths {
@@ -5988,6 +6092,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct CheckBlackFramesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.openWindow) private var openWindow
     @StateObject private var model = WorkspaceViewModel()
 
     var body: some Scene {
@@ -5996,6 +6101,14 @@ struct CheckBlackFramesApp: App {
                 .preferredColorScheme(model.appearance.colorScheme)
         }
         .windowResizability(.contentMinSize)
+
+        Window("Bulwark Video Tools Help", id: "help") {
+            HelpDocumentationView()
+                .preferredColorScheme(model.appearance.colorScheme)
+        }
+        .defaultSize(width: 760, height: 680)
+        .windowResizability(.contentSize)
+
         .commands {
             CommandGroup(after: .textEditing) {
                 Divider()
@@ -6093,6 +6206,13 @@ struct CheckBlackFramesApp: App {
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil || !model.hasVideoTrack || model.isAnalyzing || model.isExporting)
+            }
+
+            CommandGroup(replacing: .help) {
+                Button("Bulwark Video Tools Help") {
+                    openWindow(id: "help")
+                }
+                .keyboardShortcut("/", modifiers: [.command, .shift])
             }
         }
 
