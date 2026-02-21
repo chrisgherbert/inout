@@ -1968,7 +1968,11 @@ struct SourceHeaderView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.primary.opacity(0.10), lineWidth: 0.6)
+                )
                 .help(sourceURL.path)
                 .onDrag {
                     NSItemProvider(contentsOf: sourceURL) ?? NSItemProvider()
@@ -1985,7 +1989,12 @@ struct SourceHeaderView: View {
             }
         }
         .padding(12)
-        .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 0.7)
+        )
+        .shadow(color: .black.opacity(0.06), radius: 4, y: 1)
     }
 }
 
@@ -3421,10 +3430,21 @@ struct StatusFooterStripView: View {
         }
     }
 
+    @ViewBuilder
+    private var stateIconView: some View {
+        if #available(macOS 14.0, *) {
+            Image(systemName: model.lastResultIconName)
+                .symbolRenderingMode(.hierarchical)
+                .symbolEffect(.pulse, options: model.isActivityRunning ? .repeating : .default, value: model.isActivityRunning)
+        } else {
+            Image(systemName: model.lastResultIconName)
+        }
+    }
+
     var body: some View {
         HStack(spacing: 14) {
             HStack(spacing: 8) {
-                Image(systemName: model.lastResultIconName)
+                stateIconView
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(stateColor)
                     .frame(width: 20, height: 20, alignment: .center)
@@ -3462,7 +3482,7 @@ struct StatusFooterStripView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(.bar)
+        .background(.regularMaterial)
         .overlay(alignment: .top) {
             Divider()
         }
@@ -3723,10 +3743,35 @@ struct EmptyToolView: View {
     }
 }
 
+struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        NSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = nsView.window else { return }
+            onResolve(window)
+        }
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var model: WorkspaceViewModel
     @StateObject private var externalOpenBridge = ExternalFileOpenBridge.shared
     @State private var isDropTargeted = false
+    @State private var appWindow: NSWindow?
+
+    private func syncWindowMetadata() {
+        guard let appWindow else { return }
+        appWindow.titleVisibility = .visible
+        appWindow.titlebarAppearsTransparent = false
+        appWindow.title = model.sourceURL?.lastPathComponent ?? "Bulwark Video Tools"
+        appWindow.subtitle = ""
+        appWindow.representedURL = model.sourceURL
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -3759,6 +3804,24 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 980, minHeight: 640)
+        .background(
+            WindowAccessor { window in
+                appWindow = window
+                syncWindowMetadata()
+            }
+        )
+        .onChange(of: model.sourceURL?.path) { _ in
+            syncWindowMetadata()
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.chooseSource()
+                } label: {
+                    Label(model.sourceURL == nil ? "Choose Video" : "Change Video", systemImage: "video.badge.plus")
+                }
+            }
+        }
     }
 }
 
