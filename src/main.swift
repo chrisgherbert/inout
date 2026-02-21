@@ -2092,7 +2092,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func updateAnalyzeStatusText(fileName: String, progress: Double) {
         let percent = Int((min(1, max(0, progress)) * 100).rounded())
-        analyzeStatusText = "\(analyzePhaseText)… \(percent)% • \(fileName)"
+        analyzeStatusText = "\(analyzePhaseText)… \(percent)%"
     }
 
     private func appendDetectedBlackSegment(_ segment: Segment) {
@@ -5164,6 +5164,9 @@ struct SegmentTimelineView: View {
     let blackSegments: [Segment]
     let silentSegments: [Segment]
     let profanitySegments: [Segment]
+    let showBlackLane: Bool
+    let showSilentLane: Bool
+    let showProfanityLane: Bool
     let duration: Double
 
     @ViewBuilder
@@ -5199,25 +5202,39 @@ struct SegmentTimelineView: View {
     }
 
     var body: some View {
+        let hasVisibleLane = showBlackLane || showSilentLane || showProfanityLane
+
         VStack(alignment: .leading, spacing: 8) {
             Text("Timeline")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 5) {
-                lane(label: "Black", segments: blackSegments, color: Color.black.opacity(0.9))
-                lane(label: "Silence", segments: silentSegments, color: Color.orange.opacity(0.85))
-                lane(label: "Profanity", segments: profanitySegments, color: Color.red.opacity(0.9))
+                if showBlackLane {
+                    lane(label: "Black", segments: blackSegments, color: Color.black.opacity(0.9))
+                }
+                if showSilentLane {
+                    lane(label: "Silence", segments: silentSegments, color: Color.orange.opacity(0.85))
+                }
+                if showProfanityLane {
+                    lane(label: "Profanity", segments: profanitySegments, color: Color.red.opacity(0.9))
+                }
             }
 
-            HStack {
-                Text("00:00:00.000")
-                    .padding(.leading, 72)
-                Spacer()
-                Text(formatSeconds(duration))
+            if hasVisibleLane {
+                HStack {
+                    Text("00:00:00.000")
+                        .padding(.leading, 72)
+                    Spacer()
+                    Text(formatSeconds(duration))
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            } else {
+                Text("Run analysis to populate timeline lanes.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
         }
     }
 }
@@ -5282,11 +5299,23 @@ struct DetailView: View {
 
     @ViewBuilder
     private func analysisSections(showCopyButtons: Bool, showEmptySections: Bool = false) -> some View {
+        let analysisHasRunOrIsRunning: Bool = {
+            switch file.status {
+            case .running, .done:
+                return true
+            case .idle, .failed:
+                return false
+            }
+        }()
+
         if let timelineDuration = file.timelineDuration {
             SegmentTimelineView(
                 blackSegments: file.includedBlackDetection ? file.segments : [],
                 silentSegments: file.includedSilenceDetection ? file.silentSegments : [],
                 profanitySegments: file.includedProfanityDetection ? file.profanityHits.map { Segment(start: $0.start, end: $0.end, duration: $0.duration) } : [],
+                showBlackLane: analysisHasRunOrIsRunning && file.includedBlackDetection,
+                showSilentLane: analysisHasRunOrIsRunning && file.includedSilenceDetection,
+                showProfanityLane: analysisHasRunOrIsRunning && file.includedProfanityDetection,
                 duration: timelineDuration
             )
         }
