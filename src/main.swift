@@ -356,6 +356,14 @@ func formatFileSize(_ bytes: Int64?) -> String {
     return formatter.string(fromByteCount: bytes)
 }
 
+func adaptiveContainerFill(
+    material: Material,
+    fallback: Color,
+    reduceTransparency: Bool
+) -> AnyShapeStyle {
+    reduceTransparency ? AnyShapeStyle(fallback) : AnyShapeStyle(material)
+}
+
 func parseTimecode(_ value: String) -> Double? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
@@ -1947,6 +1955,7 @@ final class WorkspaceViewModel: ObservableObject {
 
 struct SourceHeaderView: View {
     @ObservedObject var model: WorkspaceViewModel
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private func fileIcon(for url: URL) -> NSImage {
         let image = NSWorkspace.shared.icon(forFile: url.path)
@@ -1973,10 +1982,17 @@ struct SourceHeaderView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                .background(
+                    adaptiveContainerFill(
+                        material: .thinMaterial,
+                        fallback: Color(nsColor: .controlBackgroundColor),
+                        reduceTransparency: reduceTransparency
+                    ),
+                    in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                        .stroke(Color.primary.opacity(0.10), lineWidth: 0.6)
+                        .stroke(Color.primary.opacity(0.06), lineWidth: 0.45)
                 )
                 .help(sourceURL.path)
                 .onDrag {
@@ -1994,10 +2010,17 @@ struct SourceHeaderView: View {
             }
         }
         .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+        .background(
+            adaptiveContainerFill(
+                material: .regularMaterial,
+                fallback: Color(nsColor: .windowBackgroundColor),
+                reduceTransparency: reduceTransparency
+            ),
+            in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
-                .stroke(Color.primary.opacity(0.10), lineWidth: 0.7)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.06), radius: 4, y: 1)
     }
@@ -2006,6 +2029,7 @@ struct SourceHeaderView: View {
 struct ToolContentView: View {
     @ObservedObject var model: WorkspaceViewModel
     let isCompactLayout: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         TabView(selection: $model.selectedTool) {
@@ -2013,6 +2037,7 @@ struct ToolContentView: View {
                 ClipToolView(model: model, isCompactLayout: isCompactLayout)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(10)
             .scrollIndicators(.automatic)
             .tabItem { Text(WorkspaceTool.clip.rawValue) }
             .tag(WorkspaceTool.clip)
@@ -2021,6 +2046,7 @@ struct ToolContentView: View {
                 AnalyzeToolView(model: model, isCompactLayout: isCompactLayout)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(10)
             .scrollIndicators(.automatic)
             .tabItem { Text(WorkspaceTool.analyze.rawValue) }
             .tag(WorkspaceTool.analyze)
@@ -2029,6 +2055,7 @@ struct ToolContentView: View {
                 ConvertToolView(model: model, isCompactLayout: isCompactLayout)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(10)
             .scrollIndicators(.automatic)
             .tabItem { Text(WorkspaceTool.convert.rawValue) }
             .tag(WorkspaceTool.convert)
@@ -2042,16 +2069,30 @@ struct ToolContentView: View {
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(10)
             .scrollIndicators(.automatic)
             .tabItem { Text(WorkspaceTool.inspect.rawValue) }
             .tag(WorkspaceTool.inspect)
         }
+        .background(
+            adaptiveContainerFill(
+                material: .regularMaterial,
+                fallback: Color(nsColor: .windowBackgroundColor),
+                reduceTransparency: reduceTransparency
+            ),
+            in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+                .stroke(Color.primary.opacity(0.05), lineWidth: 0.5)
+        )
     }
 }
 
 struct AnalyzeToolView: View {
     @ObservedObject var model: WorkspaceViewModel
     let isCompactLayout: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -2082,89 +2123,114 @@ struct AnalyzeToolView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if let analysis = model.analysis {
-                    DetailView(file: analysis, isCompactLayout: isCompactLayout, model: model)
-                } else {
-                    Text("Ready to analyze")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Group {
+                    if let analysis = model.analysis {
+                        DetailView(file: analysis, isCompactLayout: isCompactLayout, model: model)
+                    } else {
+                        Text("Ready to analyze")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
             } else {
                 EmptyToolView(title: "Analyze", subtitle: "Choose a video and run black-frame analysis.")
             }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.sourceURL != nil)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.analysis?.summary ?? "")
     }
 }
 
 struct ConvertToolView: View {
     @ObservedObject var model: WorkspaceViewModel
     let isCompactLayout: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if model.sourceURL != nil {
-                GroupBox("Audio Export") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Picker("Format", selection: $model.selectedAudioFormat) {
-                                ForEach(AudioFormat.allCases) { format in
-                                    Text(format.rawValue).tag(format)
+                Group {
+                    GroupBox("Audio Export") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Picker("Format", selection: $model.selectedAudioFormat) {
+                                    ForEach(AudioFormat.allCases) { format in
+                                        Text(format.rawValue).tag(format)
+                                    }
                                 }
+                                .pickerStyle(.segmented)
+                                .controlSize(.small)
+
+                                HStack {
+                                    Text("Bitrate (MP3)")
+                                    Slider(value: Binding(
+                                        get: { Double(model.audioBitrateKbps) },
+                                        set: { model.audioBitrateKbps = Int($0.rounded()) }
+                                    ), in: 96...320, step: 32)
+                                    .controlSize(.small)
+                                    Text("\(model.audioBitrateKbps) kbps")
+                                        .font(.caption.monospacedDigit())
+                                        .frame(width: 90, alignment: .trailing)
+                                }
+
+                                Text("M4A uses native AVFoundation export. MP3 uses ffmpeg and defaults to 128 kbps.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            .pickerStyle(.segmented)
-                            .controlSize(.small)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                            Divider()
 
                             HStack {
-                                Text("Bitrate (MP3)")
-                                Slider(value: Binding(
-                                    get: { Double(model.audioBitrateKbps) },
-                                    set: { model.audioBitrateKbps = Int($0.rounded()) }
-                                ), in: 96...320, step: 32)
-                                .controlSize(.small)
-                                Text("\(model.audioBitrateKbps) kbps")
-                                    .font(.caption.monospacedDigit())
-                                    .frame(width: 90, alignment: .trailing)
+                                Spacer()
+                                Button {
+                                    model.startExport()
+                                } label: {
+                                    Label(model.isExporting ? "Exporting…" : "Export Audio", systemImage: "arrow.down.doc")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!model.canExport)
                             }
-
-                            Text("M4A uses native AVFoundation export. MP3 uses ffmpeg and defaults to 128 kbps.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                        Divider()
-
-                        HStack {
-                            Spacer()
-                            Button {
-                                model.startExport()
-                            } label: {
-                                Label(model.isExporting ? "Exporting…" : "Export Audio", systemImage: "arrow.down.doc")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!model.canExport)
-                        }
+                        .padding(10)
+                        .background(
+                            adaptiveContainerFill(
+                                material: .thinMaterial,
+                                fallback: Color(nsColor: .controlBackgroundColor),
+                                reduceTransparency: reduceTransparency
+                            ),
+                            in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+                        )
                     }
-                    .padding(6)
-                }
 
-                if let source = model.sourceURL {
-                    Text("Source: \(source.path)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    if let source = model.sourceURL {
+                        Text("Source: \(source.path)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
+                .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
             } else {
                 EmptyToolView(title: "Convert", subtitle: "Choose a source video to enable audio export.")
             }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.sourceURL != nil)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isExporting)
     }
 }
 
 struct ClipToolView: View {
     @ObservedObject var model: WorkspaceViewModel
     let isCompactLayout: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     @State private var player = AVPlayer()
     @State private var playheadSeconds: Double = 0
@@ -2518,7 +2584,19 @@ struct ClipToolView: View {
                             .foregroundStyle(.secondary)
                         }
                     }
-                    .padding(6)
+                    .padding(10)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+                    )
                 }
 
                 GroupBox("Selection") {
@@ -2651,7 +2729,19 @@ struct ClipToolView: View {
                             }
                         }
                     }
-                    .padding(6)
+                    .padding(10)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+                    )
                     .onHover { hovering in
                         isTimelineHovered = hovering
                     }
@@ -2838,7 +2928,7 @@ struct ClipToolView: View {
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                .stroke(Color.primary.opacity(0.08), lineWidth: 0.6)
+                                .stroke(Color.primary.opacity(0.05), lineWidth: 0.45)
                         )
 
                         Divider()
@@ -2856,7 +2946,19 @@ struct ClipToolView: View {
                             .disabled(!model.canExportClip)
                         }
                     }
-                    .padding(6)
+                    .padding(10)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+                    )
                 }
             } else {
                 EmptyToolView(title: "Clip", subtitle: "Choose a source video to create a new clip from a selected range.")
@@ -3028,7 +3130,7 @@ struct WaveformView: View {
             .clipShape(RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .stroke(isHovered ? Color.accentColor.opacity(0.35) : Color.gray.opacity(0.25), lineWidth: 1)
+                    .stroke(isHovered ? Color.accentColor.opacity(0.28) : Color.gray.opacity(0.16), lineWidth: 0.8)
             )
             .contentShape(Rectangle())
             .onHover { hovering in
@@ -3322,6 +3424,7 @@ struct InspectToolView: View {
     let analysis: FileAnalysis?
     let sourceInfo: SourceMediaInfo?
     let isCompactLayout: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private func fileIcon(for url: URL) -> NSImage {
         let icon = NSWorkspace.shared.icon(forFile: url.path)
@@ -3368,7 +3471,15 @@ struct InspectToolView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
+                    .padding(10)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
                 }
 
                 GroupBox("Analysis Snapshot") {
@@ -3378,7 +3489,15 @@ struct InspectToolView: View {
                     }
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
+                    .padding(10)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
                 }
 
                 GroupBox("Video") {
@@ -3392,7 +3511,15 @@ struct InspectToolView: View {
                     }
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
+                    .padding(10)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
                 }
 
                 GroupBox("Audio") {
@@ -3404,7 +3531,15 @@ struct InspectToolView: View {
                     }
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
+                    .padding(10)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
                 }
 
                 GroupBox("Container") {
@@ -3417,6 +3552,14 @@ struct InspectToolView: View {
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
                 }
             } else {
                 EmptyToolView(title: "Inspect", subtitle: "Choose a source video to inspect metadata and results.")
@@ -3431,6 +3574,8 @@ struct InspectToolView: View {
 
 struct StatusFooterStripView: View {
     @ObservedObject var model: WorkspaceViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private var stateColor: Color {
         switch model.lastActivityState {
@@ -3449,7 +3594,7 @@ struct StatusFooterStripView: View {
 
     @ViewBuilder
     private var stateIconView: some View {
-        if #available(macOS 14.0, *) {
+        if #available(macOS 14.0, *), !reduceMotion {
             Image(systemName: model.lastResultIconName)
                 .symbolRenderingMode(.hierarchical)
                 .symbolEffect(.pulse, options: model.isActivityRunning ? .repeating : .default, value: model.isActivityRunning)
@@ -3482,28 +3627,40 @@ struct StatusFooterStripView: View {
                     .opacity(model.activityProgress == nil ? 0.35 : 1.0)
             }
 
-            if model.isActivityRunning {
-                Button(role: .destructive) {
-                    model.stopCurrentActivity()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
+            Group {
+                if model.isActivityRunning {
+                    Button(role: .destructive) {
+                        model.stopCurrentActivity()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                } else if model.outputURL != nil {
+                    Button("Show in Finder") {
+                        model.revealOutput()
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
-            } else if model.outputURL != nil {
-                Button("Show in Finder") {
-                    model.revealOutput()
-                }
-                .buttonStyle(.bordered)
             }
+            .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+        .background(
+            adaptiveContainerFill(
+                material: .regularMaterial,
+                fallback: Color(nsColor: .windowBackgroundColor),
+                reduceTransparency: reduceTransparency
+            ),
+            in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.7)
+                .stroke(Color.primary.opacity(0.05), lineWidth: 0.5)
         )
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.lastActivityState)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isActivityRunning)
     }
 }
 
@@ -3718,7 +3875,7 @@ struct DetailView: View {
                                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                            .stroke(Color.primary.opacity(0.07), lineWidth: 0.5)
+                                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
                                     )
                                     .contentShape(Rectangle())
                                     .onTapGesture(count: 2) {
