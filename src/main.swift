@@ -356,6 +356,17 @@ func formatFileSize(_ bytes: Int64?) -> String {
     return formatter.string(fromByteCount: bytes)
 }
 
+func estimateFileSizeBytes(
+    durationSeconds: Double,
+    totalBitrateKbps: Double,
+    overheadFactor: Double = 1.02
+) -> Int64? {
+    guard durationSeconds > 0, totalBitrateKbps > 0 else { return nil }
+    let bytes = ((durationSeconds * totalBitrateKbps * 1000.0) / 8.0) * overheadFactor
+    guard bytes.isFinite, bytes > 0 else { return nil }
+    return Int64(bytes.rounded())
+}
+
 func adaptiveContainerFill(
     material: Material,
     fallback: Color,
@@ -902,6 +913,32 @@ final class WorkspaceViewModel: ObservableObject {
 
     var clipDurationSeconds: Double {
         max(0, clipEndSeconds - clipStartSeconds)
+    }
+
+    var estimatedAudioExportSizeBytes: Int64? {
+        guard selectedAudioFormat == .mp3 else { return nil }
+        return estimateFileSizeBytes(
+            durationSeconds: sourceDurationSeconds,
+            totalBitrateKbps: Double(audioBitrateKbps)
+        )
+    }
+
+    var estimatedClipAudioOnlySizeBytes: Int64? {
+        guard clipAudioOnlyFormat != .wav else { return nil }
+        return estimateFileSizeBytes(
+            durationSeconds: clipDurationSeconds,
+            totalBitrateKbps: Double(clipAudioBitrateKbps)
+        )
+    }
+
+    var estimatedClipAdvancedSizeBytes: Int64? {
+        guard clipEncodingMode == .compressed else { return nil }
+        let hasAudioTrack = (sourceInfo?.channels ?? 0) > 0 || (sourceInfo?.audioBitrateBps ?? 0) > 0
+        let totalBitrateKbps = (clipVideoBitrateMbps * 1000.0) + (hasAudioTrack ? Double(clipAudioBitrateKbps) : 0)
+        return estimateFileSizeBytes(
+            durationSeconds: clipDurationSeconds,
+            totalBitrateKbps: totalBitrateKbps
+        )
     }
 
     var activityProgress: Double? {
@@ -2185,7 +2222,17 @@ struct ConvertToolView: View {
                             Divider()
 
                             HStack {
-                                Spacer()
+                                if model.selectedAudioFormat == .mp3 {
+                                    HStack(spacing: 8) {
+                                        Label("Estimated output size", systemImage: "ruler")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                        Text(formatFileSize(model.estimatedAudioExportSizeBytes))
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer(minLength: 8)
                                 Button {
                                     model.startExport()
                                 } label: {
@@ -2934,7 +2981,26 @@ struct ClipToolView: View {
                         Divider()
 
                         HStack {
-                            Spacer()
+                            if model.clipEncodingMode == .audioOnly, model.clipAudioOnlyFormat != .wav {
+                                HStack(spacing: 8) {
+                                    Label("Estimated output size", systemImage: "ruler")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                    Text(formatFileSize(model.estimatedClipAudioOnlySizeBytes))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else if model.clipEncodingMode == .compressed {
+                                HStack(spacing: 8) {
+                                    Label("Estimated output size", systemImage: "ruler")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                    Text(formatFileSize(model.estimatedClipAdvancedSizeBytes))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer(minLength: 8)
                             Button {
                                 model.commitClipStartText()
                                 model.commitClipEndText()
