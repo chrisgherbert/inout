@@ -2050,34 +2050,40 @@ struct AnalyzeToolView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Button {
-                    model.startAnalysis()
-                } label: {
-                    Label(model.isAnalyzing ? "Analyzing…" : "Run Black Frame Analysis", systemImage: "waveform.path.ecg")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!model.canAnalyze)
-
-                if model.isAnalyzing {
+            if model.sourceURL != nil {
+                HStack(spacing: 8) {
                     Button {
-                        model.stopAnalysis()
+                        model.startAnalysis()
                     } label: {
-                        Label("Stop", systemImage: "stop.fill")
+                        Label(model.isAnalyzing ? "Analyzing…" : "Run Black Frame Analysis", systemImage: "waveform.path.ecg")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canAnalyze)
+
+                    if model.isAnalyzing {
+                        Button {
+                            model.stopAnalysis()
+                        } label: {
+                            Label("Stop", systemImage: "stop.fill")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                 }
-            }
 
-            if let analysis = model.analysis {
-                Text(analysis.summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                if let analysis = model.analysis {
+                    Text(analysis.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-            if let analysis = model.analysis {
-                DetailView(file: analysis, isCompactLayout: isCompactLayout, model: model)
+                if let analysis = model.analysis {
+                    DetailView(file: analysis, isCompactLayout: isCompactLayout, model: model)
+                } else {
+                    Text("Ready to analyze")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 EmptyToolView(title: "Analyze", subtitle: "Choose a video and run black-frame analysis.")
             }
@@ -2091,57 +2097,59 @@ struct ConvertToolView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GroupBox("Audio Export") {
-                VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Picker("Format", selection: $model.selectedAudioFormat) {
-                            ForEach(AudioFormat.allCases) { format in
-                                Text(format.rawValue).tag(format)
+            if model.sourceURL != nil {
+                GroupBox("Audio Export") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Picker("Format", selection: $model.selectedAudioFormat) {
+                                ForEach(AudioFormat.allCases) { format in
+                                    Text(format.rawValue).tag(format)
+                                }
                             }
+                            .pickerStyle(.segmented)
+                            .controlSize(.small)
+
+                            HStack {
+                                Text("Bitrate (MP3)")
+                                Slider(value: Binding(
+                                    get: { Double(model.audioBitrateKbps) },
+                                    set: { model.audioBitrateKbps = Int($0.rounded()) }
+                                ), in: 96...320, step: 32)
+                                .controlSize(.small)
+                                Text("\(model.audioBitrateKbps) kbps")
+                                    .font(.caption.monospacedDigit())
+                                    .frame(width: 90, alignment: .trailing)
+                            }
+
+                            Text("M4A uses native AVFoundation export. MP3 uses ffmpeg and defaults to 128 kbps.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        .pickerStyle(.segmented)
-                        .controlSize(.small)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        Divider()
 
                         HStack {
-                            Text("Bitrate (MP3)")
-                            Slider(value: Binding(
-                                get: { Double(model.audioBitrateKbps) },
-                                set: { model.audioBitrateKbps = Int($0.rounded()) }
-                            ), in: 96...320, step: 32)
-                            .controlSize(.small)
-                            Text("\(model.audioBitrateKbps) kbps")
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 90, alignment: .trailing)
+                            Spacer()
+                            Button {
+                                model.startExport()
+                            } label: {
+                                Label(model.isExporting ? "Exporting…" : "Export Audio", systemImage: "arrow.down.doc")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.canExport)
                         }
-
-                        Text("M4A uses native AVFoundation export. MP3 uses ffmpeg and defaults to 128 kbps.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                    Divider()
-
-                    HStack {
-                        Spacer()
-                        Button {
-                            model.startExport()
-                        } label: {
-                            Label(model.isExporting ? "Exporting…" : "Export Audio", systemImage: "arrow.down.doc")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!model.canExport)
-                    }
+                    .padding(6)
                 }
-                .padding(6)
-            }
 
-            if let source = model.sourceURL {
-                Text("Source: \(source.path)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                if let source = model.sourceURL {
+                    Text("Source: \(source.path)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             } else {
                 EmptyToolView(title: "Convert", subtitle: "Choose a source video to enable audio export.")
             }
