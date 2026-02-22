@@ -6756,35 +6756,35 @@ struct CheckBlackFramesApp: App {
                 .keyboardShortcut("x", modifiers: [])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
 
-                Button("Jump to Clip Start") {
+                Button {
                     NotificationCenter.default.post(name: .clipJumpToStart, object: nil)
+                } label: {
+                    Label("Jump to Clip Start", systemImage: "backward.end.fill")
                 }
                 .keyboardShortcut(.upArrow, modifiers: [])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
 
-                Button("Jump to Clip End") {
+                Button {
                     NotificationCenter.default.post(name: .clipJumpToEnd, object: nil)
+                } label: {
+                    Label("Jump to Clip End", systemImage: "forward.end.fill")
                 }
                 .keyboardShortcut(.downArrow, modifiers: [])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
-
-                Divider()
-
-                Button("Capture Frame…") {
-                    NotificationCenter.default.post(name: .clipCaptureFrame, object: nil)
-                }
-                .keyboardShortcut("s", modifiers: [.command, .option])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil || !model.hasVideoTrack || model.isAnalyzing || model.isExporting)
             }
 
             CommandGroup(replacing: .newItem) {
-                Button("Choose Media…") {
+                Button {
                     model.chooseSource()
+                } label: {
+                    Label("Choose Media…", systemImage: "video.badge.plus")
                 }
                 .keyboardShortcut("o", modifiers: [.command])
 
-                Button("Close Media") {
+                Button {
                     model.clearSource()
+                } label: {
+                    Label("Close Media", systemImage: "xmark.circle")
                 }
                 .disabled(model.sourceURL == nil || model.isAnalyzing || model.isExporting)
             }
@@ -6792,23 +6792,39 @@ struct CheckBlackFramesApp: App {
             CommandGroup(after: .saveItem) {
                 Divider()
 
-                Button("Export Audio…") {
+                Button {
                     model.startExport()
+                } label: {
+                    Label("Export Audio…", systemImage: "arrow.down.doc")
                 }
                 .keyboardShortcut("e", modifiers: [.command, .option])
                 .disabled(!model.canExport)
 
-                Button("Export Clip…") {
+                Button {
                     model.startClipExport()
+                } label: {
+                    Label("Export Clip…", systemImage: "film.stack")
                 }
                 .keyboardShortcut("e", modifiers: [.command])
                 .disabled(!model.canExportClip)
 
-                Button("Quick Export Clip") {
+                Button {
                     model.startClipExport(skipSaveDialog: true)
+                } label: {
+                    Label("Quick Export Clip", systemImage: "film.stack.fill")
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(!model.canExportClip)
+
+                Divider()
+
+                Button {
+                    NotificationCenter.default.post(name: .clipCaptureFrame, object: nil)
+                } label: {
+                    Label("Capture Frame…", systemImage: "camera")
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil || !model.hasVideoTrack || model.isAnalyzing || model.isExporting)
             }
 
             CommandMenu("Tool") {
@@ -6823,14 +6839,18 @@ struct CheckBlackFramesApp: App {
             }
 
             CommandMenu("Analyze") {
-                Button("Run Analysis") {
+                Button {
                     model.startAnalysis()
+                } label: {
+                    Label("Run Analysis", systemImage: "waveform.path.ecg")
                 }
                 .keyboardShortcut("r", modifiers: [.command])
                 .disabled(!model.canAnalyze)
 
-                Button("Stop Analysis") {
+                Button {
                     model.stopCurrentActivity()
+                } label: {
+                    Label("Stop Analysis", systemImage: "stop.fill")
                 }
                 .keyboardShortcut(".", modifiers: [.command])
                 .disabled(!model.isAnalyzing && !model.isExporting)
