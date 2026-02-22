@@ -4138,6 +4138,7 @@ struct ClipToolView: View {
     @State private var suppressVisualPlayheadSyncUntil: Date = .distantPast
     @State private var playheadJumpAnimationToken: Int = 0
     @State private var playheadJumpFromSeconds: Double = 0
+    private let allowedTimelineZoomLevels: [Double] = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 160, 192, 256]
 
     private let timer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
     @State private var lastInteractiveSeekSeconds: Double = -1
@@ -4153,6 +4154,31 @@ struct ClipToolView: View {
         playheadVisualSeconds = value
         playheadJumpAnimationToken &+= 1
         suppressVisualPlayheadSyncUntil = Date().addingTimeInterval(0.22)
+    }
+
+    private func nearestZoomIndex(for value: Double) -> Int {
+        var bestIndex = 0
+        var bestDistance = Double.greatestFiniteMagnitude
+        for (index, level) in allowedTimelineZoomLevels.enumerated() {
+            let distance = abs(level - value)
+            if distance < bestDistance {
+                bestDistance = distance
+                bestIndex = index
+            }
+        }
+        return bestIndex
+    }
+
+    private func setTimelineZoomIndex(_ index: Int) {
+        let clamped = min(max(0, index), allowedTimelineZoomLevels.count - 1)
+        let next = allowedTimelineZoomLevels[clamped]
+        if timelineZoom != next {
+            timelineZoom = next
+        }
+    }
+
+    private var timelineZoomIndex: Int {
+        nearestZoomIndex(for: timelineZoom)
     }
 
     private var fastClipFormats: [ClipFormat] { [.mp4, .mov] }
@@ -4260,7 +4286,13 @@ struct ClipToolView: View {
         guard focusViewport else { return }
 
         if timelineZoom > 1 {
-            viewportStartSeconds = clampedViewportStart(clamped - (zoomedWindowDuration / 2.0))
+            let currentStart = clampedViewportStart(viewportStartSeconds)
+            let currentEnd = currentStart + zoomedWindowDuration
+            if clamped < currentStart || clamped > currentEnd {
+                viewportStartSeconds = clampedViewportStart(clamped - (zoomedWindowDuration / 2.0))
+            } else {
+                viewportStartSeconds = currentStart
+            }
             isViewportManuallyControlled = true
         } else {
             updateViewportForPlayhead(shouldFollow: true)
@@ -4292,8 +4324,8 @@ struct ClipToolView: View {
 
         guard let target else { return }
         let didChange = abs(target - playheadSeconds) > (1.0 / 240.0)
-        // Keep viewport stable for marker navigation so playhead travel is visible.
-        seekPlayerAndFocusViewport(to: target, focusViewport: false)
+        // Keep viewport stable unless target is offscreen; then reveal it.
+        seekPlayerAndFocusViewport(to: target, focusViewport: true)
         if didChange {
             springAnimateVisualPlayhead(to: target)
         } else {
@@ -4364,16 +4396,16 @@ struct ClipToolView: View {
         isViewportManuallyControlled = true
     }
 
-    private func adjustTimelineZoom(by delta: Double) {
-        let newZoom = min(100, max(1, timelineZoom + delta))
-        guard newZoom != timelineZoom else { return }
-        timelineZoom = newZoom
+    private func adjustTimelineZoom(by deltaSteps: Int) {
+        let nextIndex = timelineZoomIndex + deltaSteps
+        guard nextIndex >= 0, nextIndex < allowedTimelineZoomLevels.count else { return }
+        setTimelineZoomIndex(nextIndex)
         updateViewportForPlayhead(shouldFollow: false)
     }
 
     private func resetTimelineZoom() {
-        guard timelineZoom != 1 else { return }
-        timelineZoom = 1
+        guard timelineZoom != allowedTimelineZoomLevels[0] else { return }
+        setTimelineZoomIndex(0)
         updateViewportForPlayhead(shouldFollow: false)
     }
 
@@ -4615,12 +4647,20 @@ struct ClipToolView: View {
                     Text("Zoom")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Slider(value: $timelineZoom, in: 1...100, step: 1)
-                    Text("\(Int(timelineZoom.rounded()))x")
+                    Slider(
+                        value: Binding(
+                            get: { Double(timelineZoomIndex) },
+                            set: { setTimelineZoomIndex(Int($0.rounded())) }
+                        ),
+                        in: 0...Double(allowedTimelineZoomLevels.count - 1),
+                        step: 1
+                    )
+                    let displayZoom = allowedTimelineZoomLevels[timelineZoomIndex]
+                    Text("\(Int(displayZoom.rounded()))x")
                         .font(.caption.monospacedDigit())
                         .frame(width: 48, alignment: .trailing)
                     Button("Fit") {
-                        timelineZoom = 1
+                        setTimelineZoomIndex(0)
                     }
                     .buttonStyle(.bordered)
                 }
@@ -4674,6 +4714,7 @@ struct ClipToolView: View {
                     WaveformView(
                         sourceSessionID: model.sourceSessionID,
                         samples: waveformSamples,
+                        zoomLevel: timelineZoom,
                         startSeconds: model.clipStartSeconds,
                         visualPlayheadSeconds: playheadVisualSeconds,
                         playheadJumpFromSeconds: playheadJumpFromSeconds,
@@ -5243,6 +5284,7 @@ struct WaveformView: View {
     @Environment(\.colorScheme) private var colorScheme
     let sourceSessionID: UUID
     let samples: [Double]
+    let zoomLevel: Double
     let startSeconds: Double
     let visualPlayheadSeconds: Double
     let playheadJumpFromSeconds: Double
@@ -5413,6 +5455,7 @@ struct WaveformView: View {
                 WaveformRasterLayerView(
                     sourceSessionID: sourceSessionID,
                     samples: samples,
+                    zoomLevel: zoomLevel,
                     totalDurationSeconds: totalDurationSeconds,
                     visibleStartSeconds: visibleStartSeconds,
                     visibleEndSeconds: visibleEndSeconds,
@@ -5672,13 +5715,14 @@ private final class WaveformRasterHostView: NSView {
 }
 
 private final class WaveformRasterCoordinator {
+    private let zoomRenderBuckets: [Double] = [1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256]
     private(set) var cachedSessionID: UUID?
-    private(set) var cachedSampleCount: Int = -1
-    private(set) var cachedMipImages: [CGImage] = []
+    private(set) var cachedSamples: [Double] = []
+    private(set) var cachedBucketImages: [Double: CGImage] = [:]
     private(set) var cachedIsDarkAppearance = false
     var lastAppliedContentsRect: CGRect = .null
     var lastAppliedBounds: CGRect = .zero
-    var lastAppliedMipLevelIndex: Int = -1
+    var lastAppliedZoomBucket: Double = -1
     var lastPlayheadJumpAnimationToken: Int = -1
     var lastPlayheadCaptureFlashing: Bool = false
     var lastHighlightedMarkerID: UUID?
@@ -5686,71 +5730,65 @@ private final class WaveformRasterCoordinator {
     @discardableResult
     func rebuildImageIfNeeded(sessionID: UUID, samples: [Double], isDarkAppearance: Bool) -> Bool {
         let needsRebuild =
-            cachedMipImages.isEmpty ||
+            cachedBucketImages.isEmpty ||
             cachedSessionID != sessionID ||
-            cachedSampleCount != samples.count ||
+            cachedSamples.count != samples.count ||
             cachedIsDarkAppearance != isDarkAppearance
 
         guard needsRebuild else { return false }
 
         cachedSessionID = sessionID
-        cachedSampleCount = samples.count
+        cachedSamples = samples
         cachedIsDarkAppearance = isDarkAppearance
-        cachedMipImages = makeWaveformMipImages(samples: samples, isDarkAppearance: isDarkAppearance)
+        cachedBucketImages = [:]
         lastAppliedContentsRect = .null
         lastAppliedBounds = .zero
-        lastAppliedMipLevelIndex = -1
+        lastAppliedZoomBucket = -1
         return true
     }
 
-    private func makeWaveformMipImages(samples: [Double], isDarkAppearance: Bool) -> [CGImage] {
-        guard !samples.isEmpty else { return [] }
-        let baseWidth = min(65_536, max(16_384, samples.count * 2))
-        let height = 256
-
-        let n = max(samples.count - 1, 1)
-        var basePeaks = Array(repeating: 0.0, count: baseWidth)
-        @inline(__always)
-        func sampleAt(_ idx: Int) -> Double {
-            let clamped = min(max(0, idx), n)
-            return samples[clamped]
+    func image(for zoomBucket: Double) -> CGImage? {
+        if let cached = cachedBucketImages[zoomBucket] {
+            return cached
         }
-
-        for x in 0..<baseWidth {
-            let ratio = (Double(x) + 0.5) / Double(baseWidth)
-            let exactIndex = ratio * Double(n)
-            let centerIndex = Int(exactIndex.rounded())
-            basePeaks[x] = max(sampleAt(centerIndex - 1), max(sampleAt(centerIndex), sampleAt(centerIndex + 1)))
+        guard !cachedSamples.isEmpty else { return nil }
+        let width = Int(min(98_304, max(4_096, (1_024.0 * zoomBucket).rounded())))
+        let peaks = makePeaks(samples: cachedSamples, targetWidth: width)
+        guard let image = makeWaveformImage(
+            peaks: peaks,
+            height: 96,
+            isDarkAppearance: cachedIsDarkAppearance,
+            useSkippedColumns: zoomBucket >= 32
+        ) else {
+            return nil
         }
-
-        var levels: [[Double]] = [basePeaks]
-        let maxLevels = 6
-        while levels.count < maxLevels {
-            guard let prev = levels.last, prev.count > 1024 else { break }
-            let nextCount = max(1, prev.count / 2)
-            var next = Array(repeating: 0.0, count: nextCount)
-            var i = 0
-            while i < nextCount {
-                let a = prev[min(prev.count - 1, i * 2)]
-                let b = prev[min(prev.count - 1, (i * 2) + 1)]
-                // Preserve transients while downsampling.
-                next[i] = max(a, b)
-                i += 1
-            }
-            levels.append(next)
-        }
-
-        var images: [CGImage] = []
-        images.reserveCapacity(levels.count)
-        for peaks in levels {
-            if let image = makeWaveformImage(peaks: peaks, height: height, isDarkAppearance: isDarkAppearance) {
-                images.append(image)
-            }
-        }
-        return images
+        cachedBucketImages[zoomBucket] = image
+        return image
     }
 
-    private func makeWaveformImage(peaks: [Double], height: Int, isDarkAppearance: Bool) -> CGImage? {
+    private func makePeaks(samples: [Double], targetWidth: Int) -> [Double] {
+        let width = max(1, targetWidth)
+        let n = max(samples.count - 1, 1)
+        var peaks = Array(repeating: 0.0, count: width)
+        for x in 0..<width {
+            let startRatio = Double(x) / Double(width)
+            let endRatio = Double(x + 1) / Double(width)
+            var startIndex = Int((startRatio * Double(n)).rounded(.down))
+            var endIndex = Int((endRatio * Double(n)).rounded(.up))
+            startIndex = min(max(0, startIndex), n)
+            endIndex = min(max(startIndex, endIndex), n)
+            var peak = 0.0
+            var i = startIndex
+            while i <= endIndex {
+                peak = max(peak, samples[i])
+                i += 1
+            }
+            peaks[x] = peak
+        }
+        return peaks
+    }
+
+    private func makeWaveformImage(peaks: [Double], height: Int, isDarkAppearance: Bool, useSkippedColumns: Bool) -> CGImage? {
         guard !peaks.isEmpty else { return nil }
 
         let width = peaks.count
@@ -5783,42 +5821,41 @@ private final class WaveformRasterCoordinator {
         }()
         context.setFillColor(barColor.cgColor)
 
-        let baselineY = 4.0
-        let maxBarHeight = max(1.0, CGFloat(height) - 8.0)
+        let baselineY = 2.0
+        let maxBarHeight = max(1.0, CGFloat(height) - 4.0)
 
         for x in 0..<width {
+            if useSkippedColumns && x % 2 != 0 {
+                continue
+            }
             let peak = peaks[x]
             let normalized = max(0.02, min(1.0, peak))
             let amp = CGFloat(normalized) * maxBarHeight
-            // Alternate columns for clearer visual separation and crisper perceived detail.
-            if x % 2 == 0 {
-                let rect = CGRect(x: CGFloat(x), y: baselineY, width: 1, height: amp)
-                context.fill(rect)
-            }
+            let rect = CGRect(x: CGFloat(x), y: baselineY, width: 1, height: amp)
+            context.fill(rect)
         }
 
         return context.makeImage()
     }
 
-    func bestMipLevelIndex(for visibleNormWidth: Double, targetPixelWidth: Int) -> Int {
-        guard !cachedMipImages.isEmpty else { return 0 }
-        let clampedNorm = min(max(visibleNormWidth, 0.000001), 1.0)
-        let displayPixels = max(1, targetPixelWidth)
-        let baseSourcePixels = max(1.0, Double(cachedMipImages[0].width) * clampedNorm)
-
-        var level = 0
-        var sourcePixels = baseSourcePixels
-        while level + 1 < cachedMipImages.count && sourcePixels > Double(displayPixels) * 2.2 {
-            level += 1
-            sourcePixels *= 0.5
+    func bestZoomRenderBucket(for zoomLevel: Double) -> Double {
+        var bestBucket = zoomRenderBuckets[0]
+        var bestDistance = Double.greatestFiniteMagnitude
+        for bucket in zoomRenderBuckets {
+            let distance = abs(bucket - zoomLevel)
+            if distance < bestDistance {
+                bestDistance = distance
+                bestBucket = bucket
+            }
         }
-        return level
+        return bestBucket
     }
 }
 
 private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let sourceSessionID: UUID
     let samples: [Double]
+    let zoomLevel: Double
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
@@ -5833,6 +5870,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     static func == (lhs: WaveformRasterLayerView, rhs: WaveformRasterLayerView) -> Bool {
         lhs.sourceSessionID == rhs.sourceSessionID &&
         lhs.samples.count == rhs.samples.count &&
+        abs(lhs.zoomLevel - rhs.zoomLevel) < 0.0001 &&
         abs(lhs.totalDurationSeconds - rhs.totalDurationSeconds) < 0.0001 &&
         abs(lhs.visibleStartSeconds - rhs.visibleStartSeconds) < 0.0001 &&
         abs(lhs.visibleEndSeconds - rhs.visibleEndSeconds) < 0.0001 &&
@@ -5860,7 +5898,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             isDarkAppearance: isDarkAppearance
         )
 
-        guard !context.coordinator.cachedMipImages.isEmpty else {
+        guard !context.coordinator.cachedSamples.isEmpty else {
             nsView.waveformLayer.contents = nil
             return
         }
@@ -5868,22 +5906,27 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         let duration = max(0.0001, totalDurationSeconds)
         let rawStartNorm = min(max(0, visibleStartSeconds / duration), 1.0)
         let rawEndNorm = min(max(rawStartNorm + 0.000001, visibleEndSeconds / duration), 1.0)
-        let visibleNormWidth = max(0.000001, rawEndNorm - rawStartNorm)
-        let backingScale = nsView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-        let targetPixelWidth = Int((max(1.0, nsView.bounds.width) * backingScale).rounded())
-        let levelIndex = context.coordinator.bestMipLevelIndex(for: visibleNormWidth, targetPixelWidth: targetPixelWidth)
-        let image = context.coordinator.cachedMipImages[levelIndex]
+        let zoomBucket = context.coordinator.bestZoomRenderBucket(for: zoomLevel)
+        let image = context.coordinator.image(for: zoomBucket)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        if didRebuildImage || context.coordinator.lastAppliedMipLevelIndex != levelIndex || nsView.waveformLayer.contents == nil {
+        if let image,
+           (didRebuildImage || context.coordinator.lastAppliedZoomBucket != zoomBucket || nsView.waveformLayer.contents == nil) {
             nsView.waveformLayer.contents = image
-            context.coordinator.lastAppliedMipLevelIndex = levelIndex
+            context.coordinator.lastAppliedZoomBucket = zoomBucket
+            nsView.waveformLayer.magnificationFilter = zoomBucket >= 32 ? .nearest : .linear
+            nsView.waveformLayer.minificationFilter = .linear
         }
 
         // Snap to source-image pixel boundaries to avoid shimmer/distortion when overlays animate.
-        let imageWidth = max(1, image.width)
+        guard let activeImage = image else {
+            nsView.waveformLayer.contents = nil
+            CATransaction.commit()
+            return
+        }
+        let imageWidth = max(1, activeImage.width)
         let startPixel = min(max(0, Int((rawStartNorm * Double(imageWidth)).rounded())), imageWidth - 1)
         let endPixel = min(max(startPixel + 1, Int((rawEndNorm * Double(imageWidth)).rounded())), imageWidth)
         let startNorm = Double(startPixel) / Double(imageWidth)
