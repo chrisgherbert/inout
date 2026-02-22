@@ -1659,6 +1659,8 @@ final class WorkspaceViewModel: ObservableObject {
 
     private var analyzeTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
+    private var captureMarkerHighlightClearTask: Task<Void, Never>?
+    private var clipBoundaryHighlightClearTask: Task<Void, Never>?
     private let cancelFlag = CancellationFlag()
     private var activeExportSession: AVAssetExportSession?
     private var activeProcess: Process?
@@ -1692,6 +1694,8 @@ final class WorkspaceViewModel: ObservableObject {
         if let willTerminateObserver {
             NotificationCenter.default.removeObserver(willTerminateObserver)
         }
+        captureMarkerHighlightClearTask?.cancel()
+        clipBoundaryHighlightClearTask?.cancel()
     }
 
     private func updateDockProgressIndicator() {
@@ -3676,7 +3680,8 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func scheduleCaptureMarkerHighlightClear(markerID: UUID) {
-        Task { @MainActor [weak self] in
+        captureMarkerHighlightClearTask?.cancel()
+        captureMarkerHighlightClearTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 420_000_000)
             guard let self, self.highlightedCaptureTimelineMarkerID == markerID else { return }
             withAnimation(.easeOut(duration: 0.18)) {
@@ -3686,7 +3691,8 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func scheduleClipBoundaryHighlightClear(_ boundary: ClipBoundaryHighlight) {
-        Task { @MainActor [weak self] in
+        clipBoundaryHighlightClearTask?.cancel()
+        clipBoundaryHighlightClearTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 420_000_000)
             guard let self, self.highlightedClipBoundary == boundary else { return }
             withAnimation(.easeOut(duration: 0.18)) {
@@ -4127,11 +4133,27 @@ struct ClipToolView: View {
     @State private var timelineInteractiveWidth: CGFloat = 1
     @State private var isMiddleMousePanning = false
     @State private var middleMousePanLastWindowX: CGFloat?
-    @State private var markerNavigationAnimationToken: Int = 0
     @State private var loadedSourcePath: String?
+    @State private var playheadVisualSeconds: Double = 0
+    @State private var suppressVisualPlayheadSyncUntil: Date = .distantPast
+    @State private var playheadJumpAnimationToken: Int = 0
+    @State private var playheadJumpFromSeconds: Double = 0
 
     private let timer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
     @State private var lastInteractiveSeekSeconds: Double = -1
+
+    private func syncVisualPlayheadImmediately(_ value: Double) {
+        playheadVisualSeconds = value
+        playheadJumpFromSeconds = value
+        suppressVisualPlayheadSyncUntil = .distantPast
+    }
+
+    private func springAnimateVisualPlayhead(to value: Double) {
+        playheadJumpFromSeconds = playheadVisualSeconds
+        playheadVisualSeconds = value
+        playheadJumpAnimationToken &+= 1
+        suppressVisualPlayheadSyncUntil = Date().addingTimeInterval(0.22)
+    }
 
     private var fastClipFormats: [ClipFormat] { [.mp4, .mov] }
     private var advancedClipFormats: [ClipFormat] { ClipFormat.allCases }
@@ -4140,6 +4162,7 @@ struct ClipToolView: View {
         guard let sourceURL = model.sourceURL else {
             player.replaceCurrentItem(with: nil)
             playheadSeconds = 0
+            playheadVisualSeconds = 0
             playerDurationSeconds = 0
             loadedSourcePath = nil
             waveformTask?.cancel()
@@ -4153,6 +4176,8 @@ struct ClipToolView: View {
             let restored = max(0, min(model.clipPlayheadSeconds, duration))
             if abs(playheadSeconds - restored) > (1.0 / 120.0) {
                 seekPlayer(to: restored)
+            } else {
+                syncVisualPlayheadImmediately(restored)
             }
             return
         }
@@ -4164,6 +4189,7 @@ struct ClipToolView: View {
         playerDurationSeconds = duration.isFinite && duration > 0 ? duration : model.sourceDurationSeconds
         let restored = max(0, min(model.clipPlayheadSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
         playheadSeconds = restored
+        syncVisualPlayheadImmediately(restored)
         viewportStartSeconds = 0
         player.seek(to: CMTime(seconds: restored, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         loadWaveform(for: sourceURL)
@@ -4172,7 +4198,8 @@ struct ClipToolView: View {
     private func loadWaveform(for url: URL) {
         waveformTask?.cancel()
 
-        let targetSampleCount = Int(min(24_000, max(4_000, model.sourceDurationSeconds * 40.0)))
+        // Keep long timelines detailed when zoomed in: higher bucket density than real-time display rate.
+        let targetSampleCount = Int(min(240_000, max(12_000, model.sourceDurationSeconds * 120.0)))
 
         if let cachedSamples = model.waveformSamplesFromCache(for: url, sampleCount: targetSampleCount), !cachedSamples.isEmpty {
             waveformSamples = cachedSamples
@@ -4199,6 +4226,7 @@ struct ClipToolView: View {
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
         model.clipPlayheadSeconds = clamped
+        syncVisualPlayheadImmediately(clamped)
         updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
     }
 
@@ -4219,14 +4247,17 @@ struct ClipToolView: View {
         )
         playheadSeconds = clamped
         model.clipPlayheadSeconds = clamped
+        syncVisualPlayheadImmediately(clamped)
         updateViewportForPlayhead(shouldFollow: false)
     }
 
-    private func seekPlayerAndFocusViewport(to time: Double) {
+    private func seekPlayerAndFocusViewport(to time: Double, focusViewport: Bool = true) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
         model.clipPlayheadSeconds = clamped
+
+        guard focusViewport else { return }
 
         if timelineZoom > 1 {
             viewportStartSeconds = clampedViewportStart(clamped - (zoomedWindowDuration / 2.0))
@@ -4260,8 +4291,14 @@ struct ClipToolView: View {
         }
 
         guard let target else { return }
-        markerNavigationAnimationToken &+= 1
-        seekPlayerAndFocusViewport(to: target)
+        let didChange = abs(target - playheadSeconds) > (1.0 / 240.0)
+        // Keep viewport stable for marker navigation so playhead travel is visible.
+        seekPlayerAndFocusViewport(to: target, focusViewport: false)
+        if didChange {
+            springAnimateVisualPlayhead(to: target)
+        } else {
+            syncVisualPlayheadImmediately(target)
+        }
         model.highlightTimelineMarker(near: target)
         model.highlightBoundaryIfNeeded(near: target, clipStart: model.clipStartSeconds, clipEnd: model.clipEndSeconds)
     }
@@ -4319,7 +4356,11 @@ struct ClipToolView: View {
         let width = max(1, timelineInteractiveWidth)
         let secondsPerPoint = zoomedWindowDuration / Double(width)
         // Natural-feeling pan: swipe left reveals later timeline content.
-        viewportStartSeconds = clampedViewportStart(viewportStartSeconds - (Double(points) * secondsPerPoint))
+        let nextStart = clampedViewportStart(viewportStartSeconds - (Double(points) * secondsPerPoint))
+        if abs(nextStart - viewportStartSeconds) < (zoomedWindowDuration / 2500.0) {
+            return
+        }
+        viewportStartSeconds = nextStart
         isViewportManuallyControlled = true
     }
 
@@ -4631,9 +4672,12 @@ struct ClipToolView: View {
                     }
                 } else if !isCompactLayout && !waveformSamples.isEmpty {
                     WaveformView(
+                        sourceSessionID: model.sourceSessionID,
                         samples: waveformSamples,
                         startSeconds: model.clipStartSeconds,
-                        playheadSeconds: playheadSeconds,
+                        visualPlayheadSeconds: playheadVisualSeconds,
+                        playheadJumpFromSeconds: playheadJumpFromSeconds,
+                        playheadJumpAnimationToken: playheadJumpAnimationToken,
                         endSeconds: model.clipEndSeconds,
                         totalDurationSeconds: totalDurationSeconds,
                         visibleStartSeconds: visibleStartSeconds,
@@ -4642,7 +4686,6 @@ struct ClipToolView: View {
                         highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
                         highlightedClipBoundary: model.highlightedClipBoundary,
                         captureFrameFlashToken: model.captureFrameFlashToken,
-                        markerNavigationAnimationToken: markerNavigationAnimationToken,
                         quickExportFlashToken: model.quickExportFlashToken,
                         onSeek: { seekPlayerInteractive(to: $0) },
                         onSetStart: { model.setClipStart($0) },
@@ -4761,6 +4804,7 @@ struct ClipToolView: View {
                         ControlGroup {
                             Button {
                                 seekPlayer(to: model.clipStartSeconds)
+                                springAnimateVisualPlayhead(to: model.clipStartSeconds)
                             } label: {
                                 Image(systemName: "backward.end.fill")
                             }
@@ -4769,6 +4813,7 @@ struct ClipToolView: View {
 
                             Button {
                                 seekPlayer(to: model.clipEndSeconds)
+                                springAnimateVisualPlayhead(to: model.clipEndSeconds)
                             } label: {
                                 Image(systemName: "forward.end.fill")
                             }
@@ -5118,16 +5163,29 @@ struct ClipToolView: View {
         let step5 = step4.onReceive(timer) { _ in
             let current = CMTimeGetSeconds(player.currentTime())
             if current.isFinite {
-                playheadSeconds = max(0, current)
-                model.clipPlayheadSeconds = playheadSeconds
+                let newPlayhead = max(0, current)
+                let didMove = abs(newPlayhead - playheadSeconds) > (1.0 / 240.0)
+
+                if didMove {
+                    playheadSeconds = newPlayhead
+                    model.clipPlayheadSeconds = newPlayhead
+                    if Date() >= suppressVisualPlayheadSyncUntil {
+                        playheadVisualSeconds = newPlayhead
+                    }
+                }
+
                 if player.rate != 0 {
                     isViewportManuallyControlled = false
+                    updateViewportForPlayhead(shouldFollow: true)
+                } else if didMove {
+                    updateViewportForPlayhead(shouldFollow: false)
                 }
-                updateViewportForPlayhead(shouldFollow: player.rate != 0)
             }
             let currentDuration = CMTimeGetSeconds(player.currentItem?.duration ?? .invalid)
             if currentDuration.isFinite && currentDuration > 0 {
-                playerDurationSeconds = currentDuration
+                if abs(currentDuration - playerDurationSeconds) > (1.0 / 120.0) {
+                    playerDurationSeconds = currentDuration
+                }
             }
         }
 
@@ -5182,9 +5240,13 @@ struct ClipToolView: View {
 }
 
 struct WaveformView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let sourceSessionID: UUID
     let samples: [Double]
     let startSeconds: Double
-    let playheadSeconds: Double
+    let visualPlayheadSeconds: Double
+    let playheadJumpFromSeconds: Double
+    let playheadJumpAnimationToken: Int
     let endSeconds: Double
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
@@ -5193,7 +5255,6 @@ struct WaveformView: View {
     let highlightedMarkerID: UUID?
     let highlightedClipBoundary: ClipBoundaryHighlight?
     let captureFrameFlashToken: Int
-    let markerNavigationAnimationToken: Int
     let quickExportFlashToken: Int
     let onSeek: (Double) -> Void
     let onSetStart: (Double) -> Void
@@ -5211,6 +5272,7 @@ struct WaveformView: View {
     @State private var isPlayheadCaptureFlashing = false
     @State private var selectionFlashOpacity: Double = 0
     @State private var selectionFlashGlowOpacity: Double = 0
+    @State private var isResizeCursorActive = false
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -5238,8 +5300,6 @@ struct WaveformView: View {
             let height = proxy.size.height
             let startX = xPosition(for: startSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
-            let playheadX = xPosition(for: playheadSeconds, width: width)
-            let playheadWidth: CGFloat = isPlayheadCaptureFlashing ? 3.6 : 2.0
             let isStartEdgeActive = isStartEdgeHovered || isStartEdgeDragging
             let isEndEdgeActive = isEndEdgeHovered || isEndEdgeDragging
             let isEdgeActive = isStartEdgeActive || isEndEdgeActive
@@ -5350,50 +5410,20 @@ struct WaveformView: View {
                     .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
                     .allowsHitTesting(false)
 
-                Canvas { context, size in
-                    guard !samples.isEmpty else { return }
-                    let n = max(samples.count - 1, 1)
-                    let startIndex = max(0, Int((visibleStartSeconds / totalDurationSeconds) * Double(n)))
-                    let endIndex = min(n, max(startIndex + 1, Int((visibleEndSeconds / totalDurationSeconds) * Double(n))))
-                    let midY = size.height / 2.0
-                    let halfHeight = max(1.0, (size.height - 8.0) / 2.0)
-
-                    var path = Path()
-                    let visibleSampleCount = max(1, endIndex - startIndex + 1)
-                    let barPitch: CGFloat = 4.0
-                    let barWidth: CGFloat = 2.6
-                    let columnCount = max(1, Int((size.width / barPitch).rounded(.up)))
-                    let visibleSampleCountDouble = Double(visibleSampleCount)
-
-                    for column in 0..<columnCount {
-                        let columnStartRatio = Double(column) / Double(columnCount)
-                        let columnEndRatio = Double(column + 1) / Double(columnCount)
-                        var columnStart = startIndex + Int((columnStartRatio * visibleSampleCountDouble).rounded(.down))
-                        var columnEnd = startIndex + Int((columnEndRatio * visibleSampleCountDouble).rounded(.down)) - 1
-                        columnStart = min(max(columnStart, startIndex), endIndex)
-                        columnEnd = min(max(columnEnd, columnStart), endIndex)
-
-                        var peak = 0.0
-                        var i = columnStart
-                        while i <= columnEnd {
-                            peak = max(peak, samples[i])
-                            i += 1
-                        }
-
-                        let normalized = max(0.02, min(1.0, peak))
-                        let amp = CGFloat(normalized) * halfHeight
-                        let centerX = ((CGFloat(column) + 0.5) / CGFloat(columnCount)) * size.width
-                        let rect = CGRect(
-                            x: centerX - (barWidth / 2.0),
-                            y: midY - amp,
-                            width: barWidth,
-                            height: amp * 2.0
-                        )
-                        path.addRect(rect)
-                    }
-
-                    context.fill(path, with: .color(Color.primary.opacity(0.55)))
-                }
+                WaveformRasterLayerView(
+                    sourceSessionID: sourceSessionID,
+                    samples: samples,
+                    totalDurationSeconds: totalDurationSeconds,
+                    visibleStartSeconds: visibleStartSeconds,
+                    visibleEndSeconds: visibleEndSeconds,
+                    isDarkAppearance: colorScheme == .dark,
+                    playheadSeconds: visualPlayheadSeconds,
+                    playheadJumpFromSeconds: playheadJumpFromSeconds,
+                    playheadJumpAnimationToken: playheadJumpAnimationToken,
+                    isPlayheadCaptureFlashing: isPlayheadCaptureFlashing,
+                    captureMarkers: captureMarkers,
+                    highlightedMarkerID: highlightedMarkerID
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
                 Rectangle()
@@ -5466,40 +5496,6 @@ struct WaveformView: View {
                     .allowsHitTesting(false)
             }
             .coordinateSpace(name: "waveformTimeline")
-            .clipShape(RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
-            .overlay(alignment: .topLeading) {
-                ZStack(alignment: .topLeading) {
-                    ForEach(captureMarkers) { marker in
-                        let markerX = xPosition(for: marker.seconds, width: width)
-                        let isHighlighted = marker.id == highlightedMarkerID
-                        let pinColor = Color.orange
-
-                        VStack(spacing: 0) {
-                            Circle()
-                                .fill(pinColor.opacity(isHighlighted ? 1.0 : 0.9))
-                                .frame(width: isHighlighted ? 9 : 8, height: isHighlighted ? 9 : 8)
-                            Rectangle()
-                                .fill(pinColor.opacity(isHighlighted ? 0.96 : 0.8))
-                                .frame(width: isHighlighted ? 2.6 : 2.0, height: height + 4)
-                        }
-                        .offset(x: markerX - (isHighlighted ? 4.5 : 4.0), y: -7)
-                        .shadow(color: pinColor.opacity(isHighlighted ? 0.6 : 0.0), radius: isHighlighted ? 4 : 0)
-                        .animation(.easeOut(duration: 0.14), value: isHighlighted)
-                        .allowsHitTesting(false)
-                    }
-
-                    Rectangle()
-                        .fill(Color(nsColor: .systemRed))
-                        .frame(width: playheadWidth, height: height + 8)
-                        .offset(x: playheadX - (playheadWidth / 2), y: -4)
-                        .shadow(
-                            color: Color(nsColor: .systemRed).opacity(isPlayheadCaptureFlashing ? 0.9 : 0),
-                            radius: isPlayheadCaptureFlashing ? 6 : 0
-                        )
-                        .animation(.easeOut(duration: 0.14), value: isPlayheadCaptureFlashing)
-                        .allowsHitTesting(false)
-                }
-            }
             .overlay(
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .stroke(isHovered ? Color.accentColor.opacity(0.28) : Color.gray.opacity(0.16), lineWidth: 0.8)
@@ -5511,6 +5507,7 @@ struct WaveformView: View {
                 if !hovering && !isStartEdgeDragging && !isEndEdgeDragging {
                     isStartEdgeHovered = false
                     isEndEdgeHovered = false
+                    isResizeCursorActive = false
                     NSCursor.arrow.set()
                 }
             }
@@ -5523,34 +5520,40 @@ struct WaveformView: View {
                     let endDistance = abs(x - endX)
                     let isNearStart = startDistance <= edgeHoverProximity
                     let isNearEnd = endDistance <= edgeHoverProximity
+                    var nextStartEdgeHovered = false
+                    var nextEndEdgeHovered = false
 
                     if isNearStart && isNearEnd {
                         if startDistance <= endDistance {
-                            isStartEdgeHovered = true
-                            isEndEdgeHovered = false
+                            nextStartEdgeHovered = true
                         } else {
-                            isStartEdgeHovered = false
-                            isEndEdgeHovered = true
+                            nextEndEdgeHovered = true
                         }
                     } else if isNearStart {
-                        isStartEdgeHovered = true
-                        isEndEdgeHovered = false
+                        nextStartEdgeHovered = true
                     } else if isNearEnd {
-                        isStartEdgeHovered = false
-                        isEndEdgeHovered = true
-                    } else {
-                        isStartEdgeHovered = false
-                        isEndEdgeHovered = false
+                        nextEndEdgeHovered = true
                     }
 
-                    if isStartEdgeHovered || isEndEdgeHovered {
+                    if nextStartEdgeHovered != isStartEdgeHovered {
+                        isStartEdgeHovered = nextStartEdgeHovered
+                    }
+                    if nextEndEdgeHovered != isEndEdgeHovered {
+                        isEndEdgeHovered = nextEndEdgeHovered
+                    }
+
+                    let shouldUseResizeCursor = nextStartEdgeHovered || nextEndEdgeHovered
+                    if shouldUseResizeCursor && !isResizeCursorActive {
+                        isResizeCursorActive = true
                         NSCursor.resizeLeftRight.set()
-                    } else {
+                    } else if !shouldUseResizeCursor && isResizeCursorActive {
+                        isResizeCursorActive = false
                         NSCursor.arrow.set()
                     }
                 case .ended:
                     isStartEdgeHovered = false
                     isEndEdgeHovered = false
+                    isResizeCursorActive = false
                     if !isHovered {
                         NSCursor.arrow.set()
                     }
@@ -5578,7 +5581,6 @@ struct WaveformView: View {
                     isPlayheadCaptureFlashing = false
                 }
             }
-            .animation(.spring(response: 0.24, dampingFraction: 0.72), value: markerNavigationAnimationToken)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
@@ -5610,6 +5612,403 @@ struct WaveformView: View {
                     .padding(.bottom, 4)
             }
         }
+    }
+}
+
+private final class WaveformRasterHostView: NSView {
+    let waveformClipLayer = CALayer()
+    let waveformLayer = CALayer()
+    let markerContainerLayer = CALayer()
+    let playheadLayer = CALayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+        waveformClipLayer.masksToBounds = true
+        waveformClipLayer.cornerCurve = .continuous
+        waveformClipLayer.cornerRadius = UIRadius.small
+        waveformLayer.contentsGravity = .resize
+        waveformLayer.magnificationFilter = .linear
+        waveformLayer.minificationFilter = .linear
+        waveformLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        waveformLayer.actions = [
+            "contents": NSNull(),
+            "contentsRect": NSNull(),
+            "bounds": NSNull(),
+            "position": NSNull()
+        ]
+        markerContainerLayer.actions = [
+            "sublayers": NSNull(),
+            "bounds": NSNull(),
+            "position": NSNull()
+        ]
+        markerContainerLayer.masksToBounds = false
+        markerContainerLayer.isGeometryFlipped = true
+        playheadLayer.backgroundColor = NSColor.systemRed.cgColor
+        playheadLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "opacity": NSNull(),
+            "shadowOpacity": NSNull(),
+            "shadowRadius": NSNull()
+        ]
+        waveformClipLayer.addSublayer(waveformLayer)
+        layer?.addSublayer(waveformClipLayer)
+        layer?.addSublayer(markerContainerLayer)
+        layer?.addSublayer(playheadLayer)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        waveformClipLayer.frame = bounds
+        waveformLayer.frame = waveformClipLayer.bounds
+        markerContainerLayer.frame = bounds
+    }
+}
+
+private final class WaveformRasterCoordinator {
+    private(set) var cachedSessionID: UUID?
+    private(set) var cachedSampleCount: Int = -1
+    private(set) var cachedMipImages: [CGImage] = []
+    private(set) var cachedIsDarkAppearance = false
+    var lastAppliedContentsRect: CGRect = .null
+    var lastAppliedBounds: CGRect = .zero
+    var lastAppliedMipLevelIndex: Int = -1
+    var lastPlayheadJumpAnimationToken: Int = -1
+    var lastPlayheadCaptureFlashing: Bool = false
+    var lastHighlightedMarkerID: UUID?
+
+    @discardableResult
+    func rebuildImageIfNeeded(sessionID: UUID, samples: [Double], isDarkAppearance: Bool) -> Bool {
+        let needsRebuild =
+            cachedMipImages.isEmpty ||
+            cachedSessionID != sessionID ||
+            cachedSampleCount != samples.count ||
+            cachedIsDarkAppearance != isDarkAppearance
+
+        guard needsRebuild else { return false }
+
+        cachedSessionID = sessionID
+        cachedSampleCount = samples.count
+        cachedIsDarkAppearance = isDarkAppearance
+        cachedMipImages = makeWaveformMipImages(samples: samples, isDarkAppearance: isDarkAppearance)
+        lastAppliedContentsRect = .null
+        lastAppliedBounds = .zero
+        lastAppliedMipLevelIndex = -1
+        return true
+    }
+
+    private func makeWaveformMipImages(samples: [Double], isDarkAppearance: Bool) -> [CGImage] {
+        guard !samples.isEmpty else { return [] }
+        let baseWidth = min(65_536, max(16_384, samples.count * 2))
+        let height = 256
+
+        let n = max(samples.count - 1, 1)
+        var basePeaks = Array(repeating: 0.0, count: baseWidth)
+        @inline(__always)
+        func sampleAt(_ idx: Int) -> Double {
+            let clamped = min(max(0, idx), n)
+            return samples[clamped]
+        }
+
+        for x in 0..<baseWidth {
+            let ratio = (Double(x) + 0.5) / Double(baseWidth)
+            let exactIndex = ratio * Double(n)
+            let centerIndex = Int(exactIndex.rounded())
+            basePeaks[x] = max(sampleAt(centerIndex - 1), max(sampleAt(centerIndex), sampleAt(centerIndex + 1)))
+        }
+
+        var levels: [[Double]] = [basePeaks]
+        let maxLevels = 6
+        while levels.count < maxLevels {
+            guard let prev = levels.last, prev.count > 1024 else { break }
+            let nextCount = max(1, prev.count / 2)
+            var next = Array(repeating: 0.0, count: nextCount)
+            var i = 0
+            while i < nextCount {
+                let a = prev[min(prev.count - 1, i * 2)]
+                let b = prev[min(prev.count - 1, (i * 2) + 1)]
+                // Preserve transients while downsampling.
+                next[i] = max(a, b)
+                i += 1
+            }
+            levels.append(next)
+        }
+
+        var images: [CGImage] = []
+        images.reserveCapacity(levels.count)
+        for peaks in levels {
+            if let image = makeWaveformImage(peaks: peaks, height: height, isDarkAppearance: isDarkAppearance) {
+                images.append(image)
+            }
+        }
+        return images
+    }
+
+    private func makeWaveformImage(peaks: [Double], height: Int, isDarkAppearance: Bool) -> CGImage? {
+        guard !peaks.isEmpty else { return nil }
+
+        let width = peaks.count
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return nil
+        }
+
+        context.setShouldAntialias(false)
+        context.interpolationQuality = .none
+        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+
+        let barColor: NSColor = {
+            if isDarkAppearance {
+                return NSColor(calibratedWhite: 1.0, alpha: 0.64)
+            }
+            return NSColor.labelColor.withAlphaComponent(0.58)
+        }()
+        context.setFillColor(barColor.cgColor)
+
+        let baselineY = 4.0
+        let maxBarHeight = max(1.0, CGFloat(height) - 8.0)
+
+        for x in 0..<width {
+            let peak = peaks[x]
+            let normalized = max(0.02, min(1.0, peak))
+            let amp = CGFloat(normalized) * maxBarHeight
+            // Alternate columns for clearer visual separation and crisper perceived detail.
+            if x % 2 == 0 {
+                let rect = CGRect(x: CGFloat(x), y: baselineY, width: 1, height: amp)
+                context.fill(rect)
+            }
+        }
+
+        return context.makeImage()
+    }
+
+    func bestMipLevelIndex(for visibleNormWidth: Double, targetPixelWidth: Int) -> Int {
+        guard !cachedMipImages.isEmpty else { return 0 }
+        let clampedNorm = min(max(visibleNormWidth, 0.000001), 1.0)
+        let displayPixels = max(1, targetPixelWidth)
+        let baseSourcePixels = max(1.0, Double(cachedMipImages[0].width) * clampedNorm)
+
+        var level = 0
+        var sourcePixels = baseSourcePixels
+        while level + 1 < cachedMipImages.count && sourcePixels > Double(displayPixels) * 2.2 {
+            level += 1
+            sourcePixels *= 0.5
+        }
+        return level
+    }
+}
+
+private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
+    let sourceSessionID: UUID
+    let samples: [Double]
+    let totalDurationSeconds: Double
+    let visibleStartSeconds: Double
+    let visibleEndSeconds: Double
+    let isDarkAppearance: Bool
+    let playheadSeconds: Double
+    let playheadJumpFromSeconds: Double
+    let playheadJumpAnimationToken: Int
+    let isPlayheadCaptureFlashing: Bool
+    let captureMarkers: [CaptureTimelineMarker]
+    let highlightedMarkerID: UUID?
+
+    static func == (lhs: WaveformRasterLayerView, rhs: WaveformRasterLayerView) -> Bool {
+        lhs.sourceSessionID == rhs.sourceSessionID &&
+        lhs.samples.count == rhs.samples.count &&
+        abs(lhs.totalDurationSeconds - rhs.totalDurationSeconds) < 0.0001 &&
+        abs(lhs.visibleStartSeconds - rhs.visibleStartSeconds) < 0.0001 &&
+        abs(lhs.visibleEndSeconds - rhs.visibleEndSeconds) < 0.0001 &&
+        lhs.isDarkAppearance == rhs.isDarkAppearance &&
+        abs(lhs.playheadSeconds - rhs.playheadSeconds) < 0.0001 &&
+        abs(lhs.playheadJumpFromSeconds - rhs.playheadJumpFromSeconds) < 0.0001 &&
+        lhs.playheadJumpAnimationToken == rhs.playheadJumpAnimationToken &&
+        lhs.isPlayheadCaptureFlashing == rhs.isPlayheadCaptureFlashing &&
+        lhs.captureMarkers == rhs.captureMarkers &&
+        lhs.highlightedMarkerID == rhs.highlightedMarkerID
+    }
+
+    func makeCoordinator() -> WaveformRasterCoordinator {
+        WaveformRasterCoordinator()
+    }
+
+    func makeNSView(context: Context) -> WaveformRasterHostView {
+        WaveformRasterHostView()
+    }
+
+    func updateNSView(_ nsView: WaveformRasterHostView, context: Context) {
+        let didRebuildImage = context.coordinator.rebuildImageIfNeeded(
+            sessionID: sourceSessionID,
+            samples: samples,
+            isDarkAppearance: isDarkAppearance
+        )
+
+        guard !context.coordinator.cachedMipImages.isEmpty else {
+            nsView.waveformLayer.contents = nil
+            return
+        }
+
+        let duration = max(0.0001, totalDurationSeconds)
+        let rawStartNorm = min(max(0, visibleStartSeconds / duration), 1.0)
+        let rawEndNorm = min(max(rawStartNorm + 0.000001, visibleEndSeconds / duration), 1.0)
+        let visibleNormWidth = max(0.000001, rawEndNorm - rawStartNorm)
+        let backingScale = nsView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let targetPixelWidth = Int((max(1.0, nsView.bounds.width) * backingScale).rounded())
+        let levelIndex = context.coordinator.bestMipLevelIndex(for: visibleNormWidth, targetPixelWidth: targetPixelWidth)
+        let image = context.coordinator.cachedMipImages[levelIndex]
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        if didRebuildImage || context.coordinator.lastAppliedMipLevelIndex != levelIndex || nsView.waveformLayer.contents == nil {
+            nsView.waveformLayer.contents = image
+            context.coordinator.lastAppliedMipLevelIndex = levelIndex
+        }
+
+        // Snap to source-image pixel boundaries to avoid shimmer/distortion when overlays animate.
+        let imageWidth = max(1, image.width)
+        let startPixel = min(max(0, Int((rawStartNorm * Double(imageWidth)).rounded())), imageWidth - 1)
+        let endPixel = min(max(startPixel + 1, Int((rawEndNorm * Double(imageWidth)).rounded())), imageWidth)
+        let startNorm = Double(startPixel) / Double(imageWidth)
+        let widthNorm = max(1.0 / Double(imageWidth), Double(endPixel - startPixel) / Double(imageWidth))
+        let newContentsRect = CGRect(x: startNorm, y: 0, width: widthNorm, height: 1)
+
+        if !newContentsRect.equalTo(context.coordinator.lastAppliedContentsRect) {
+            nsView.waveformLayer.contentsRect = newContentsRect
+            context.coordinator.lastAppliedContentsRect = newContentsRect
+        }
+
+        if !nsView.bounds.equalTo(context.coordinator.lastAppliedBounds) {
+            nsView.waveformLayer.frame = nsView.bounds
+            context.coordinator.lastAppliedBounds = nsView.bounds
+        }
+
+        let visibleDuration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
+        let width = nsView.bounds.width
+        func xPosition(for seconds: Double) -> CGFloat {
+            let local = seconds - visibleStartSeconds
+            let ratio = min(max(0, local / visibleDuration), 1.0)
+            return CGFloat(ratio) * width
+        }
+
+        let playheadX = xPosition(for: playheadSeconds)
+        let playheadWidth: CGFloat = isPlayheadCaptureFlashing ? 3.6 : 2.0
+        let targetPlayheadFrame = CGRect(
+            x: playheadX - (playheadWidth / 2.0),
+            y: -4,
+            width: playheadWidth,
+            height: nsView.bounds.height + 8
+        )
+        if playheadJumpAnimationToken != context.coordinator.lastPlayheadJumpAnimationToken {
+            let fromX = xPosition(for: playheadJumpFromSeconds)
+            let toX = targetPlayheadFrame.midX
+            if abs(toX - fromX) > 0.5 {
+                let move = CABasicAnimation(keyPath: "position.x")
+                move.fromValue = fromX
+                move.toValue = toX
+                move.duration = 0.22
+                move.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                move.isRemovedOnCompletion = true
+                nsView.playheadLayer.add(move, forKey: "playheadJump")
+            }
+            context.coordinator.lastPlayheadJumpAnimationToken = playheadJumpAnimationToken
+        }
+
+        nsView.playheadLayer.frame = targetPlayheadFrame
+        nsView.playheadLayer.shadowColor = NSColor.systemRed.cgColor
+        let targetShadowOpacity: Float = isPlayheadCaptureFlashing ? 0.9 : 0.0
+        let targetShadowRadius: CGFloat = isPlayheadCaptureFlashing ? 6 : 0
+        if isPlayheadCaptureFlashing != context.coordinator.lastPlayheadCaptureFlashing {
+            let shadowOpacityAnim = CABasicAnimation(keyPath: "shadowOpacity")
+            shadowOpacityAnim.fromValue = nsView.playheadLayer.presentation()?.shadowOpacity ?? nsView.playheadLayer.shadowOpacity
+            shadowOpacityAnim.toValue = targetShadowOpacity
+            shadowOpacityAnim.duration = isPlayheadCaptureFlashing ? 0.08 : 0.2
+            shadowOpacityAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            shadowOpacityAnim.isRemovedOnCompletion = true
+            nsView.playheadLayer.add(shadowOpacityAnim, forKey: "playheadShadowOpacity")
+
+            let shadowRadiusAnim = CABasicAnimation(keyPath: "shadowRadius")
+            shadowRadiusAnim.fromValue = nsView.playheadLayer.presentation()?.shadowRadius ?? nsView.playheadLayer.shadowRadius
+            shadowRadiusAnim.toValue = targetShadowRadius
+            shadowRadiusAnim.duration = shadowOpacityAnim.duration
+            shadowRadiusAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            shadowRadiusAnim.isRemovedOnCompletion = true
+            nsView.playheadLayer.add(shadowRadiusAnim, forKey: "playheadShadowRadius")
+        }
+        nsView.playheadLayer.shadowOpacity = targetShadowOpacity
+        nsView.playheadLayer.shadowRadius = targetShadowRadius
+        context.coordinator.lastPlayheadCaptureFlashing = isPlayheadCaptureFlashing
+
+        let markerContainer = nsView.markerContainerLayer
+        markerContainer.sublayers = captureMarkers.map { marker in
+            let markerX = xPosition(for: marker.seconds)
+            let isHighlighted = marker.id == highlightedMarkerID
+            let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
+
+            let pin = CALayer()
+            pin.frame = CGRect(x: markerX - (isHighlighted ? 4.5 : 4.0), y: -7, width: isHighlighted ? 9 : 8, height: nsView.bounds.height + 11)
+
+            let head = CALayer()
+            head.backgroundColor = pinColor.cgColor
+            head.frame = CGRect(x: 0, y: 0, width: isHighlighted ? 9 : 8, height: isHighlighted ? 9 : 8)
+            head.cornerRadius = head.bounds.width / 2
+            pin.addSublayer(head)
+
+            let stem = CALayer()
+            stem.backgroundColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 0.96 : 0.8).cgColor
+            let stemWidth: CGFloat = isHighlighted ? 2.6 : 2.0
+            stem.frame = CGRect(x: (head.bounds.width - stemWidth) / 2.0, y: head.frame.maxY, width: stemWidth, height: nsView.bounds.height + 4)
+            pin.addSublayer(stem)
+
+            pin.shadowColor = NSColor.systemOrange.cgColor
+            pin.shadowOpacity = isHighlighted ? 0.6 : 0
+            pin.shadowRadius = isHighlighted ? 4 : 0
+            return pin
+        }
+
+        if highlightedMarkerID != context.coordinator.lastHighlightedMarkerID,
+           let highlightedMarkerID,
+           let idx = captureMarkers.firstIndex(where: { $0.id == highlightedMarkerID }),
+           let markerLayers = markerContainer.sublayers,
+           idx >= 0, idx < markerLayers.count {
+            let pinLayer = markerLayers[idx]
+            let glow = CABasicAnimation(keyPath: "shadowOpacity")
+            glow.fromValue = 0.0
+            glow.toValue = 0.6
+            glow.duration = 0.16
+            glow.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            glow.isRemovedOnCompletion = true
+            pinLayer.add(glow, forKey: "markerGlow")
+
+            let pulse = CABasicAnimation(keyPath: "transform.scale")
+            pulse.fromValue = 1.0
+            pulse.toValue = 1.09
+            pulse.duration = 0.10
+            pulse.autoreverses = true
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            pulse.isRemovedOnCompletion = true
+            pinLayer.add(pulse, forKey: "markerPulse")
+        }
+        context.coordinator.lastHighlightedMarkerID = highlightedMarkerID
+
+        CATransaction.commit()
     }
 }
 
