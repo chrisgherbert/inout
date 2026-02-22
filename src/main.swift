@@ -3627,6 +3627,33 @@ final class WorkspaceViewModel: ObservableObject {
         uiMessage = "Marker added at \(formatSeconds(seconds))"
     }
 
+    func nearestTimelineMarker(to seconds: Double, tolerance: Double) -> CaptureTimelineMarker? {
+        guard tolerance >= 0 else { return nil }
+        var nearest: CaptureTimelineMarker?
+        var nearestDistance = Double.greatestFiniteMagnitude
+        for marker in captureTimelineMarkers {
+            let distance = abs(marker.seconds - seconds)
+            guard distance <= tolerance, distance < nearestDistance else { continue }
+            nearest = marker
+            nearestDistance = distance
+        }
+        return nearest
+    }
+
+    func selectTimelineMarkerIfAligned(near seconds: Double, tolerance: Double = 1.0 / 30.0) {
+        highlightedCaptureTimelineMarkerID = nearestTimelineMarker(to: seconds, tolerance: tolerance)?.id
+    }
+
+    func removeHighlightedTimelineMarker() -> Bool {
+        guard let highlightedID = highlightedCaptureTimelineMarkerID,
+              let index = captureTimelineMarkers.firstIndex(where: { $0.id == highlightedID }) else {
+            return false
+        }
+        captureTimelineMarkers.remove(at: index)
+        highlightedCaptureTimelineMarkerID = nil
+        return true
+    }
+
     func highlightTimelineMarker(near seconds: Double, tolerance: Double = 1.0 / 120.0) {
         if let marker = captureTimelineMarkers.first(where: { abs($0.seconds - seconds) <= tolerance }) {
             highlightedCaptureTimelineMarkerID = marker.id
@@ -3684,6 +3711,11 @@ final class WorkspaceViewModel: ObservableObject {
         captureMarkerHighlightClearTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 420_000_000)
             guard let self, self.highlightedCaptureTimelineMarkerID == markerID else { return }
+            if let marker = self.captureTimelineMarkers.first(where: { $0.id == markerID }),
+               abs(marker.seconds - self.clipPlayheadSeconds) <= (1.0 / 30.0) {
+                // Keep marker selected while playhead remains on it.
+                return
+            }
             withAnimation(.easeOut(duration: 0.18)) {
                 self.highlightedCaptureTimelineMarkerID = nil
             }
@@ -4252,6 +4284,7 @@ struct ClipToolView: View {
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
         model.clipPlayheadSeconds = clamped
+        model.selectTimelineMarkerIfAligned(near: clamped)
         syncVisualPlayheadImmediately(clamped)
         updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
     }
@@ -4273,6 +4306,7 @@ struct ClipToolView: View {
         )
         playheadSeconds = clamped
         model.clipPlayheadSeconds = clamped
+        model.selectTimelineMarkerIfAligned(near: clamped)
         syncVisualPlayheadImmediately(clamped)
         updateViewportForPlayhead(shouldFollow: false)
     }
@@ -4282,6 +4316,7 @@ struct ClipToolView: View {
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
         model.clipPlayheadSeconds = clamped
+        model.selectTimelineMarkerIfAligned(near: clamped)
 
         guard focusViewport else { return }
 
@@ -4289,13 +4324,65 @@ struct ClipToolView: View {
             let currentStart = clampedViewportStart(viewportStartSeconds)
             let currentEnd = currentStart + zoomedWindowDuration
             if clamped < currentStart || clamped > currentEnd {
-                viewportStartSeconds = clampedViewportStart(clamped - (zoomedWindowDuration / 2.0))
+                animateViewportRecenter(to: clamped - (zoomedWindowDuration / 2.0))
             } else {
                 viewportStartSeconds = currentStart
             }
             isViewportManuallyControlled = true
         } else {
             updateViewportForPlayhead(shouldFollow: true)
+        }
+    }
+
+    private func jumpPlayback(by seconds: Double) {
+        seekPlayer(to: playheadSeconds + seconds)
+    }
+
+    private func togglePlayback() {
+        if player.rate != 0 {
+            player.pause()
+        } else {
+            player.playImmediately(atRate: 1.0)
+        }
+    }
+
+    private func nextShuttleRate(from currentAbsRate: Float) -> Float {
+        let steps: [Float] = [1, 2, 4, 8]
+        for step in steps where currentAbsRate < (step - 0.01) {
+            return step
+        }
+        return steps.last ?? 8
+    }
+
+    private func shuttleForward() {
+        let currentRate = player.rate
+        let absRate = abs(currentRate)
+        let nextRate: Float = currentRate > 0 ? nextShuttleRate(from: absRate) : 1.0
+        player.playImmediately(atRate: nextRate)
+    }
+
+    private func shuttleBackward() {
+        guard let item = player.currentItem else {
+            jumpPlayback(by: -max(0.1, Double(model.jumpIntervalSeconds)))
+            return
+        }
+
+        let supportsReverse = item.canPlayReverse || item.canPlayFastReverse
+        guard supportsReverse else {
+            // Fallback for assets that cannot reverse-play.
+            jumpPlayback(by: -max(0.1, Double(model.jumpIntervalSeconds)))
+            return
+        }
+
+        let currentRate = player.rate
+        let absRate = abs(currentRate)
+        let nextAbsRate: Float = currentRate < 0 ? nextShuttleRate(from: absRate) : 1.0
+        player.playImmediately(atRate: -nextAbsRate)
+    }
+
+    private func pausePlayback() {
+        if player.rate != 0 {
+            player.pause()
         }
     }
 
@@ -4331,8 +4418,13 @@ struct ClipToolView: View {
         } else {
             syncVisualPlayheadImmediately(target)
         }
-        model.highlightTimelineMarker(near: target)
-        model.highlightBoundaryIfNeeded(near: target, clipStart: model.clipStartSeconds, clipEnd: model.clipEndSeconds)
+        if model.nearestTimelineMarker(to: target, tolerance: 1.0 / 120.0) != nil {
+            model.selectTimelineMarkerIfAligned(near: target, tolerance: 1.0 / 120.0)
+            model.highlightedClipBoundary = nil
+        } else {
+            model.highlightedCaptureTimelineMarkerID = nil
+            model.highlightBoundaryIfNeeded(near: target, clipStart: model.clipStartSeconds, clipEnd: model.clipEndSeconds)
+        }
     }
 
     private var totalDurationSeconds: Double {
@@ -4348,9 +4440,31 @@ struct ClipToolView: View {
         max(0, zoomedWindowDuration * 0.05)
     }
 
+    private var markerSnapToleranceSeconds: Double {
+        let width = max(1, timelineInteractiveWidth)
+        let snapDistanceInPixels: CGFloat = 16
+        let secondsPerPixel = zoomedWindowDuration / Double(width)
+        return min(0.75, max(1.0 / 30.0, secondsPerPixel * Double(snapDistanceInPixels)))
+    }
+
+    private func snappedMarkerTime(around seconds: Double) -> Double {
+        guard let marker = model.nearestTimelineMarker(to: seconds, tolerance: markerSnapToleranceSeconds) else {
+            return seconds
+        }
+        return marker.seconds
+    }
+
     private func clampedViewportStart(_ start: Double) -> Double {
         let maxStart = max(0, totalDurationSeconds - zoomedWindowDuration)
         return min(max(0, start), maxStart)
+    }
+
+    private func animateViewportRecenter(to start: Double) {
+        let clamped = clampedViewportStart(start)
+        guard abs(clamped - viewportStartSeconds) > 0.0001 else { return }
+        withAnimation(.easeOut(duration: 0.22)) {
+            viewportStartSeconds = clamped
+        }
     }
 
     private func updateViewportForPlayhead(shouldFollow: Bool) {
@@ -4362,14 +4476,15 @@ struct ClipToolView: View {
 
         let window = zoomedWindowDuration
         var start = clampedViewportStart(viewportStartSeconds)
-        guard shouldFollow else {
-            viewportStartSeconds = start
+        let end = start + window
+        // Always keep the playhead visible, even when follow mode is otherwise disabled.
+        if playheadSeconds < start || playheadSeconds > end {
+            animateViewportRecenter(to: playheadSeconds - (window / 2))
             return
         }
 
-        let end = start + window
-        if playheadSeconds < start || playheadSeconds > end {
-            viewportStartSeconds = clampedViewportStart(playheadSeconds - (window / 2))
+        guard shouldFollow else {
+            viewportStartSeconds = start
             return
         }
 
@@ -4428,8 +4543,28 @@ struct ClipToolView: View {
             }
 
             let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            let rawChars = event.characters ?? ""
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let hasDisallowedModifier = flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
+
+            if flags.isDisjoint(with: [.command, .option, .control, .shift]) {
+                if rawChars == " " {
+                    togglePlayback()
+                    return nil
+                }
+                if chars == "k" {
+                    pausePlayback()
+                    return nil
+                }
+                if chars == "l" {
+                    shuttleForward()
+                    return nil
+                }
+                if chars == "j" {
+                    shuttleBackward()
+                    return nil
+                }
+            }
 
             if flags.contains(.command) && !flags.contains(.option) && !flags.contains(.control) {
                 if chars == "=" || chars == "+" {
@@ -4453,6 +4588,12 @@ struct ClipToolView: View {
                 }
                 if event.specialKey == .downArrow {
                     navigateToMarker(previous: false)
+                    return nil
+                }
+                if event.keyCode == 51 || event.keyCode == 117 {
+                    if model.removeHighlightedTimelineMarker() {
+                        model.uiMessage = "Marker deleted"
+                    }
                     return nil
                 }
             }
@@ -4728,7 +4869,14 @@ struct ClipToolView: View {
                         highlightedClipBoundary: model.highlightedClipBoundary,
                         captureFrameFlashToken: model.captureFrameFlashToken,
                         quickExportFlashToken: model.quickExportFlashToken,
-                        onSeek: { seekPlayerInteractive(to: $0) },
+                        onSeek: { seconds, shouldSnapToMarker in
+                            let target = shouldSnapToMarker ? snappedMarkerTime(around: seconds) : seconds
+                            if shouldSnapToMarker {
+                                seekPlayer(to: target)
+                            } else {
+                                seekPlayerInteractive(to: target)
+                            }
+                        },
                         onSetStart: { model.setClipStart($0) },
                         onSetEnd: { model.setClipEnd($0) },
                         onHoverChanged: { hovering in
@@ -5210,6 +5358,7 @@ struct ClipToolView: View {
                 if didMove {
                     playheadSeconds = newPlayhead
                     model.clipPlayheadSeconds = newPlayhead
+                    model.selectTimelineMarkerIfAligned(near: newPlayhead)
                     if Date() >= suppressVisualPlayheadSyncUntil {
                         playheadVisualSeconds = newPlayhead
                     }
@@ -5298,7 +5447,7 @@ struct WaveformView: View {
     let highlightedClipBoundary: ClipBoundaryHighlight?
     let captureFrameFlashToken: Int
     let quickExportFlashToken: Int
-    let onSeek: (Double) -> Void
+    let onSeek: (Double, Bool) -> Void
     let onSetStart: (Double) -> Void
     let onSetEnd: (Double) -> Void
     let onHoverChanged: (Bool) -> Void
@@ -5315,6 +5464,7 @@ struct WaveformView: View {
     @State private var selectionFlashOpacity: Double = 0
     @State private var selectionFlashGlowOpacity: Double = 0
     @State private var isResizeCursorActive = false
+    @State private var hoveredMarkerID: UUID?
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -5322,7 +5472,7 @@ struct WaveformView: View {
 
     private func xPosition(for value: Double, width: CGFloat) -> CGFloat {
         let local = value - visibleStartSeconds
-        return CGFloat(min(max(0, local / visibleDuration), 1.0)) * width
+        return CGFloat(local / visibleDuration) * width
     }
 
     private func timeValue(for x: CGFloat, width: CGFloat, windowStart: Double, windowEnd: Double) -> Double {
@@ -5340,53 +5490,71 @@ struct WaveformView: View {
         GeometryReader { proxy in
             let width = proxy.size.width
             let height = proxy.size.height
+            let markerTopGutter: CGFloat = 8
+            let markerBottomGutter: CGFloat = 8
+            let timelineVerticalOffset: CGFloat = markerTopGutter
+            let timelineHeight = max(1, height - markerTopGutter - markerBottomGutter)
             let startX = xPosition(for: startSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
+            let selectionMinX = min(startX, endX)
+            let selectionMaxX = max(startX, endX)
+            let visibleSelectionStartX = max(0, selectionMinX)
+            let visibleSelectionEndX = min(width, selectionMaxX)
+            let visibleSelectionWidth = max(0, visibleSelectionEndX - visibleSelectionStartX)
+            let hasVisibleSelection = visibleSelectionWidth > 0.5
             let isStartEdgeActive = isStartEdgeHovered || isStartEdgeDragging
             let isEndEdgeActive = isEndEdgeHovered || isEndEdgeDragging
             let isEdgeActive = isStartEdgeActive || isEndEdgeActive
             let edgeHoverProximity: CGFloat = 22
             let edgeHitWidth: CGFloat = edgeHoverProximity * 2
+            let markerHeadHoverSize: CGFloat = 12
+            let markerTapWidth: CGFloat = 16
+            let markerTapHeight: CGFloat = markerTopGutter + 12
             let selectionOutlineOpacity: Double = isEdgeActive ? 1.0 : (isHovered ? 0.98 : 0.92)
             let selectionOutlineWidth: CGFloat = isEdgeActive ? 3.4 : 3.0
-            let selectionWidth = max(1, endX - startX)
+            let selectionWidth = max(1, abs(endX - startX))
             let edgeGlowWidth = min(max(selectionWidth * 0.18, 18), 44)
             let startEdgeGlowOpacity: Double = isStartEdgeDragging ? 1.0 : (isStartEdgeHovered ? 0.78 : 0)
             let endEdgeGlowOpacity: Double = isEndEdgeDragging ? 1.0 : (isEndEdgeHovered ? 0.78 : 0)
             let startBoundaryPulseOpacity: Double = highlightedClipBoundary == .start ? 0.95 : 0
             let endBoundaryPulseOpacity: Double = highlightedClipBoundary == .end ? 0.95 : 0
+            let visibleMarkers = captureMarkers.filter { marker in
+                marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
+            }
 
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.black.opacity(isHovered ? 0.16 : 0.12))
 
-                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                systemAccent.opacity(0.36),
-                                systemAccent.opacity(0.42),
-                                systemAccent.opacity(0.36)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                if hasVisibleSelection {
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    systemAccent.opacity(0.36),
+                                    systemAccent.opacity(0.42),
+                                    systemAccent.opacity(0.36)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .frame(width: max(1, endX - startX))
-                    .offset(x: startX)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                            .stroke(systemAccent.opacity(selectionOutlineOpacity), lineWidth: selectionOutlineWidth)
-                            .frame(width: max(1, endX - startX))
-                            .offset(x: startX)
-                            .allowsHitTesting(false)
-                    )
+                        .frame(width: visibleSelectionWidth, height: timelineHeight)
+                        .offset(x: visibleSelectionStartX, y: timelineVerticalOffset)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                .stroke(systemAccent.opacity(selectionOutlineOpacity), lineWidth: selectionOutlineWidth)
+                                .frame(width: visibleSelectionWidth, height: timelineHeight)
+                                .offset(x: visibleSelectionStartX, y: timelineVerticalOffset)
+                                .allowsHitTesting(false)
+                        )
 
-                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(Color.white.opacity(selectionFlashOpacity))
-                    .frame(width: max(1, endX - startX))
-                    .offset(x: startX)
-                    .allowsHitTesting(false)
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .fill(Color.white.opacity(selectionFlashOpacity))
+                        .frame(width: visibleSelectionWidth, height: timelineHeight)
+                        .offset(x: visibleSelectionStartX, y: timelineVerticalOffset)
+                        .allowsHitTesting(false)
+                }
 
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(
@@ -5399,8 +5567,8 @@ struct WaveformView: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: edgeGlowWidth, height: height)
-                    .offset(x: startX)
+                    .frame(width: edgeGlowWidth, height: timelineHeight)
+                    .offset(x: startX, y: timelineVerticalOffset)
                     .animation(.easeOut(duration: 0.16), value: isStartEdgeActive)
                     .allowsHitTesting(false)
 
@@ -5415,8 +5583,8 @@ struct WaveformView: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: edgeGlowWidth, height: height)
-                    .offset(x: max(startX, endX - edgeGlowWidth))
+                    .frame(width: edgeGlowWidth, height: timelineHeight)
+                    .offset(x: max(startX, endX - edgeGlowWidth), y: timelineVerticalOffset)
                     .animation(.easeOut(duration: 0.16), value: isEndEdgeActive)
                     .allowsHitTesting(false)
 
@@ -5431,8 +5599,8 @@ struct WaveformView: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: edgeGlowWidth, height: height)
-                    .offset(x: startX)
+                    .frame(width: edgeGlowWidth, height: timelineHeight)
+                    .offset(x: startX, y: timelineVerticalOffset)
                     .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
                     .allowsHitTesting(false)
 
@@ -5447,8 +5615,8 @@ struct WaveformView: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: edgeGlowWidth, height: height)
-                    .offset(x: max(startX, endX - edgeGlowWidth))
+                    .frame(width: edgeGlowWidth, height: timelineHeight)
+                    .offset(x: max(startX, endX - edgeGlowWidth), y: timelineVerticalOffset)
                     .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
                     .allowsHitTesting(false)
 
@@ -5467,13 +5635,61 @@ struct WaveformView: View {
                     captureMarkers: captureMarkers,
                     highlightedMarkerID: highlightedMarkerID
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .frame(maxWidth: .infinity, minHeight: timelineHeight, maxHeight: timelineHeight, alignment: .center)
+                .offset(y: timelineVerticalOffset)
+
+                ForEach(visibleMarkers) { marker in
+                    ZStack(alignment: .top) {
+                        // Selection-style hover: soft vertical wash, no focus-ring outline.
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: hoveredMarkerID == marker.id
+                                        ? [
+                                            Color.orange.opacity(0.34),
+                                            Color.orange.opacity(0.18),
+                                            Color.clear
+                                        ]
+                                        : [Color.clear, Color.clear, Color.clear],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .frame(width: markerTapWidth + 4, height: markerTapHeight + 6)
+                            .blur(radius: hoveredMarkerID == marker.id ? 1.6 : 0)
+
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(hoveredMarkerID == marker.id ? Color.orange.opacity(0.2) : Color.clear)
+                            .frame(width: markerHeadHoverSize, height: markerHeadHoverSize)
+                    }
+                    .frame(width: markerTapWidth, height: markerTapHeight, alignment: .top)
+                    .contentShape(Rectangle())
+                    .offset(x: xPosition(for: marker.seconds, width: width) - (markerTapWidth / 2), y: 0)
+                        .onHover { hovering in
+                            if hovering {
+                                hoveredMarkerID = marker.id
+                                NSCursor.pointingHand.set()
+                            } else if hoveredMarkerID == marker.id {
+                                hoveredMarkerID = nil
+                                if !isStartEdgeDragging && !isEndEdgeDragging && !isResizeCursorActive {
+                                    NSCursor.arrow.set()
+                                }
+                            }
+                        }
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onEnded { _ in
+                                hoveredMarkerID = marker.id
+                                onSeek(marker.seconds, true)
+                            }
+                    )
+                }
 
                 Rectangle()
                     .fill(Color.clear)
-                    .frame(width: edgeHitWidth, height: height)
+                    .frame(width: edgeHitWidth, height: timelineHeight)
                     .contentShape(Rectangle())
-                    .offset(x: startX - (edgeHitWidth / 2))
+                    .offset(x: startX - (edgeHitWidth / 2), y: timelineVerticalOffset)
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
                             .onChanged { value in
@@ -5501,9 +5717,9 @@ struct WaveformView: View {
 
                 Rectangle()
                     .fill(Color.clear)
-                    .frame(width: edgeHitWidth, height: height)
+                    .frame(width: edgeHitWidth, height: timelineHeight)
                     .contentShape(Rectangle())
-                    .offset(x: endX - (edgeHitWidth / 2))
+                    .offset(x: endX - (edgeHitWidth / 2), y: timelineVerticalOffset)
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
                             .onChanged { value in
@@ -5529,14 +5745,16 @@ struct WaveformView: View {
                             }
                     )
 
-                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .stroke(Color.white.opacity(0.95), lineWidth: 2.0)
-                    .frame(width: max(1, endX - startX))
-                    .frame(height: max(1, height - 8))
-                    .offset(x: startX, y: 4)
-                    .shadow(color: Color.accentColor.opacity(selectionFlashGlowOpacity), radius: 14)
-                    .opacity(selectionFlashGlowOpacity)
-                    .allowsHitTesting(false)
+                if hasVisibleSelection {
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .stroke(Color.white.opacity(0.95), lineWidth: 2.0)
+                        .frame(width: visibleSelectionWidth)
+                        .frame(height: max(1, timelineHeight - 8))
+                        .offset(x: visibleSelectionStartX, y: timelineVerticalOffset + 4)
+                        .shadow(color: Color.accentColor.opacity(selectionFlashGlowOpacity), radius: 14)
+                        .opacity(selectionFlashGlowOpacity)
+                        .allowsHitTesting(false)
+                }
             }
             .coordinateSpace(name: "waveformTimeline")
             .overlay(
@@ -5550,6 +5768,7 @@ struct WaveformView: View {
                 if !hovering && !isStartEdgeDragging && !isEndEdgeDragging {
                     isStartEdgeHovered = false
                     isEndEdgeHovered = false
+                    hoveredMarkerID = nil
                     isResizeCursorActive = false
                     NSCursor.arrow.set()
                 }
@@ -5627,13 +5846,17 @@ struct WaveformView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        let shouldSnapToMarker = dragWindowStart == nil || dragWindowEnd == nil
                         if dragWindowStart == nil || dragWindowEnd == nil {
                             dragWindowStart = visibleStartSeconds
                             dragWindowEnd = visibleEndSeconds
                         }
                         let windowStart = dragWindowStart ?? visibleStartSeconds
                         let windowEnd = dragWindowEnd ?? visibleEndSeconds
-                        onSeek(timeValue(for: value.location.x, width: width, windowStart: windowStart, windowEnd: windowEnd))
+                        onSeek(
+                            timeValue(for: value.location.x, width: width, windowStart: windowStart, windowEnd: windowEnd),
+                            shouldSnapToMarker
+                        )
                     }
                     .onEnded { _ in
                         dragWindowStart = nil
@@ -5934,8 +6157,36 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         let newContentsRect = CGRect(x: startNorm, y: 0, width: widthNorm, height: 1)
 
         if !newContentsRect.equalTo(context.coordinator.lastAppliedContentsRect) {
+            let oldRect = context.coordinator.lastAppliedContentsRect
+            var markerScrollShiftX: CGFloat = 0
+            if oldRect != .null {
+                let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
+                // Recenter jumps: animate viewport movement so it doesn't appear to snap.
+                if deltaX > 0.03 {
+                    let anim = CABasicAnimation(keyPath: "contentsRect")
+                    anim.fromValue = oldRect
+                    anim.toValue = newContentsRect
+                    anim.duration = 0.22
+                    anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    anim.isRemovedOnCompletion = true
+                    nsView.waveformLayer.add(anim, forKey: "viewportRecenter")
+
+                    let normWidth = max(0.000001, newContentsRect.width)
+                    markerScrollShiftX = CGFloat((newContentsRect.origin.x - oldRect.origin.x) / normWidth) * nsView.bounds.width
+                }
+            }
             nsView.waveformLayer.contentsRect = newContentsRect
             context.coordinator.lastAppliedContentsRect = newContentsRect
+
+            if markerScrollShiftX != 0 {
+                let markerPan = CABasicAnimation(keyPath: "sublayerTransform.translation.x")
+                markerPan.fromValue = markerScrollShiftX
+                markerPan.toValue = 0
+                markerPan.duration = 0.22
+                markerPan.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                markerPan.isRemovedOnCompletion = true
+                nsView.markerContainerLayer.add(markerPan, forKey: "viewportRecenterMarkers")
+            }
         }
 
         if !nsView.bounds.equalTo(context.coordinator.lastAppliedBounds) {
@@ -5947,8 +6198,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         let width = nsView.bounds.width
         func xPosition(for seconds: Double) -> CGFloat {
             let local = seconds - visibleStartSeconds
-            let ratio = min(max(0, local / visibleDuration), 1.0)
-            return CGFloat(ratio) * width
+            return CGFloat(local / visibleDuration) * width
         }
 
         let playheadX = xPosition(for: playheadSeconds)
@@ -5975,6 +6225,8 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         }
 
         nsView.playheadLayer.frame = targetPlayheadFrame
+        let playheadVisible = playheadX >= -6 && playheadX <= (width + 6)
+        nsView.playheadLayer.opacity = playheadVisible ? 1.0 : 0.0
         nsView.playheadLayer.shadowColor = NSColor.systemRed.cgColor
         let targetShadowOpacity: Float = isPlayheadCaptureFlashing ? 0.9 : 0.0
         let targetShadowRadius: CGFloat = isPlayheadCaptureFlashing ? 6 : 0
