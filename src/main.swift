@@ -1547,6 +1547,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var outputURL: URL?
     @Published private(set) var captureTimelineMarkers: [CaptureTimelineMarker] = []
     @Published var highlightedCaptureTimelineMarkerID: UUID?
+    @Published var captureFrameFlashToken: Int = 0
     @Published var quickExportFlashToken: Int = 0
 
     @Published var clipStartSeconds: Double = 0
@@ -3524,7 +3525,9 @@ final class WorkspaceViewModel: ObservableObject {
         guard let sourceURL, hasVideoTrack else { return }
 
         let duration = sourceDurationSeconds
-        let clampedTime = max(0, min(seconds, duration > 0 ? duration : seconds))
+        let safeInput = seconds.isFinite ? seconds : 0
+        let maxTime = duration > 0 ? max(0, duration - (1.0 / 600.0)) : safeInput
+        let clampedTime = max(0, min(safeInput, maxTime))
         let defaultName = sourceURL.deletingPathExtension().lastPathComponent +
             "_frame_" + formatSeconds(clampedTime).replacingOccurrences(of: ":", with: "-") + ".png"
 
@@ -3565,15 +3568,24 @@ final class WorkspaceViewModel: ObservableObject {
 
         do {
             let asset = AVURLAsset(url: sourceURL)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.requestedTimeToleranceBefore = CMTime(seconds: 1.0 / 120.0, preferredTimescale: 600)
-            generator.requestedTimeToleranceAfter = CMTime(seconds: 1.0 / 120.0, preferredTimescale: 600)
+            let captureTime = CMTime(seconds: clampedTime, preferredTimescale: 600)
+            let cgImage: CGImage
 
-            let cgImage = try generator.copyCGImage(
-                at: CMTime(seconds: clampedTime, preferredTimescale: 600),
-                actualTime: nil
-            )
+            do {
+                let strictGenerator = AVAssetImageGenerator(asset: asset)
+                strictGenerator.appliesPreferredTrackTransform = true
+                strictGenerator.requestedTimeToleranceBefore = CMTime(seconds: 1.0 / 120.0, preferredTimescale: 600)
+                strictGenerator.requestedTimeToleranceAfter = CMTime(seconds: 1.0 / 120.0, preferredTimescale: 600)
+                cgImage = try strictGenerator.copyCGImage(at: captureTime, actualTime: nil)
+            } catch {
+                // Fallback for files/timestamps where strict frame matching fails.
+                let fallbackGenerator = AVAssetImageGenerator(asset: asset)
+                fallbackGenerator.appliesPreferredTrackTransform = true
+                fallbackGenerator.requestedTimeToleranceBefore = .positiveInfinity
+                fallbackGenerator.requestedTimeToleranceAfter = .positiveInfinity
+                cgImage = try fallbackGenerator.copyCGImage(at: captureTime, actualTime: nil)
+            }
+
             let bitmap = NSBitmapImageRep(cgImage: cgImage)
             guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
                 uiMessage = "Frame capture failed: Unable to encode PNG."
@@ -3583,12 +3595,13 @@ final class WorkspaceViewModel: ObservableObject {
 
             try pngData.write(to: destinationURL, options: .atomic)
             outputURL = destinationURL
-            addCaptureTimelineMarker(at: clampedTime)
+            captureFrameFlashToken &+= 1
             uiMessage = "Frame saved: \(destinationURL.lastPathComponent)"
             lastActivityState = .success
             playFrameCaptureSound()
         } catch {
-            uiMessage = "Frame capture failed: \(error.localizedDescription)"
+            let nsError = error as NSError
+            uiMessage = "Frame capture failed (\(nsError.domain) \(nsError.code)): \(nsError.localizedDescription)"
             lastActivityState = .failed
         }
     }
@@ -4493,6 +4506,7 @@ struct ClipToolView: View {
                         visibleEndSeconds: visibleEndSeconds,
                         captureMarkers: model.captureTimelineMarkers,
                         highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
+                        captureFrameFlashToken: model.captureFrameFlashToken,
                         quickExportFlashToken: model.quickExportFlashToken,
                         onSeek: { seekPlayer(to: $0) },
                         onSetStart: { model.setClipStart($0) },
@@ -5036,6 +5050,7 @@ struct WaveformView: View {
     let visibleEndSeconds: Double
     let captureMarkers: [CaptureTimelineMarker]
     let highlightedMarkerID: UUID?
+    let captureFrameFlashToken: Int
     let quickExportFlashToken: Int
     let onSeek: (Double) -> Void
     let onSetStart: (Double) -> Void
@@ -5050,6 +5065,7 @@ struct WaveformView: View {
     @State private var isEndEdgeDragging = false
     @State private var startEdgeDragAnchor: Double?
     @State private var endEdgeDragAnchor: Double?
+    @State private var isPlayheadCaptureFlashing = false
     @State private var selectionFlashOpacity: Double = 0
     @State private var selectionFlashGlowOpacity: Double = 0
 
@@ -5080,6 +5096,7 @@ struct WaveformView: View {
             let startX = xPosition(for: startSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
             let playheadX = xPosition(for: playheadSeconds, width: width)
+            let playheadWidth: CGFloat = isPlayheadCaptureFlashing ? 3.6 : 2.0
             let edgeHeight = max(8, height)
             let isStartEdgeActive = isStartEdgeHovered || isStartEdgeDragging
             let isEndEdgeActive = isEndEdgeHovered || isEndEdgeDragging
@@ -5179,9 +5196,14 @@ struct WaveformView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
                 Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: 2, height: height)
-                    .offset(x: playheadX - 1)
+                    .fill(Color(nsColor: .systemRed))
+                    .frame(width: playheadWidth, height: height)
+                    .offset(x: playheadX - (playheadWidth / 2))
+                    .shadow(
+                        color: Color(nsColor: .systemRed).opacity(isPlayheadCaptureFlashing ? 0.9 : 0),
+                        radius: isPlayheadCaptureFlashing ? 6 : 0
+                    )
+                    .animation(.easeOut(duration: 0.14), value: isPlayheadCaptureFlashing)
 
                 ZStack {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -5365,6 +5387,16 @@ struct WaveformView: View {
                 withAnimation(.easeOut(duration: 0.34)) {
                     selectionFlashOpacity = 0
                     selectionFlashGlowOpacity = 0
+                }
+            }
+            .task(id: captureFrameFlashToken) {
+                guard captureFrameFlashToken > 0 else { return }
+                withAnimation(.easeOut(duration: 0.08)) {
+                    isPlayheadCaptureFlashing = true
+                }
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                withAnimation(.easeOut(duration: 0.2)) {
+                    isPlayheadCaptureFlashing = false
                 }
             }
             .animation(.spring(response: 0.24, dampingFraction: 0.72), value: highlightedMarkerID)
