@@ -4123,6 +4123,7 @@ struct ClipToolView: View {
     @State private var timelineInteractiveWidth: CGFloat = 1
     @State private var isMiddleMousePanning = false
     @State private var middleMousePanLastWindowX: CGFloat?
+    @State private var markerNavigationAnimationToken: Int = 0
 
     private let timer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
     @State private var lastInteractiveSeekSeconds: Double = -1
@@ -4237,6 +4238,7 @@ struct ClipToolView: View {
         }
 
         guard let target else { return }
+        markerNavigationAnimationToken &+= 1
         seekPlayerAndFocusViewport(to: target)
         model.highlightTimelineMarker(near: target)
         model.highlightBoundaryIfNeeded(near: target, clipStart: model.clipStartSeconds, clipEnd: model.clipEndSeconds)
@@ -4618,6 +4620,7 @@ struct ClipToolView: View {
                         highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
                         highlightedClipBoundary: model.highlightedClipBoundary,
                         captureFrameFlashToken: model.captureFrameFlashToken,
+                        markerNavigationAnimationToken: markerNavigationAnimationToken,
                         quickExportFlashToken: model.quickExportFlashToken,
                         onSeek: { seekPlayerInteractive(to: $0) },
                         onSetStart: { model.setClipStart($0) },
@@ -5164,6 +5167,7 @@ struct WaveformView: View {
     let highlightedMarkerID: UUID?
     let highlightedClipBoundary: ClipBoundaryHighlight?
     let captureFrameFlashToken: Int
+    let markerNavigationAnimationToken: Int
     let quickExportFlashToken: Int
     let onSeek: (Double) -> Void
     let onSetStart: (Double) -> Void
@@ -5548,7 +5552,7 @@ struct WaveformView: View {
                     isPlayheadCaptureFlashing = false
                 }
             }
-            .animation(.spring(response: 0.24, dampingFraction: 0.72), value: highlightedMarkerID)
+            .animation(.spring(response: 0.24, dampingFraction: 0.72), value: markerNavigationAnimationToken)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
