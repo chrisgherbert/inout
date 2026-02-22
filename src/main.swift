@@ -5195,16 +5195,6 @@ struct WaveformView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
-                Rectangle()
-                    .fill(Color(nsColor: .systemRed))
-                    .frame(width: playheadWidth, height: height)
-                    .offset(x: playheadX - (playheadWidth / 2))
-                    .shadow(
-                        color: Color(nsColor: .systemRed).opacity(isPlayheadCaptureFlashing ? 0.9 : 0),
-                        radius: isPlayheadCaptureFlashing ? 6 : 0
-                    )
-                    .animation(.easeOut(duration: 0.14), value: isPlayheadCaptureFlashing)
-
                 ZStack {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(systemAccent)
@@ -5365,6 +5355,18 @@ struct WaveformView: View {
             }
             .coordinateSpace(name: "waveformTimeline")
             .clipShape(RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+            .overlay(alignment: .topLeading) {
+                Rectangle()
+                    .fill(Color(nsColor: .systemRed))
+                    .frame(width: playheadWidth, height: height + 8)
+                    .offset(x: playheadX - (playheadWidth / 2), y: -4)
+                    .shadow(
+                        color: Color(nsColor: .systemRed).opacity(isPlayheadCaptureFlashing ? 0.9 : 0),
+                        radius: isPlayheadCaptureFlashing ? 6 : 0
+                    )
+                    .animation(.easeOut(duration: 0.14), value: isPlayheadCaptureFlashing)
+                    .allowsHitTesting(false)
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .stroke(isHovered ? Color.accentColor.opacity(0.28) : Color.gray.opacity(0.16), lineWidth: 0.8)
