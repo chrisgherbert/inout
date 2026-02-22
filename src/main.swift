@@ -6000,7 +6000,10 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         context.coordinator.lastPlayheadCaptureFlashing = isPlayheadCaptureFlashing
 
         let markerContainer = nsView.markerContainerLayer
-        markerContainer.sublayers = captureMarkers.map { marker in
+        let visibleMarkers = captureMarkers.enumerated().filter { _, marker in
+            marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
+        }
+        markerContainer.sublayers = visibleMarkers.map { _, marker in
             let markerX = xPosition(for: marker.seconds)
             let isHighlighted = marker.id == highlightedMarkerID
             let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
@@ -6028,10 +6031,10 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
         if highlightedMarkerID != context.coordinator.lastHighlightedMarkerID,
            let highlightedMarkerID,
-           let idx = captureMarkers.firstIndex(where: { $0.id == highlightedMarkerID }),
+           let visibleIndex = visibleMarkers.firstIndex(where: { $0.element.id == highlightedMarkerID }),
            let markerLayers = markerContainer.sublayers,
-           idx >= 0, idx < markerLayers.count {
-            let pinLayer = markerLayers[idx]
+           visibleIndex >= 0, visibleIndex < markerLayers.count {
+            let pinLayer = markerLayers[visibleIndex]
             let glow = CABasicAnimation(keyPath: "shadowOpacity")
             glow.fromValue = 0.0
             glow.toValue = 0.6
