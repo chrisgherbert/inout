@@ -13,6 +13,7 @@ extension Notification.Name {
     static let clipSetStartAtPlayhead = Notification.Name("clipSetStartAtPlayhead")
     static let clipSetEndAtPlayhead = Notification.Name("clipSetEndAtPlayhead")
     static let clipClearRange = Notification.Name("clipClearRange")
+    static let clipAddMarkerAtPlayhead = Notification.Name("clipAddMarkerAtPlayhead")
     static let clipJumpToStart = Notification.Name("clipJumpToStart")
     static let clipJumpToEnd = Notification.Name("clipJumpToEnd")
     static let clipCaptureFrame = Notification.Name("clipCaptureFrame")
@@ -5119,11 +5120,14 @@ struct ClipToolView: View {
                 model.resetClipRange()
                 seekPlayer(to: model.clipStartSeconds)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .clipAddMarkerAtPlayhead)) { _ in
+                model.addTimelineMarker(at: playheadSeconds)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart)) { _ in
-                seekPlayerAndFocusViewport(to: model.clipStartSeconds)
+                navigateToMarker(previous: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipJumpToEnd)) { _ in
-                seekPlayerAndFocusViewport(to: model.clipEndSeconds)
+                navigateToMarker(previous: false)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipCaptureFrame)) { _ in
                 model.captureFrame(at: playheadSeconds)
@@ -7104,6 +7108,7 @@ struct HelpDocumentationView: View {
             items: [
                 "Create new clips by setting In/Out points on the timeline.",
                 "Set points with drag handles, direct timecode entry, keyboard shortcuts, or playhead actions.",
+                "Add timeline markers with M, then use Up/Down arrows to jump to previous/next marker (In/Out points are included).",
                 "Choose Fast, Advanced, or Audio Only export modes depending on speed and compatibility needs."
             ]
         ),
@@ -7149,8 +7154,9 @@ struct HelpDocumentationView: View {
         ShortcutItem(action: "Set clip start at playhead", keys: ["I"]),
         ShortcutItem(action: "Set clip end at playhead", keys: ["O"]),
         ShortcutItem(action: "Clear clip in/out", keys: ["X"]),
-        ShortcutItem(action: "Jump to clip start", keys: ["↑"]),
-        ShortcutItem(action: "Jump to clip end", keys: ["↓"]),
+        ShortcutItem(action: "Add marker at playhead", keys: ["M"]),
+        ShortcutItem(action: "Previous marker (includes In/Out points)", keys: ["↑"]),
+        ShortcutItem(action: "Next marker (includes In/Out points)", keys: ["↓"]),
         ShortcutItem(action: "Export clip", keys: ["⌘", "E"]),
         ShortcutItem(action: "Quick export clip (no save dialog)", keys: ["⌘", "⇧", "E"]),
         ShortcutItem(action: "Export audio", keys: ["⌘", "⌥", "E"]),
@@ -7295,9 +7301,17 @@ struct CheckBlackFramesApp: App {
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
 
                 Button {
+                    NotificationCenter.default.post(name: .clipAddMarkerAtPlayhead, object: nil)
+                } label: {
+                    Label("Add Marker at Playhead", systemImage: "mappin.and.ellipse")
+                }
+                .keyboardShortcut("m", modifiers: [])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+
+                Button {
                     NotificationCenter.default.post(name: .clipJumpToStart, object: nil)
                 } label: {
-                    Label("Jump to Clip Start", systemImage: "backward.end.fill")
+                    Label("Previous Marker (or In/Out)", systemImage: "chevron.up.circle")
                 }
                 .keyboardShortcut(.upArrow, modifiers: [])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
@@ -7305,7 +7319,7 @@ struct CheckBlackFramesApp: App {
                 Button {
                     NotificationCenter.default.post(name: .clipJumpToEnd, object: nil)
                 } label: {
-                    Label("Jump to Clip End", systemImage: "forward.end.fill")
+                    Label("Next Marker (or In/Out)", systemImage: "chevron.down.circle")
                 }
                 .keyboardShortcut(.downArrow, modifiers: [])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
