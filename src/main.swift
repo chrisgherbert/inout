@@ -2707,6 +2707,10 @@ final class WorkspaceViewModel: ObservableObject {
             try? FileManager.default.removeItem(at: destination)
         }
 
+        if skipSaveDialog {
+            playQuickExportSnipSound()
+        }
+
         isExporting = true
         lastActivityState = .running
         exportCancellationRequested = false
@@ -3631,6 +3635,26 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func playQuickExportSnipSound() {
+        if let bundledURL = Bundle.main.url(forResource: "QuickExportSnip", withExtension: "aiff"),
+           let bundledSound = NSSound(contentsOf: bundledURL, byReference: true) {
+            bundledSound.play()
+            return
+        }
+
+        let preferred: [NSSound.Name] = [
+            NSSound.Name("Pop"),
+            NSSound.Name("Tink"),
+            NSSound.Name("Glass")
+        ]
+        for name in preferred {
+            if let sound = NSSound(named: name) {
+                sound.play()
+                return
+            }
+        }
+    }
+
     private func uniqueURL(in directory: URL, preferredFileName: String) -> URL {
         let ext = (preferredFileName as NSString).pathExtension
         let baseName = (preferredFileName as NSString).deletingPathExtension
@@ -4010,12 +4034,14 @@ struct ClipToolView: View {
     @State private var isWaveformLoading = false
     @State private var waveformTask: Task<Void, Never>?
     @State private var keyMonitor: Any?
+    @State private var flagsMonitor: Any?
     @State private var scrollMonitor: Any?
     @State private var mouseDownMonitor: Any?
     @State private var timelineZoom: Double = 1.0
     @State private var viewportStartSeconds: Double = 0
     @State private var isViewportManuallyControlled = false
     @State private var isTimelineHovered = false
+    @State private var isOptionKeyPressed = false
     @State private var timelineInteractiveWidth: CGFloat = 1
 
     private let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
@@ -4266,6 +4292,14 @@ struct ClipToolView: View {
         }
     }
 
+    private func installFlagsMonitor() {
+        guard flagsMonitor == nil else { return }
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { event in
+            isOptionKeyPressed = event.modifierFlags.contains(.option)
+            return event
+        }
+    }
+
     private func installMouseDownMonitor() {
         guard mouseDownMonitor == nil else { return }
         mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
@@ -4298,6 +4332,10 @@ struct ClipToolView: View {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
+        }
+        if let flagsMonitor {
+            NSEvent.removeMonitor(flagsMonitor)
+            self.flagsMonitor = nil
         }
         if let scrollMonitor {
             NSEvent.removeMonitor(scrollMonitor)
@@ -4757,11 +4795,18 @@ struct ClipToolView: View {
                             Button {
                                 model.commitClipStartText()
                                 model.commitClipEndText()
-                                model.startClipExport()
+                                let quickExport = NSEvent.modifierFlags.contains(.option)
+                                model.startClipExport(skipSaveDialog: quickExport)
                             } label: {
-                                Label(model.isExporting ? "Exporting…" : "Export Clip", systemImage: "film.stack")
+                                Label(
+                                    model.isExporting
+                                        ? "Exporting…"
+                                        : (isOptionKeyPressed ? "Quick Export Clip" : "Export Clip"),
+                                    systemImage: "film.stack"
+                                )
                             }
                             .buttonStyle(.borderedProminent)
+                            .help("Export Clip. Option-click for Quick Export (no save dialog).")
                             .disabled(!model.canExportClip)
                         }
                     }
@@ -4792,6 +4837,7 @@ struct ClipToolView: View {
         .onAppear {
             loadPlayerItem()
             installKeyMonitor()
+            installFlagsMonitor()
             installScrollMonitor()
             installMouseDownMonitor()
         }
@@ -4851,6 +4897,7 @@ struct ClipToolView: View {
         .onDisappear {
             waveformTask?.cancel()
             removeKeyMonitor()
+            isOptionKeyPressed = false
             player.pause()
         }
     }

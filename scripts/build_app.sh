@@ -20,6 +20,8 @@ ICON_ICNS_PATH="$APP_RESOURCES/$ICON_ICNS_NAME"
 ICON_PNG_PATH="$APP_RESOURCES/$ICON_PNG_NAME"
 FRAME_SOUND_SOURCE="$ROOT_DIR/assets/FrameShutter.aiff"
 FRAME_SOUND_DEST="$APP_RESOURCES/FrameShutter.aiff"
+QUICK_EXPORT_SOUND_SOURCE="$ROOT_DIR/assets/QuickExportSnip.aiff"
+QUICK_EXPORT_SOUND_DEST="$APP_RESOURCES/QuickExportSnip.aiff"
 
 mkdir -p "$DIST"
 mkdir -p "$MODULE_CACHE"
@@ -122,6 +124,13 @@ if [[ -f "$FRAME_SOUND_SOURCE" ]]; then
   echo "Bundled frame capture sound: $FRAME_SOUND_SOURCE"
 else
   echo "Frame capture sound not bundled (missing $FRAME_SOUND_SOURCE)."
+fi
+
+if [[ -f "$QUICK_EXPORT_SOUND_SOURCE" ]]; then
+  cp "$QUICK_EXPORT_SOUND_SOURCE" "$QUICK_EXPORT_SOUND_DEST"
+  echo "Bundled quick export sound: $QUICK_EXPORT_SOUND_SOURCE"
+else
+  echo "Quick export sound not bundled (missing $QUICK_EXPORT_SOUND_SOURCE)."
 fi
 
 FFMPEG_SOURCE="${BUNDLED_FFMPEG_PATH:-}"
