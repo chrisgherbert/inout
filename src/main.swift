@@ -1626,12 +1626,8 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var analyzeProfanity = false
     @Published var profanityWordsText: String = defaultProfanityWordsStorageString {
         didSet {
-            let normalized = normalizedProfanityWordsStorageString(profanityWordsText)
-            if normalized != profanityWordsText {
-                profanityWordsText = normalized
-                return
-            }
-            UserDefaults.standard.set(normalized, forKey: DefaultsKey.profanityWords)
+            // Persist raw user text so TextEditor remains fully editable while typing.
+            UserDefaults.standard.set(profanityWordsText, forKey: DefaultsKey.profanityWords)
         }
     }
     @Published var frameSaveLocationMode: FrameSaveLocationMode = .askEachTime {
@@ -1743,7 +1739,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         let savedProfanityWords = defaults.string(forKey: DefaultsKey.profanityWords) ?? defaultProfanityWordsStorageString
-        profanityWordsText = normalizedProfanityWordsStorageString(savedProfanityWords)
+        profanityWordsText = savedProfanityWords
 
         if let rawFrameSaveMode = defaults.string(forKey: DefaultsKey.frameSaveLocationMode),
            let mode = FrameSaveLocationMode(rawValue: rawFrameSaveMode) {
@@ -1801,6 +1797,10 @@ final class WorkspaceViewModel: ObservableObject {
 
     var selectedProfanityWordsCount: Int {
         selectedProfanityWords.count
+    }
+
+    var selectedProfanityWordsList: [String] {
+        selectedProfanityWords.sorted()
     }
 
     var advancedClipFilenamePreview: String {
@@ -1997,6 +1997,21 @@ final class WorkspaceViewModel: ObservableObject {
 
     func resetProfanityWordsToDefaults() {
         profanityWordsText = defaultProfanityWordsStorageString
+    }
+
+    func addProfanityWords(from raw: String) {
+        let additions = profanityWordsFromString(raw)
+        guard !additions.isEmpty else { return }
+        let merged = selectedProfanityWords.union(additions)
+        profanityWordsText = merged.sorted().joined(separator: ", ")
+    }
+
+    func removeProfanityWord(_ word: String) {
+        let token = normalizedToken(word)
+        guard !token.isEmpty else { return }
+        var words = selectedProfanityWords
+        words.remove(token)
+        profanityWordsText = words.sorted().joined(separator: ", ")
     }
 
     func resetAdvancedClipFilenameTemplateToDefaults() {
@@ -6169,6 +6184,7 @@ struct ContentView: View {
 
 struct PreferencesView: View {
     @ObservedObject var model: WorkspaceViewModel
+    @State private var profanityEntry = ""
 
     var body: some View {
         TabView {
@@ -6234,23 +6250,64 @@ struct PreferencesView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        TextEditor(text: $model.profanityWordsText)
-                            .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 92)
-                            .padding(6)
-                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 120), spacing: 6, alignment: .leading)],
+                            alignment: .leading,
+                            spacing: 6
+                        ) {
+                            ForEach(model.selectedProfanityWordsList, id: \.self) { word in
+                                HStack(spacing: 6) {
+                                    Text(word)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                    Button {
+                                        model.removeProfanityWord(word)
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
+                                    .help("Remove \(word)")
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(.thinMaterial, in: Capsule())
+                                .overlay(
+                                    Capsule()
+                                        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                                )
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
 
                         HStack {
-                            Text("Use comma, space, or newline separators.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
+                            TextField("Add word(s)…", text: $profanityEntry)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit {
+                                    model.addProfanityWords(from: profanityEntry)
+                                    profanityEntry = ""
+                                }
+                            Button("Add") {
+                                model.addProfanityWords(from: profanityEntry)
+                                profanityEntry = ""
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
                             Button("Reset to Defaults") {
                                 model.resetProfanityWordsToDefaults()
+                                profanityEntry = ""
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         }
+
+                        Text("Add one word or paste multiple words separated by commas/spaces/new lines.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 } header: {
                     Text("Profanity Words")
