@@ -4491,35 +4491,75 @@ struct ClipToolView: View {
                     .foregroundStyle(.secondary)
                 }
 
-                HStack(spacing: 8) {
-                    Text("Clip Start")
-                        .frame(width: 70, alignment: .leading)
-                    TextField("00:00:00.000", text: $model.clipStartText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-                        .onSubmit { model.commitClipStartText() }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        HStack(spacing: 8) {
+                            Text("In")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 18, alignment: .leading)
+                            TextField("00:00:00.000", text: $model.clipStartText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.body, design: .monospaced))
+                                .frame(width: 140)
+                                .onSubmit { model.commitClipStartText() }
+                            Button("Set In") {
+                                model.setClipStart(playheadSeconds)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
 
-                    Button("Set Start") {
-                        model.setClipStart(playheadSeconds)
+                        HStack(spacing: 8) {
+                            Text("Out")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24, alignment: .leading)
+                            TextField("00:00:00.000", text: $model.clipEndText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.body, design: .monospaced))
+                                .frame(width: 140)
+                                .onSubmit { model.commitClipEndText() }
+                            Button("Set Out") {
+                                model.setClipEnd(playheadSeconds)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
-                    .buttonStyle(.bordered)
-                }
-                .font(.caption)
+                    .font(.caption)
 
-                HStack(spacing: 8) {
-                    Text("Clip End")
-                        .frame(width: 70, alignment: .leading)
-                    TextField("00:00:00.000", text: $model.clipEndText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-                        .onSubmit { model.commitClipEndText() }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Text("In")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 18, alignment: .leading)
+                            TextField("00:00:00.000", text: $model.clipStartText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.body, design: .monospaced))
+                                .onSubmit { model.commitClipStartText() }
+                            Button("Set In") {
+                                model.setClipStart(playheadSeconds)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
 
-                    Button("Set End") {
-                        model.setClipEnd(playheadSeconds)
+                        HStack(spacing: 8) {
+                            Text("Out")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24, alignment: .leading)
+                            TextField("00:00:00.000", text: $model.clipEndText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.body, design: .monospaced))
+                                .onSubmit { model.commitClipEndText() }
+                            Button("Set Out") {
+                                model.setClipEnd(playheadSeconds)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
-                    .buttonStyle(.bordered)
+                    .font(.caption)
                 }
-                .font(.caption)
 
                 if !isCompactLayout {
                     HStack {
@@ -5112,6 +5152,11 @@ struct WaveformView: View {
 }
 
 struct UnifiedClipTimelineSelector: View {
+    private enum TimelineHandle {
+        case start
+        case end
+    }
+
     @Binding var startSeconds: Double
     @Binding var playheadSeconds: Double
     @Binding var endSeconds: Double
@@ -5124,6 +5169,7 @@ struct UnifiedClipTimelineSelector: View {
     @State private var seekDragWindowStart: Double?
     @State private var seekDragWindowEnd: Double?
     @State private var isHovered = false
+    @State private var hoveredHandle: TimelineHandle?
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -5147,6 +5193,8 @@ struct UnifiedClipTimelineSelector: View {
             let startX = xPosition(for: startSeconds, width: width)
             let playheadX = xPosition(for: playheadSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
+            let handleSize: CGFloat = 14
+            let handleCenterY: CGFloat = 20
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
@@ -5213,16 +5261,26 @@ struct UnifiedClipTimelineSelector: View {
 
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 14, height: 14)
-                    .offset(x: startX - 7, y: 13)
+                    .frame(width: handleSize, height: handleSize)
                     .overlay(
                         Circle()
                             .stroke(Color.accentColor.opacity(0.95), lineWidth: 2)
-                            .frame(width: 14, height: 14)
-                            .offset(x: startX - 7, y: 13)
+                            .frame(width: handleSize, height: handleSize)
                     )
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(hoveredHandle == .start ? 0.9 : 0), lineWidth: 1.5)
+                            .scaleEffect(hoveredHandle == .start ? 1.32 : 1.0)
+                            .animation(.easeOut(duration: 0.12), value: hoveredHandle == .start)
+                    )
+                    .shadow(color: Color.accentColor.opacity(hoveredHandle == .start ? 0.35 : 0), radius: hoveredHandle == .start ? 5 : 0)
+                    .position(x: startX, y: handleCenterY)
+                    .contentShape(Circle())
+                    .onHover { isOver in
+                        hoveredHandle = isOver ? .start : (hoveredHandle == .start ? nil : hoveredHandle)
+                    }
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .named("clipTimelineTrack"))
                             .onChanged { value in
                                 let newValue = min(timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds), endSeconds)
                                 startSeconds = max(0, newValue)
@@ -5231,22 +5289,33 @@ struct UnifiedClipTimelineSelector: View {
 
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 14, height: 14)
-                    .offset(x: endX - 7, y: 13)
+                    .frame(width: handleSize, height: handleSize)
                     .overlay(
                         Circle()
                             .stroke(Color.accentColor.opacity(0.95), lineWidth: 2)
-                            .frame(width: 14, height: 14)
-                            .offset(x: endX - 7, y: 13)
+                            .frame(width: handleSize, height: handleSize)
                     )
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(hoveredHandle == .end ? 0.9 : 0), lineWidth: 1.5)
+                            .scaleEffect(hoveredHandle == .end ? 1.32 : 1.0)
+                            .animation(.easeOut(duration: 0.12), value: hoveredHandle == .end)
+                    )
+                    .shadow(color: Color.accentColor.opacity(hoveredHandle == .end ? 0.35 : 0), radius: hoveredHandle == .end ? 5 : 0)
+                    .position(x: endX, y: handleCenterY)
+                    .contentShape(Circle())
+                    .onHover { isOver in
+                        hoveredHandle = isOver ? .end : (hoveredHandle == .end ? nil : hoveredHandle)
+                    }
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .named("clipTimelineTrack"))
                             .onChanged { value in
                                 let newValue = max(timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds), startSeconds)
                                 endSeconds = min(totalDurationSeconds, newValue)
                             }
                     )
             }
+            .coordinateSpace(name: "clipTimelineTrack")
             .contentShape(Rectangle())
             .onHover { hovering in
                 isHovered = hovering
