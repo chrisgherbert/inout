@@ -4068,7 +4068,8 @@ struct ClipToolView: View {
     @State private var isMiddleMousePanning = false
     @State private var middleMousePanLastWindowX: CGFloat?
 
-    private let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
+    private let timer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
+    @State private var lastInteractiveSeekSeconds: Double = -1
 
     private var fastClipFormats: [ClipFormat] { [.mp4, .mov] }
     private var advancedClipFormats: [ClipFormat] { ClipFormat.allCases }
@@ -4118,9 +4119,29 @@ struct ClipToolView: View {
 
     private func seekPlayer(to time: Double) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        lastInteractiveSeekSeconds = -1
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
         updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
+    }
+
+    private func seekPlayerInteractive(to time: Double) {
+        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+
+        // Coalesce tiny drag deltas so scrubbing stays responsive without flooding seeks.
+        if lastInteractiveSeekSeconds >= 0, abs(clamped - lastInteractiveSeekSeconds) < (1.0 / 120.0) {
+            return
+        }
+        lastInteractiveSeekSeconds = clamped
+
+        let tolerance = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+        player.seek(
+            to: CMTime(seconds: clamped, preferredTimescale: 600),
+            toleranceBefore: tolerance,
+            toleranceAfter: tolerance
+        )
+        playheadSeconds = clamped
+        updateViewportForPlayhead(shouldFollow: false)
     }
 
     private func seekPlayerAndFocusViewport(to time: Double) {
@@ -4508,7 +4529,7 @@ struct ClipToolView: View {
                         highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
                         captureFrameFlashToken: model.captureFrameFlashToken,
                         quickExportFlashToken: model.quickExportFlashToken,
-                        onSeek: { seekPlayer(to: $0) },
+                        onSeek: { seekPlayerInteractive(to: $0) },
                         onSetStart: { model.setClipStart($0) },
                         onSetEnd: { model.setClipEnd($0) },
                         onHoverChanged: { hovering in
@@ -4519,6 +4540,7 @@ struct ClipToolView: View {
                         }
                     )
                     .frame(height: 58)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 4)
                     .background(
                         GeometryReader { geo in
@@ -5097,18 +5119,17 @@ struct WaveformView: View {
             let endX = xPosition(for: endSeconds, width: width)
             let playheadX = xPosition(for: playheadSeconds, width: width)
             let playheadWidth: CGFloat = isPlayheadCaptureFlashing ? 3.6 : 2.0
-            let edgeHeight = max(8, height)
             let isStartEdgeActive = isStartEdgeHovered || isStartEdgeDragging
             let isEndEdgeActive = isEndEdgeHovered || isEndEdgeDragging
             let isEdgeActive = isStartEdgeActive || isEndEdgeActive
-            let startEdgeVisualWidth: CGFloat = isStartEdgeActive ? 19 : 17
-            let endEdgeVisualWidth: CGFloat = isEndEdgeActive ? 19 : 17
-            let startEdgeHitWidth: CGFloat = isStartEdgeActive ? 30 : 24
-            let endEdgeHitWidth: CGFloat = isEndEdgeActive ? 30 : 24
+            let edgeHoverProximity: CGFloat = 22
+            let edgeHitWidth: CGFloat = edgeHoverProximity * 2
             let selectionOutlineOpacity: Double = isEdgeActive ? 1.0 : (isHovered ? 0.98 : 0.92)
             let selectionOutlineWidth: CGFloat = isEdgeActive ? 3.4 : 3.0
-            let selectionHorizontalLineWidth: CGFloat = selectionOutlineWidth + 0.8
-            let gripLineHeight: CGFloat = max(8, min(18, edgeHeight * 0.32))
+            let selectionWidth = max(1, endX - startX)
+            let edgeGlowWidth = min(max(selectionWidth * 0.18, 18), 44)
+            let startEdgeGlowOpacity: Double = isStartEdgeDragging ? 1.0 : (isStartEdgeHovered ? 0.78 : 0)
+            let endEdgeGlowOpacity: Double = isEndEdgeDragging ? 1.0 : (isEndEdgeHovered ? 0.78 : 0)
 
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
@@ -5128,25 +5149,50 @@ struct WaveformView: View {
                     )
                     .frame(width: max(1, endX - startX))
                     .offset(x: startX)
-                    .overlay(alignment: .topLeading) {
-                        Rectangle()
-                            .fill(systemAccent.opacity(selectionOutlineOpacity))
-                            .frame(width: max(1, endX - startX), height: selectionHorizontalLineWidth)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                            .stroke(systemAccent.opacity(selectionOutlineOpacity), lineWidth: selectionOutlineWidth)
+                            .frame(width: max(1, endX - startX))
                             .offset(x: startX)
                             .allowsHitTesting(false)
-                    }
-                    .overlay(alignment: .bottomLeading) {
-                        Rectangle()
-                            .fill(systemAccent.opacity(selectionOutlineOpacity))
-                            .frame(width: max(1, endX - startX), height: selectionHorizontalLineWidth)
-                            .offset(x: startX)
-                            .allowsHitTesting(false)
-                    }
+                    )
 
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.white.opacity(selectionFlashOpacity))
                     .frame(width: max(1, endX - startX))
                     .offset(x: startX)
+                    .allowsHitTesting(false)
+
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                systemAccent.opacity(startEdgeGlowOpacity),
+                                .clear
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: edgeGlowWidth, height: height)
+                    .offset(x: startX)
+                    .animation(.easeOut(duration: 0.16), value: isStartEdgeActive)
+                    .allowsHitTesting(false)
+
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                systemAccent.opacity(endEdgeGlowOpacity)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: edgeGlowWidth, height: height)
+                    .offset(x: max(startX, endX - edgeGlowWidth))
+                    .animation(.easeOut(duration: 0.16), value: isEndEdgeActive)
                     .allowsHitTesting(false)
 
                 Canvas { context, size in
@@ -5195,49 +5241,11 @@ struct WaveformView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
-                ZStack {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(systemAccent)
-                    HStack(spacing: 2) {
-                        Rectangle()
-                            .fill(Color.black.opacity(isStartEdgeActive ? 0.82 : 0.7))
-                            .frame(width: 1, height: gripLineHeight)
-                        Rectangle()
-                            .fill(Color.black.opacity(isStartEdgeActive ? 0.82 : 0.7))
-                            .frame(width: 1, height: gripLineHeight)
-                    }
-                    Capsule(style: .continuous)
-                        .fill(Color.black)
-                        .frame(
-                            width: max(7, startEdgeVisualWidth * 0.62),
-                            height: max(14, edgeHeight - 8)
-                        )
-                        .offset(x: startEdgeVisualWidth * 0.72)
-                        .blendMode(.destinationOut)
-                }
-                .compositingGroup()
-                .frame(width: startEdgeVisualWidth, height: edgeHeight)
-                .shadow(color: systemAccent.opacity(isStartEdgeActive ? 0.5 : 0.25), radius: isStartEdgeActive ? 5 : 2)
-                .offset(x: startX - (startEdgeVisualWidth * 0.58), y: 0)
-                .animation(.easeOut(duration: 0.12), value: isStartEdgeHovered)
-                .animation(.easeOut(duration: 0.12), value: isStartEdgeDragging)
-                .allowsHitTesting(false)
-
                 Rectangle()
                     .fill(Color.clear)
-                    .frame(width: startEdgeHitWidth, height: height)
+                    .frame(width: edgeHitWidth, height: height)
                     .contentShape(Rectangle())
-                    .offset(x: startX - (startEdgeHitWidth / 2))
-                    .onHover { hovering in
-                        isStartEdgeHovered = hovering
-                        if isStartEdgeDragging || isEndEdgeDragging {
-                            NSCursor.closedHand.set()
-                        } else if hovering || isEndEdgeHovered {
-                            NSCursor.resizeLeftRight.set()
-                        } else {
-                            NSCursor.arrow.set()
-                        }
-                    }
+                    .offset(x: startX - (edgeHitWidth / 2))
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
                             .onChanged { value in
@@ -5245,6 +5253,7 @@ struct WaveformView: View {
                                     startEdgeDragAnchor = startSeconds
                                 }
                                 isStartEdgeDragging = true
+                                isEndEdgeHovered = false
                                 NSCursor.closedHand.set()
                                 let anchor = startEdgeDragAnchor ?? startSeconds
                                 let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
@@ -5262,49 +5271,11 @@ struct WaveformView: View {
                             }
                     )
 
-                ZStack {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(systemAccent)
-                    HStack(spacing: 2) {
-                        Rectangle()
-                            .fill(Color.black.opacity(isEndEdgeActive ? 0.82 : 0.7))
-                            .frame(width: 1, height: gripLineHeight)
-                        Rectangle()
-                            .fill(Color.black.opacity(isEndEdgeActive ? 0.82 : 0.7))
-                            .frame(width: 1, height: gripLineHeight)
-                    }
-                    Capsule(style: .continuous)
-                        .fill(Color.black)
-                        .frame(
-                            width: max(7, endEdgeVisualWidth * 0.62),
-                            height: max(14, edgeHeight - 8)
-                        )
-                        .offset(x: -(endEdgeVisualWidth * 0.72))
-                        .blendMode(.destinationOut)
-                }
-                .compositingGroup()
-                .frame(width: endEdgeVisualWidth, height: edgeHeight)
-                .shadow(color: systemAccent.opacity(isEndEdgeActive ? 0.5 : 0.25), radius: isEndEdgeActive ? 5 : 2)
-                .offset(x: endX - (endEdgeVisualWidth * 0.42), y: 0)
-                .animation(.easeOut(duration: 0.12), value: isEndEdgeHovered)
-                .animation(.easeOut(duration: 0.12), value: isEndEdgeDragging)
-                .allowsHitTesting(false)
-
                 Rectangle()
                     .fill(Color.clear)
-                    .frame(width: endEdgeHitWidth, height: height)
+                    .frame(width: edgeHitWidth, height: height)
                     .contentShape(Rectangle())
-                    .offset(x: endX - (endEdgeHitWidth / 2))
-                    .onHover { hovering in
-                        isEndEdgeHovered = hovering
-                        if isStartEdgeDragging || isEndEdgeDragging {
-                            NSCursor.closedHand.set()
-                        } else if hovering || isStartEdgeHovered {
-                            NSCursor.resizeLeftRight.set()
-                        } else {
-                            NSCursor.arrow.set()
-                        }
-                    }
+                    .offset(x: endX - (edgeHitWidth / 2))
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
                             .onChanged { value in
@@ -5312,6 +5283,7 @@ struct WaveformView: View {
                                     endEdgeDragAnchor = endSeconds
                                 }
                                 isEndEdgeDragging = true
+                                isStartEdgeHovered = false
                                 NSCursor.closedHand.set()
                                 let anchor = endEdgeDragAnchor ?? endSeconds
                                 let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
@@ -5376,7 +5348,51 @@ struct WaveformView: View {
                 isHovered = hovering
                 onHoverChanged(hovering)
                 if !hovering && !isStartEdgeDragging && !isEndEdgeDragging {
+                    isStartEdgeHovered = false
+                    isEndEdgeHovered = false
                     NSCursor.arrow.set()
+                }
+            }
+            .onContinuousHover(coordinateSpace: .local) { phase in
+                guard !isStartEdgeDragging && !isEndEdgeDragging else { return }
+                switch phase {
+                case .active(let point):
+                    let x = point.x
+                    let startDistance = abs(x - startX)
+                    let endDistance = abs(x - endX)
+                    let isNearStart = startDistance <= edgeHoverProximity
+                    let isNearEnd = endDistance <= edgeHoverProximity
+
+                    if isNearStart && isNearEnd {
+                        if startDistance <= endDistance {
+                            isStartEdgeHovered = true
+                            isEndEdgeHovered = false
+                        } else {
+                            isStartEdgeHovered = false
+                            isEndEdgeHovered = true
+                        }
+                    } else if isNearStart {
+                        isStartEdgeHovered = true
+                        isEndEdgeHovered = false
+                    } else if isNearEnd {
+                        isStartEdgeHovered = false
+                        isEndEdgeHovered = true
+                    } else {
+                        isStartEdgeHovered = false
+                        isEndEdgeHovered = false
+                    }
+
+                    if isStartEdgeHovered || isEndEdgeHovered {
+                        NSCursor.resizeLeftRight.set()
+                    } else {
+                        NSCursor.arrow.set()
+                    }
+                case .ended:
+                    isStartEdgeHovered = false
+                    isEndEdgeHovered = false
+                    if !isHovered {
+                        NSCursor.arrow.set()
+                    }
                 }
             }
             .task(id: quickExportFlashToken) {
