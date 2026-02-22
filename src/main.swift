@@ -5981,7 +5981,8 @@ private final class WaveformRasterCoordinator {
             peaks: peaks,
             height: 96,
             isDarkAppearance: cachedIsDarkAppearance,
-            useSkippedColumns: zoomBucket >= 32
+            useSkippedColumns: zoomBucket >= 32,
+            zoomBucket: zoomBucket
         ) else {
             return nil
         }
@@ -6011,7 +6012,13 @@ private final class WaveformRasterCoordinator {
         return peaks
     }
 
-    private func makeWaveformImage(peaks: [Double], height: Int, isDarkAppearance: Bool, useSkippedColumns: Bool) -> CGImage? {
+    private func makeWaveformImage(
+        peaks: [Double],
+        height: Int,
+        isDarkAppearance: Bool,
+        useSkippedColumns: Bool,
+        zoomBucket: Double
+    ) -> CGImage? {
         guard !peaks.isEmpty else { return nil }
 
         let width = peaks.count
@@ -6036,23 +6043,34 @@ private final class WaveformRasterCoordinator {
         context.interpolationQuality = .none
         context.clear(CGRect(x: 0, y: 0, width: width, height: height))
 
+        let barAlpha: CGFloat = {
+            if zoomBucket >= 32 {
+                return isDarkAppearance ? 0.64 : 0.58
+            }
+            return isDarkAppearance ? 0.43 : 0.37
+        }()
         let barColor: NSColor = {
             if isDarkAppearance {
-                return NSColor(calibratedWhite: 1.0, alpha: 0.64)
+                return NSColor(calibratedWhite: 1.0, alpha: barAlpha)
             }
-            return NSColor.labelColor.withAlphaComponent(0.58)
+            return NSColor.labelColor.withAlphaComponent(barAlpha)
         }()
         context.setFillColor(barColor.cgColor)
 
         let baselineY = 2.0
         let maxBarHeight = max(1.0, CGFloat(height) - 4.0)
 
+        let minNormalizedBar: Double = {
+            if zoomBucket >= 32 { return 0.02 }
+            return 0.01
+        }()
+
         for x in 0..<width {
             if useSkippedColumns && x % 2 != 0 {
                 continue
             }
             let peak = peaks[x]
-            let normalized = max(0.02, min(1.0, peak))
+            let normalized = max(minNormalizedBar, min(1.0, peak))
             let amp = CGFloat(normalized) * maxBarHeight
             let rect = CGRect(x: CGFloat(x), y: baselineY, width: 1, height: amp)
             context.fill(rect)
