@@ -4445,8 +4445,8 @@ struct ClipToolView: View {
     private var clipPlayerSection: some View {
         InlinePlayerView(player: player)
             .frame(
-                minHeight: isCompactLayout ? 150 : 260,
-                maxHeight: isCompactLayout ? 210 : 320
+                minHeight: isCompactLayout ? 170 : 290,
+                maxHeight: isCompactLayout ? 230 : 350
             )
             .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
             .onTapGesture {
