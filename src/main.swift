@@ -2657,7 +2657,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func startClipExport() {
+    func startClipExport(skipSaveDialog: Bool = false) {
         guard canExportClip, let sourceURL else { return }
         if !hasVideoTrack && clipEncodingMode != .audioOnly {
             clipEncodingMode = .audioOnly
@@ -2691,21 +2691,27 @@ final class WorkspaceViewModel: ObservableObject {
 
         let defaultName = URL(fileURLWithPath: defaultBaseName).deletingPathExtension().lastPathComponent + "." + outputExtension
 
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = defaultName
-        panel.allowedContentTypes = [clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.contentType : selectedClipFormat.contentType]
-        panel.canCreateDirectories = true
-        panel.title = "Export Clip"
+        let destination: URL
+        if skipSaveDialog {
+            let sourceDirectory = sourceURL.deletingLastPathComponent()
+            destination = uniqueUnderscoreIndexedURL(in: sourceDirectory, preferredFileName: defaultName)
+        } else {
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = defaultName
+            panel.allowedContentTypes = [clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.contentType : selectedClipFormat.contentType]
+            panel.canCreateDirectories = true
+            panel.title = "Export Clip"
 
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
-
-        try? FileManager.default.removeItem(at: destination)
+            guard panel.runModal() == .OK, let chosenDestination = panel.url else { return }
+            destination = chosenDestination
+            try? FileManager.default.removeItem(at: destination)
+        }
 
         isExporting = true
         lastActivityState = .running
         exportCancellationRequested = false
         exportProgress = 0
-        exportStatusText = "Exporting clip…"
+        exportStatusText = skipSaveDialog ? "Quick exporting clip…" : "Exporting clip…"
         outputURL = nil
 
         if clipEncodingMode == .audioOnly {
@@ -3632,6 +3638,19 @@ final class WorkspaceViewModel: ObservableObject {
         var index = 2
         while FileManager.default.fileExists(atPath: candidate.path) {
             let nextName = ext.isEmpty ? "\(baseName)-\(index)" : "\(baseName)-\(index).\(ext)"
+            candidate = directory.appendingPathComponent(nextName)
+            index += 1
+        }
+        return candidate
+    }
+
+    private func uniqueUnderscoreIndexedURL(in directory: URL, preferredFileName: String) -> URL {
+        let ext = (preferredFileName as NSString).pathExtension
+        let baseName = (preferredFileName as NSString).deletingPathExtension
+        var candidate = directory.appendingPathComponent(preferredFileName)
+        var index = 1
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            let nextName = ext.isEmpty ? "\(baseName)_\(index)" : "\(baseName)_\(index).\(ext)"
             candidate = directory.appendingPathComponent(nextName)
             index += 1
         }
@@ -6495,7 +6514,8 @@ struct HelpDocumentationView: View {
                 "Up Arrow: Jump to clip start",
                 "Down Arrow: Jump to clip end",
                 "Cmd-E: Export clip",
-                "Cmd-Shift-E: Export audio",
+                "Cmd-Shift-E: Quick export clip (no save dialog)",
+                "Cmd-Option-E: Export audio",
                 "Cmd-R: Run analysis",
                 "Cmd-.: Stop active analysis/export"
             ]
@@ -6619,6 +6639,12 @@ struct CheckBlackFramesApp: App {
                 .keyboardShortcut("e", modifiers: [.command])
                 .disabled(model.selectedTool != .clip || !model.canExportClip)
 
+                Button("Quick Export Clip") {
+                    model.startClipExport(skipSaveDialog: true)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(model.selectedTool != .clip || !model.canExportClip)
+
                 Button("Jump to Clip Start") {
                     NotificationCenter.default.post(name: .clipJumpToStart, object: nil)
                 }
@@ -6673,12 +6699,18 @@ struct CheckBlackFramesApp: App {
                 Button("Export Audio…") {
                     model.startExport()
                 }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .keyboardShortcut("e", modifiers: [.command, .option])
                 .disabled(!model.canExport)
 
                 Button("Export Clip…") {
                     model.startClipExport()
                 }
+                .disabled(!model.canExportClip)
+
+                Button("Quick Export Clip") {
+                    model.startClipExport(skipSaveDialog: true)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(!model.canExportClip)
 
                 Divider()
