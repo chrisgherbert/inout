@@ -16,6 +16,9 @@ extension Notification.Name {
     static let clipJumpToStart = Notification.Name("clipJumpToStart")
     static let clipJumpToEnd = Notification.Name("clipJumpToEnd")
     static let clipCaptureFrame = Notification.Name("clipCaptureFrame")
+    static let clipTimelineZoomIn = Notification.Name("clipTimelineZoomIn")
+    static let clipTimelineZoomOut = Notification.Name("clipTimelineZoomOut")
+    static let clipTimelineZoomReset = Notification.Name("clipTimelineZoomReset")
 }
 
 private let minDurationSeconds = 0.001
@@ -4353,477 +4356,485 @@ struct ClipToolView: View {
         NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if model.sourceURL != nil {
-                InlinePlayerView(player: player)
-                    .frame(
-                        minHeight: isCompactLayout ? 150 : 260,
-                        maxHeight: isCompactLayout ? 210 : 320
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-                    .onTapGesture {
-                        dismissTimecodeFieldFocus()
-                    }
+    private var clipPlayerSection: some View {
+        InlinePlayerView(player: player)
+            .frame(
+                minHeight: isCompactLayout ? 150 : 260,
+                maxHeight: isCompactLayout ? 210 : 320
+            )
+            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+            .onTapGesture {
+                dismissTimecodeFieldFocus()
+            }
+    }
 
-                GroupBox("Timeline Controls") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
-                            Text("Zoom")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Slider(value: $timelineZoom, in: 1...100, step: 1)
-                            Text("\(Int(timelineZoom.rounded()))x")
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 48, alignment: .trailing)
-                            Button("Fit") {
-                                timelineZoom = 1
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        if timelineZoom > 1 {
-                            TimelineViewportScroller(
-                                totalDurationSeconds: totalDurationSeconds,
-                                visibleStartSeconds: visibleStartSeconds,
-                                visibleEndSeconds: visibleEndSeconds
-                            ) { newStart in
-                                viewportStartSeconds = clampedViewportStart(newStart)
-                                isViewportManuallyControlled = true
-                            }
-                            .frame(height: 14)
-
-                            HStack(spacing: 6) {
-                                Image(systemName: "hand.draw")
-                                Text("Drag viewport or use trackpad scroll to pan")
-                            }
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(10)
-                    .background(
-                        adaptiveContainerFill(
-                            material: .thinMaterial,
-                            fallback: Color(nsColor: .controlBackgroundColor),
-                            reduceTransparency: reduceTransparency
-                        ),
-                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
-                    )
-                }
-
-                GroupBox("Selection") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if !isCompactLayout && isWaveformLoading {
-                            HStack {
-                                ProgressView()
-                                Text("Generating waveform…")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else if !isCompactLayout && !waveformSamples.isEmpty {
-                            WaveformView(
-                                samples: waveformSamples,
-                                startSeconds: model.clipStartSeconds,
-                                playheadSeconds: playheadSeconds,
-                                endSeconds: model.clipEndSeconds,
-                                totalDurationSeconds: totalDurationSeconds,
-                                visibleStartSeconds: visibleStartSeconds,
-                                visibleEndSeconds: visibleEndSeconds,
-                                captureMarkers: model.captureTimelineMarkers,
-                                highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
-                                onSeek: { seekPlayer(to: $0) }
-                            )
-                            .frame(height: 58)
-                        }
-
-                        UnifiedClipTimelineSelector(
-                            startSeconds: Binding(
-                                get: { model.clipStartSeconds },
-                                set: {
-                                    model.setClipStart($0)
-                                }
-                            ),
-                            playheadSeconds: Binding(
-                                get: { playheadSeconds },
-                                set: { seekPlayer(to: $0) }
-                            ),
-                            endSeconds: Binding(
-                                get: { model.clipEndSeconds },
-                                set: {
-                                    model.setClipEnd($0)
-                                }
-                            ),
-                            totalDurationSeconds: totalDurationSeconds,
-                            visibleStartSeconds: visibleStartSeconds,
-                            visibleEndSeconds: visibleEndSeconds,
-                            captureMarkers: model.captureTimelineMarkers,
-                            highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
-                            onSeek: { seekPlayer(to: $0) }
-                        )
-                        .frame(height: 44)
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear
-                                    .onAppear { timelineInteractiveWidth = geo.size.width }
-                                    .onChange(of: geo.size.width) { width in
-                                        timelineInteractiveWidth = width
-                                    }
-                            }
-                        )
-
-                        if !isCompactLayout {
-                            HStack {
-                                Text("In: \(formatSeconds(model.clipStartSeconds))")
-                                    .font(.caption.monospacedDigit())
-                                Spacer()
-                                Text("Playhead: \(formatSeconds(playheadSeconds))")
-                                    .font(.caption.monospacedDigit())
-                                Spacer()
-                                Text("Out: \(formatSeconds(model.clipEndSeconds))")
-                                    .font(.caption.monospacedDigit())
-                            }
-                            .foregroundStyle(.secondary)
-                        }
-
-                        HStack(spacing: 8) {
-                            Text("Clip Start")
-                                .frame(width: 70, alignment: .leading)
-                            TextField("00:00:00.000", text: $model.clipStartText)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .onSubmit { model.commitClipStartText() }
-
-                            Button("Set Start") {
-                                model.setClipStart(playheadSeconds)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .font(.caption)
-
-                        HStack(spacing: 8) {
-                            Text("Clip End")
-                                .frame(width: 70, alignment: .leading)
-                            TextField("00:00:00.000", text: $model.clipEndText)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .onSubmit { model.commitClipEndText() }
-
-                            Button("Set End") {
-                                model.setClipEnd(playheadSeconds)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .font(.caption)
-
-                        if !isCompactLayout {
-                            HStack {
-                                Text("Duration: \(formatSeconds(model.clipDurationSeconds))")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                ControlGroup {
-                                    Button {
-                                        seekPlayer(to: model.clipStartSeconds)
-                                    } label: {
-                                        Image(systemName: "backward.end.fill")
-                                    }
-                                    .help("Jump to Clip Start")
-                                    .accessibilityLabel("Jump to Clip Start")
-
-                                    Button {
-                                        seekPlayer(to: model.clipEndSeconds)
-                                    } label: {
-                                        Image(systemName: "forward.end.fill")
-                                    }
-                                    .help("Jump to Clip End")
-                                    .accessibilityLabel("Jump to Clip End")
-                                }
-                                .controlSize(.mini)
-                                .opacity(isTimelineHovered ? 0.95 : 0.0)
-                                .allowsHitTesting(isTimelineHovered)
-                                .animation(.easeOut(duration: 0.15), value: isTimelineHovered)
-
-                                if model.hasVideoTrack {
-                                    Button {
-                                        model.captureFrame(at: playheadSeconds)
-                                    } label: {
-                                        Label("Capture Frame", systemImage: "camera")
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.mini)
-                                    .help("Save a PNG frame at the current playhead")
-                                    .labelStyle(.titleAndIcon)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    .padding(.leading, 2)
-                                }
-                            }
-                        }
-                    }
-                    .padding(10)
-                    .background(
-                        adaptiveContainerFill(
-                            material: .thinMaterial,
-                            fallback: Color(nsColor: .controlBackgroundColor),
-                            reduceTransparency: reduceTransparency
-                        ),
-                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
-                    )
-                    .onHover { hovering in
-                        isTimelineHovered = hovering
-                    }
-                }
-
-                GroupBox("Output") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Picker("", selection: $model.clipEncodingMode) {
-                                if model.hasVideoTrack {
-                                    Label("Fast", systemImage: "bolt.fill").tag(ClipEncodingMode.fast)
-                                    Label("Advanced", systemImage: "slider.horizontal.3").tag(ClipEncodingMode.compressed)
-                                }
-                                Label("Audio Only", systemImage: "waveform").tag(ClipEncodingMode.audioOnly)
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.segmented)
-                            .controlSize(.regular)
-                            .frame(maxWidth: .infinity)
-
-                            Text(
-                                model.clipEncodingMode == .fast
-                                ? "Fast mode uses passthrough copy with minimal processing."
-                                : model.clipEncodingMode == .compressed
-                                    ? "Advanced mode unlocks codec, container, resolution, and bitrate options."
-                                    : "Audio Only exports only audio from the selected clip range."
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                            Divider()
-
-                            if model.clipEncodingMode == .audioOnly {
-                                LabeledContent("Audio format") {
-                                    Picker("Audio format", selection: $model.clipAudioOnlyFormat) {
-                                        ForEach(ClipAudioOnlyFormat.allCases) { format in
-                                            Text(format.rawValue).tag(format)
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .labelsHidden()
-                                    .controlSize(.small)
-                                    .frame(width: 148)
-                                }
-
-                                HStack {
-                                    Text("Audio bitrate")
-                                        .frame(width: 120, alignment: .leading)
-                                    Slider(
-                                        value: Binding(
-                                            get: { Double(model.clipAudioBitrateKbps) },
-                                            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
-                                        ),
-                                        in: 64...320,
-                                        step: 32
-                                    )
-                                    .controlSize(.small)
-                                    Text("\(model.clipAudioBitrateKbps) kbps")
-                                        .font(.caption.monospacedDigit())
-                                        .frame(width: 90, alignment: .trailing)
-                                }
-
-                                Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAudioOnlyBoostAudio)
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
-
-                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAudioOnlyAddFadeInOut)
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
-
-                            } else {
-                                LabeledContent("Format") {
-                                    Picker("Format", selection: $model.selectedClipFormat) {
-                                        if model.clipEncodingMode == .fast {
-                                            ForEach(fastClipFormats) { format in
-                                                Text(format.rawValue).tag(format)
-                                            }
-                                        } else {
-                                            ForEach(advancedClipFormats) { format in
-                                                Text(format.rawValue).tag(format)
-                                            }
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .labelsHidden()
-                                    .controlSize(.small)
-                                    .frame(width: 148)
-                                }
-                            }
-
-                            if model.clipEncodingMode == .compressed {
-                                if model.selectedClipFormat != .webm {
-                                    LabeledContent("Video codec") {
-                                        Picker("Video codec", selection: $model.clipAdvancedVideoCodec) {
-                                            ForEach(AdvancedVideoCodec.allCases) { codec in
-                                                Text(codec.rawValue).tag(codec)
-                                            }
-                                        }
-                                        .pickerStyle(.menu)
-                                        .labelsHidden()
-                                        .controlSize(.small)
-                                        .frame(width: 148)
-                                    }
-                                } else {
-                                    Text("Video codec: VP9 (WebM)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                LabeledContent("Speed") {
-                                    Picker("Speed", selection: $model.clipCompatibleSpeedPreset) {
-                                        ForEach(CompatibleSpeedPreset.allCases) { preset in
-                                            Text(preset.rawValue).tag(preset)
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .labelsHidden()
-                                    .controlSize(.small)
-                                    .frame(width: 148)
-                                }
-
-                                LabeledContent("Max resolution") {
-                                    Picker("Max resolution", selection: $model.clipCompatibleMaxResolution) {
-                                        ForEach(CompatibleMaxResolution.allCases) { resolution in
-                                            Text(resolution.rawValue).tag(resolution)
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .labelsHidden()
-                                    .controlSize(.small)
-                                    .frame(width: 148)
-                                }
-
-                                HStack {
-                                    Text("Video bitrate")
-                                        .frame(width: 120, alignment: .leading)
-                                    Slider(value: $model.clipVideoBitrateMbps, in: 2...20, step: 0.5)
-                                        .controlSize(.small)
-                                    Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
-                                        .font(.caption.monospacedDigit())
-                                        .frame(width: 90, alignment: .trailing)
-                                }
-
-                                HStack {
-                                    Text("Audio bitrate")
-                                        .frame(width: 120, alignment: .leading)
-                                    Slider(
-                                        value: Binding(
-                                            get: { Double(model.clipAudioBitrateKbps) },
-                                            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
-                                        ),
-                                        in: 64...320,
-                                        step: 32
-                                    )
-                                    .controlSize(.small)
-                                    Text("\(model.clipAudioBitrateKbps) kbps")
-                                        .font(.caption.monospacedDigit())
-                                        .frame(width: 90, alignment: .trailing)
-                                }
-
-                                Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAdvancedBoostAudio)
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
-
-                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAdvancedAddFadeInOut)
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
-
-                                Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
-                                    .disabled(!model.whisperTranscriptionAvailable)
-
-                                if !model.whisperTranscriptionAvailable {
-                                    Text("Whisper binary/model not available in app bundle.")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+    private var timelineControlsSection: some View {
+        GroupBox("Timeline Controls") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("Zoom")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .tint(.secondary)
-                        .padding(10)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                .stroke(Color.primary.opacity(0.05), lineWidth: 0.45)
-                        )
+                    Slider(value: $timelineZoom, in: 1...100, step: 1)
+                    Text("\(Int(timelineZoom.rounded()))x")
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 48, alignment: .trailing)
+                    Button("Fit") {
+                        timelineZoom = 1
+                    }
+                    .buttonStyle(.bordered)
+                }
 
-                        Divider()
+                if timelineZoom > 1 {
+                    TimelineViewportScroller(
+                        totalDurationSeconds: totalDurationSeconds,
+                        visibleStartSeconds: visibleStartSeconds,
+                        visibleEndSeconds: visibleEndSeconds
+                    ) { newStart in
+                        viewportStartSeconds = clampedViewportStart(newStart)
+                        isViewportManuallyControlled = true
+                    }
+                    .frame(height: 14)
 
-                        HStack {
-                            if model.clipEncodingMode == .audioOnly, model.clipAudioOnlyFormat != .wav {
-                                HStack(spacing: 8) {
-                                    Label("Estimated output size", systemImage: "ruler")
-                                        .font(.body.weight(.medium))
-                                        .foregroundStyle(.tertiary)
-                                    Text(formatFileSize(model.estimatedClipAudioOnlySizeBytes))
-                                        .font(.system(.body, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                            } else if model.clipEncodingMode == .compressed {
-                                HStack(spacing: 8) {
-                                    Label("Estimated output size", systemImage: "ruler")
-                                        .font(.body.weight(.medium))
-                                        .foregroundStyle(.tertiary)
-                                    Text(formatFileSize(model.estimatedClipAdvancedSizeBytes))
-                                        .font(.system(.body, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.draw")
+                        Text("Drag viewport or use trackpad scroll to pan")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(10)
+            .background(
+                adaptiveContainerFill(
+                    material: .thinMaterial,
+                    fallback: Color(nsColor: .controlBackgroundColor),
+                    reduceTransparency: reduceTransparency
+                ),
+                in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+            )
+        }
+    }
+
+    private var selectionSection: some View {
+        GroupBox("Selection") {
+            VStack(alignment: .leading, spacing: 10) {
+                if !isCompactLayout && isWaveformLoading {
+                    HStack {
+                        ProgressView()
+                        Text("Generating waveform…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if !isCompactLayout && !waveformSamples.isEmpty {
+                    WaveformView(
+                        samples: waveformSamples,
+                        startSeconds: model.clipStartSeconds,
+                        playheadSeconds: playheadSeconds,
+                        endSeconds: model.clipEndSeconds,
+                        totalDurationSeconds: totalDurationSeconds,
+                        visibleStartSeconds: visibleStartSeconds,
+                        visibleEndSeconds: visibleEndSeconds,
+                        captureMarkers: model.captureTimelineMarkers,
+                        highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
+                        onSeek: { seekPlayer(to: $0) }
+                    )
+                    .frame(height: 58)
+                }
+
+                UnifiedClipTimelineSelector(
+                    startSeconds: Binding(
+                        get: { model.clipStartSeconds },
+                        set: { model.setClipStart($0) }
+                    ),
+                    playheadSeconds: Binding(
+                        get: { playheadSeconds },
+                        set: { seekPlayer(to: $0) }
+                    ),
+                    endSeconds: Binding(
+                        get: { model.clipEndSeconds },
+                        set: { model.setClipEnd($0) }
+                    ),
+                    totalDurationSeconds: totalDurationSeconds,
+                    visibleStartSeconds: visibleStartSeconds,
+                    visibleEndSeconds: visibleEndSeconds,
+                    captureMarkers: model.captureTimelineMarkers,
+                    highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
+                    onSeek: { seekPlayer(to: $0) }
+                )
+                .frame(height: 44)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { timelineInteractiveWidth = geo.size.width }
+                            .onChange(of: geo.size.width) { width in
+                                timelineInteractiveWidth = width
                             }
-                            Spacer(minLength: 8)
+                    }
+                )
+
+                if !isCompactLayout {
+                    HStack {
+                        Text("In: \(formatSeconds(model.clipStartSeconds))")
+                            .font(.caption.monospacedDigit())
+                        Spacer()
+                        Text("Playhead: \(formatSeconds(playheadSeconds))")
+                            .font(.caption.monospacedDigit())
+                        Spacer()
+                        Text("Out: \(formatSeconds(model.clipEndSeconds))")
+                            .font(.caption.monospacedDigit())
+                    }
+                    .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Text("Clip Start")
+                        .frame(width: 70, alignment: .leading)
+                    TextField("00:00:00.000", text: $model.clipStartText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .onSubmit { model.commitClipStartText() }
+
+                    Button("Set Start") {
+                        model.setClipStart(playheadSeconds)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .font(.caption)
+
+                HStack(spacing: 8) {
+                    Text("Clip End")
+                        .frame(width: 70, alignment: .leading)
+                    TextField("00:00:00.000", text: $model.clipEndText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .onSubmit { model.commitClipEndText() }
+
+                    Button("Set End") {
+                        model.setClipEnd(playheadSeconds)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .font(.caption)
+
+                if !isCompactLayout {
+                    HStack {
+                        Text("Duration: \(formatSeconds(model.clipDurationSeconds))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        ControlGroup {
                             Button {
-                                model.commitClipStartText()
-                                model.commitClipEndText()
-                                let quickExport = NSEvent.modifierFlags.contains(.option)
-                                model.startClipExport(skipSaveDialog: quickExport)
+                                seekPlayer(to: model.clipStartSeconds)
                             } label: {
-                                Label(
-                                    model.isExporting
-                                        ? "Exporting…"
-                                        : (isOptionKeyPressed ? "Quick Export Clip" : "Export Clip"),
-                                    systemImage: "film.stack"
-                                )
+                                Image(systemName: "backward.end.fill")
                             }
-                            .buttonStyle(.borderedProminent)
-                            .help("Export Clip. Option-click for Quick Export (no save dialog).")
-                            .disabled(!model.canExportClip)
+                            .help("Jump to Clip Start")
+                            .accessibilityLabel("Jump to Clip Start")
+
+                            Button {
+                                seekPlayer(to: model.clipEndSeconds)
+                            } label: {
+                                Image(systemName: "forward.end.fill")
+                            }
+                            .help("Jump to Clip End")
+                            .accessibilityLabel("Jump to Clip End")
+                        }
+                        .controlSize(.mini)
+                        .opacity(isTimelineHovered ? 0.95 : 0.0)
+                        .allowsHitTesting(isTimelineHovered)
+                        .animation(.easeOut(duration: 0.15), value: isTimelineHovered)
+
+                        if model.hasVideoTrack {
+                            Button {
+                                model.captureFrame(at: playheadSeconds)
+                            } label: {
+                                Label("Capture Frame", systemImage: "camera")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                            .help("Save a PNG frame at the current playhead")
+                            .labelStyle(.titleAndIcon)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.leading, 2)
                         }
                     }
-                    .padding(10)
-                    .background(
-                        adaptiveContainerFill(
-                            material: .thinMaterial,
-                            fallback: Color(nsColor: .controlBackgroundColor),
-                            reduceTransparency: reduceTransparency
-                        ),
-                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                            .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
-                    )
                 }
+            }
+            .padding(10)
+            .background(
+                adaptiveContainerFill(
+                    material: .thinMaterial,
+                    fallback: Color(nsColor: .controlBackgroundColor),
+                    reduceTransparency: reduceTransparency
+                ),
+                in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+            )
+            .onHover { hovering in
+                isTimelineHovered = hovering
+            }
+        }
+    }
+
+    private var outputSection: some View {
+        GroupBox("Output") {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker("", selection: $model.clipEncodingMode) {
+                        if model.hasVideoTrack {
+                            Label("Fast", systemImage: "bolt.fill").tag(ClipEncodingMode.fast)
+                            Label("Advanced", systemImage: "slider.horizontal.3").tag(ClipEncodingMode.compressed)
+                        }
+                        Label("Audio Only", systemImage: "waveform").tag(ClipEncodingMode.audioOnly)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.regular)
+                    .frame(maxWidth: .infinity)
+
+                    Text(
+                        model.clipEncodingMode == .fast
+                        ? "Fast mode uses passthrough copy with minimal processing."
+                        : model.clipEncodingMode == .compressed
+                            ? "Advanced mode unlocks codec, container, resolution, and bitrate options."
+                            : "Audio Only exports only audio from the selected clip range."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    Divider()
+
+                    if model.clipEncodingMode == .audioOnly {
+                        LabeledContent("Audio format") {
+                            Picker("Audio format", selection: $model.clipAudioOnlyFormat) {
+                                ForEach(ClipAudioOnlyFormat.allCases) { format in
+                                    Text(format.rawValue).tag(format)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                            .controlSize(.small)
+                            .frame(width: 148)
+                        }
+
+                        HStack {
+                            Text("Audio bitrate")
+                                .frame(width: 120, alignment: .leading)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(model.clipAudioBitrateKbps) },
+                                    set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
+                                ),
+                                in: 64...320,
+                                step: 32
+                            )
+                            .controlSize(.small)
+                            Text("\(model.clipAudioBitrateKbps) kbps")
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 90, alignment: .trailing)
+                        }
+
+                        Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAudioOnlyBoostAudio)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+
+                        Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAudioOnlyAddFadeInOut)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+
+                    } else {
+                        LabeledContent("Format") {
+                            Picker("Format", selection: $model.selectedClipFormat) {
+                                if model.clipEncodingMode == .fast {
+                                    ForEach(fastClipFormats) { format in
+                                        Text(format.rawValue).tag(format)
+                                    }
+                                } else {
+                                    ForEach(advancedClipFormats) { format in
+                                        Text(format.rawValue).tag(format)
+                                    }
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                            .controlSize(.small)
+                            .frame(width: 148)
+                        }
+                    }
+
+                    if model.clipEncodingMode == .compressed {
+                        if model.selectedClipFormat != .webm {
+                            LabeledContent("Video codec") {
+                                Picker("Video codec", selection: $model.clipAdvancedVideoCodec) {
+                                    ForEach(AdvancedVideoCodec.allCases) { codec in
+                                        Text(codec.rawValue).tag(codec)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                                .controlSize(.small)
+                                .frame(width: 148)
+                            }
+                        } else {
+                            Text("Video codec: VP9 (WebM)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        LabeledContent("Speed") {
+                            Picker("Speed", selection: $model.clipCompatibleSpeedPreset) {
+                                ForEach(CompatibleSpeedPreset.allCases) { preset in
+                                    Text(preset.rawValue).tag(preset)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                            .controlSize(.small)
+                            .frame(width: 148)
+                        }
+
+                        LabeledContent("Max resolution") {
+                            Picker("Max resolution", selection: $model.clipCompatibleMaxResolution) {
+                                ForEach(CompatibleMaxResolution.allCases) { resolution in
+                                    Text(resolution.rawValue).tag(resolution)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                            .controlSize(.small)
+                            .frame(width: 148)
+                        }
+
+                        HStack {
+                            Text("Video bitrate")
+                                .frame(width: 120, alignment: .leading)
+                            Slider(value: $model.clipVideoBitrateMbps, in: 2...20, step: 0.5)
+                                .controlSize(.small)
+                            Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 90, alignment: .trailing)
+                        }
+
+                        HStack {
+                            Text("Audio bitrate")
+                                .frame(width: 120, alignment: .leading)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(model.clipAudioBitrateKbps) },
+                                    set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
+                                ),
+                                in: 64...320,
+                                step: 32
+                            )
+                            .controlSize(.small)
+                            Text("\(model.clipAudioBitrateKbps) kbps")
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 90, alignment: .trailing)
+                        }
+
+                        Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAdvancedBoostAudio)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+
+                        Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAdvancedAddFadeInOut)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+
+                        Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .disabled(!model.whisperTranscriptionAvailable)
+
+                        if !model.whisperTranscriptionAvailable {
+                            Text("Whisper binary/model not available in app bundle.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .tint(.secondary)
+                .padding(10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .stroke(Color.primary.opacity(0.05), lineWidth: 0.45)
+                )
+
+                Divider()
+
+                HStack {
+                    if model.clipEncodingMode == .audioOnly, model.clipAudioOnlyFormat != .wav {
+                        HStack(spacing: 8) {
+                            Label("Estimated output size", systemImage: "ruler")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(.tertiary)
+                            Text(formatFileSize(model.estimatedClipAudioOnlySizeBytes))
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if model.clipEncodingMode == .compressed {
+                        HStack(spacing: 8) {
+                            Label("Estimated output size", systemImage: "ruler")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(.tertiary)
+                            Text(formatFileSize(model.estimatedClipAdvancedSizeBytes))
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Button {
+                        model.commitClipStartText()
+                        model.commitClipEndText()
+                        let quickExport = NSEvent.modifierFlags.contains(.option)
+                        model.startClipExport(skipSaveDialog: quickExport)
+                    } label: {
+                        Label(
+                            model.isExporting
+                                ? "Exporting…"
+                                : (isOptionKeyPressed ? "Quick Export Clip" : "Export Clip"),
+                            systemImage: "film.stack"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .help("Export Clip. Option-click for Quick Export (no save dialog).")
+                    .disabled(!model.canExportClip)
+                }
+            }
+            .padding(10)
+            .background(
+                adaptiveContainerFill(
+                    material: .thinMaterial,
+                    fallback: Color(nsColor: .controlBackgroundColor),
+                    reduceTransparency: reduceTransparency
+                ),
+                in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+            )
+        }
+    }
+
+    private var clipBaseContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if model.sourceURL != nil {
+                clipPlayerSection
+                timelineControlsSection
+                selectionSection
+                outputSection
             } else {
                 EmptyToolView(title: "Clip", subtitle: "Choose source media to create a new clip from a selected range.")
             }
@@ -4834,17 +4845,22 @@ struct ClipToolView: View {
                     dismissTimecodeFieldFocus()
                 }
         }
-        .onAppear {
+    }
+
+    private func withLifecycleHandlers<V: View>(_ view: V) -> some View {
+        let step1 = view.onAppear {
             loadPlayerItem()
             installKeyMonitor()
             installFlagsMonitor()
             installScrollMonitor()
             installMouseDownMonitor()
         }
-        .onChange(of: model.sourceURL?.path) { _ in
+
+        let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
             loadPlayerItem()
         }
-        .onChange(of: model.clipEncodingMode) { mode in
+
+        let step3 = step2.onChange(of: model.clipEncodingMode) { mode in
             if !model.hasVideoTrack && mode != .audioOnly {
                 model.clipEncodingMode = .audioOnly
                 return
@@ -4853,15 +4869,18 @@ struct ClipToolView: View {
                 model.selectedClipFormat = .mp4
             }
         }
-        .onChange(of: model.selectedClipFormat) { format in
-            if format == .webm {
-                model.clipAdvancedVideoCodec = .h264
+
+        let step4 = step3
+            .onChange(of: model.selectedClipFormat) { format in
+                if format == .webm {
+                    model.clipAdvancedVideoCodec = .h264
+                }
             }
-        }
-        .onChange(of: timelineZoom) { _ in
-            updateViewportForPlayhead(shouldFollow: false)
-        }
-        .onReceive(timer) { _ in
+            .onChange(of: timelineZoom) { _ in
+                updateViewportForPlayhead(shouldFollow: false)
+            }
+
+        let step5 = step4.onReceive(timer) { _ in
             let current = CMTimeGetSeconds(player.currentTime())
             if current.isFinite {
                 playheadSeconds = max(0, current)
@@ -4875,31 +4894,47 @@ struct ClipToolView: View {
                 playerDurationSeconds = currentDuration
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .clipSetStartAtPlayhead)) { _ in
-            model.setClipStart(playheadSeconds)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipSetEndAtPlayhead)) { _ in
-            model.setClipEnd(playheadSeconds)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipClearRange)) { _ in
-            model.resetClipRange()
-            seekPlayer(to: model.clipStartSeconds)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart)) { _ in
-            seekPlayerAndFocusViewport(to: model.clipStartSeconds)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipJumpToEnd)) { _ in
-            seekPlayerAndFocusViewport(to: model.clipEndSeconds)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipCaptureFrame)) { _ in
-            model.captureFrame(at: playheadSeconds)
-        }
-        .onDisappear {
+
+        let step6 = step5
+            .onReceive(NotificationCenter.default.publisher(for: .clipSetStartAtPlayhead)) { _ in
+                model.setClipStart(playheadSeconds)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipSetEndAtPlayhead)) { _ in
+                model.setClipEnd(playheadSeconds)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipClearRange)) { _ in
+                model.resetClipRange()
+                seekPlayer(to: model.clipStartSeconds)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart)) { _ in
+                seekPlayerAndFocusViewport(to: model.clipStartSeconds)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipJumpToEnd)) { _ in
+                seekPlayerAndFocusViewport(to: model.clipEndSeconds)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipCaptureFrame)) { _ in
+                model.captureFrame(at: playheadSeconds)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomIn)) { _ in
+                adjustTimelineZoom(by: 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomOut)) { _ in
+                adjustTimelineZoom(by: -1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomReset)) { _ in
+                resetTimelineZoom()
+            }
+
+        return step6.onDisappear {
             waveformTask?.cancel()
             removeKeyMonitor()
             isOptionKeyPressed = false
             player.pause()
         }
+    }
+
+    var body: some View {
+        withLifecycleHandlers(clipBaseContent)
     }
 }
 
@@ -6511,6 +6546,12 @@ struct HelpDocumentationView: View {
         let items: [String]
     }
 
+    private struct ShortcutItem: Identifiable {
+        let id = UUID()
+        let action: String
+        let keys: [String]
+    }
+
     private let sections: [HelpSection] = [
         HelpSection(
             title: "Getting Started",
@@ -6554,18 +6595,7 @@ struct HelpDocumentationView: View {
         ),
         HelpSection(
             title: "Keyboard Shortcuts",
-            items: [
-                "I: Set clip start at playhead",
-                "O: Set clip end at playhead",
-                "X: Clear clip in/out",
-                "Up Arrow: Jump to clip start",
-                "Down Arrow: Jump to clip end",
-                "Cmd-E: Export clip",
-                "Cmd-Shift-E: Quick export clip (no save dialog)",
-                "Cmd-Option-E: Export audio",
-                "Cmd-R: Run analysis",
-                "Cmd-.: Stop active analysis/export"
-            ]
+            items: []
         ),
         HelpSection(
             title: "Bundled Components",
@@ -6576,6 +6606,44 @@ struct HelpDocumentationView: View {
             ]
         )
     ]
+
+    private let shortcutItems: [ShortcutItem] = [
+        ShortcutItem(action: "Set clip start at playhead", keys: ["I"]),
+        ShortcutItem(action: "Set clip end at playhead", keys: ["O"]),
+        ShortcutItem(action: "Clear clip in/out", keys: ["X"]),
+        ShortcutItem(action: "Jump to clip start", keys: ["↑"]),
+        ShortcutItem(action: "Jump to clip end", keys: ["↓"]),
+        ShortcutItem(action: "Export clip", keys: ["⌘", "E"]),
+        ShortcutItem(action: "Quick export clip (no save dialog)", keys: ["⌘", "⇧", "E"]),
+        ShortcutItem(action: "Export audio", keys: ["⌘", "⌥", "E"]),
+        ShortcutItem(action: "Zoom timeline in", keys: ["⌘", "+"]),
+        ShortcutItem(action: "Zoom timeline out", keys: ["⌘", "-"]),
+        ShortcutItem(action: "Reset timeline zoom", keys: ["⌘", "0"]),
+        ShortcutItem(action: "Run analysis", keys: ["⌘", "R"]),
+        ShortcutItem(action: "Stop active analysis/export", keys: ["⌘", "."])
+    ]
+
+    @ViewBuilder
+    private func shortcutRow(_ item: ShortcutItem) -> some View {
+        HStack(spacing: 10) {
+            Text(item.action)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 5) {
+                ForEach(item.keys, id: \.self) { key in
+                    Text(key)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Color.primary.opacity(0.12))
+                        )
+                }
+            }
+            .fixedSize()
+        }
+        .padding(.vertical, 1)
+    }
 
     var body: some View {
         ScrollView {
@@ -6588,17 +6656,27 @@ struct HelpDocumentationView: View {
 
                 ForEach(sections) { section in
                     GroupBox(section.title) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(section.items, id: \.self) { item in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("•")
-                                    Text(item)
+                        if section.title == "Keyboard Shortcuts" {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(shortcutItems) { item in
+                                    shortcutRow(item)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 2)
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(section.items, id: \.self) { item in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Text("•")
+                                        Text(item)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 2)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 2)
                     }
                 }
             }
@@ -6659,9 +6737,7 @@ struct CheckBlackFramesApp: App {
         .windowResizability(.contentSize)
 
         .commands {
-            CommandGroup(after: .textEditing) {
-                Divider()
-
+            CommandMenu("Clip") {
                 Button("Set Clip Start at Playhead") {
                     NotificationCenter.default.post(name: .clipSetStartAtPlayhead, object: nil)
                 }
@@ -6680,18 +6756,6 @@ struct CheckBlackFramesApp: App {
                 .keyboardShortcut("x", modifiers: [])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
 
-                Button("Export Clip") {
-                    model.startClipExport()
-                }
-                .keyboardShortcut("e", modifiers: [.command])
-                .disabled(model.selectedTool != .clip || !model.canExportClip)
-
-                Button("Quick Export Clip") {
-                    model.startClipExport(skipSaveDialog: true)
-                }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(model.selectedTool != .clip || !model.canExportClip)
-
                 Button("Jump to Clip Start") {
                     NotificationCenter.default.post(name: .clipJumpToStart, object: nil)
                 }
@@ -6703,6 +6767,14 @@ struct CheckBlackFramesApp: App {
                 }
                 .keyboardShortcut(.downArrow, modifiers: [])
                 .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+
+                Divider()
+
+                Button("Capture Frame…") {
+                    NotificationCenter.default.post(name: .clipCaptureFrame, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil || !model.hasVideoTrack || model.isAnalyzing || model.isExporting)
             }
 
             CommandGroup(replacing: .newItem) {
@@ -6715,6 +6787,28 @@ struct CheckBlackFramesApp: App {
                     model.clearSource()
                 }
                 .disabled(model.sourceURL == nil || model.isAnalyzing || model.isExporting)
+            }
+
+            CommandGroup(after: .saveItem) {
+                Divider()
+
+                Button("Export Audio…") {
+                    model.startExport()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+                .disabled(!model.canExport)
+
+                Button("Export Clip…") {
+                    model.startClipExport()
+                }
+                .keyboardShortcut("e", modifiers: [.command])
+                .disabled(!model.canExportClip)
+
+                Button("Quick Export Clip") {
+                    model.startClipExport(skipSaveDialog: true)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(!model.canExportClip)
             }
 
             CommandMenu("Tool") {
@@ -6736,37 +6830,30 @@ struct CheckBlackFramesApp: App {
                 .disabled(!model.canAnalyze)
 
                 Button("Stop Analysis") {
-                    model.stopAnalysis()
+                    model.stopCurrentActivity()
                 }
                 .keyboardShortcut(".", modifiers: [.command])
-                .disabled(!model.isAnalyzing)
+                .disabled(!model.isAnalyzing && !model.isExporting)
             }
 
-            CommandMenu("Export") {
-                Button("Export Audio…") {
-                    model.startExport()
+            CommandMenu("View") {
+                Button("Zoom In Timeline") {
+                    NotificationCenter.default.post(name: .clipTimelineZoomIn, object: nil)
                 }
-                .keyboardShortcut("e", modifiers: [.command, .option])
-                .disabled(!model.canExport)
+                .keyboardShortcut("=", modifiers: [.command])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
 
-                Button("Export Clip…") {
-                    model.startClipExport()
+                Button("Zoom Out Timeline") {
+                    NotificationCenter.default.post(name: .clipTimelineZoomOut, object: nil)
                 }
-                .disabled(!model.canExportClip)
+                .keyboardShortcut("-", modifiers: [.command])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
 
-                Button("Quick Export Clip") {
-                    model.startClipExport(skipSaveDialog: true)
+                Button("Actual Timeline Size") {
+                    NotificationCenter.default.post(name: .clipTimelineZoomReset, object: nil)
                 }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(!model.canExportClip)
-
-                Divider()
-
-                Button("Capture Frame…") {
-                    NotificationCenter.default.post(name: .clipCaptureFrame, object: nil)
-                }
-                .keyboardShortcut("s", modifiers: [.command, .option])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil || !model.hasVideoTrack || model.isAnalyzing || model.isExporting)
+                .keyboardShortcut("0", modifiers: [.command])
+                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
             }
 
             CommandGroup(replacing: .help) {
