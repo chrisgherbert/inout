@@ -1547,6 +1547,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var outputURL: URL?
     @Published private(set) var captureTimelineMarkers: [CaptureTimelineMarker] = []
     @Published var highlightedCaptureTimelineMarkerID: UUID?
+    @Published var quickExportFlashToken: Int = 0
 
     @Published var clipStartSeconds: Double = 0
     @Published var clipEndSeconds: Double = 0
@@ -2711,6 +2712,9 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         if skipSaveDialog {
+            DispatchQueue.main.async { [weak self] in
+                self?.quickExportFlashToken &+= 1
+            }
             playQuickExportSnipSound()
         }
 
@@ -4040,12 +4044,16 @@ struct ClipToolView: View {
     @State private var flagsMonitor: Any?
     @State private var scrollMonitor: Any?
     @State private var mouseDownMonitor: Any?
+    @State private var middleMousePanMonitor: Any?
     @State private var timelineZoom: Double = 1.0
     @State private var viewportStartSeconds: Double = 0
     @State private var isViewportManuallyControlled = false
     @State private var isTimelineHovered = false
+    @State private var isWaveformHovered = false
     @State private var isOptionKeyPressed = false
     @State private var timelineInteractiveWidth: CGFloat = 1
+    @State private var isMiddleMousePanning = false
+    @State private var middleMousePanLastWindowX: CGFloat?
 
     private let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -4320,6 +4328,46 @@ struct ClipToolView: View {
         }
     }
 
+    private func updateTimelineCursor() {
+        guard timelineZoom > 1, isWaveformHovered, isMiddleMousePanning else {
+            NSCursor.arrow.set()
+            return
+        }
+        NSCursor.closedHand.set()
+    }
+
+    private func installMiddleMousePanMonitor() {
+        guard middleMousePanMonitor == nil else { return }
+        middleMousePanMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .otherMouseDragged, .otherMouseUp]) { event in
+            guard event.buttonNumber == 2 else { return event }
+
+            switch event.type {
+            case .otherMouseDown:
+                guard isWaveformHovered, timelineZoom > 1 else { return event }
+                isMiddleMousePanning = true
+                middleMousePanLastWindowX = event.locationInWindow.x
+                updateTimelineCursor()
+                return nil
+            case .otherMouseDragged:
+                guard isMiddleMousePanning else { return event }
+                let currentX = event.locationInWindow.x
+                let lastX = middleMousePanLastWindowX ?? currentX
+                let deltaX = currentX - lastX
+                middleMousePanLastWindowX = currentX
+                panViewport(byPoints: deltaX)
+                return nil
+            case .otherMouseUp:
+                guard isMiddleMousePanning else { return event }
+                isMiddleMousePanning = false
+                middleMousePanLastWindowX = nil
+                updateTimelineCursor()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
     private func isTextInputView(_ view: NSView?) -> Bool {
         var current = view
         while let v = current {
@@ -4347,6 +4395,10 @@ struct ClipToolView: View {
         if let mouseDownMonitor {
             NSEvent.removeMonitor(mouseDownMonitor)
             self.mouseDownMonitor = nil
+        }
+        if let middleMousePanMonitor {
+            NSEvent.removeMonitor(middleMousePanMonitor)
+            self.middleMousePanMonitor = nil
         }
     }
 
@@ -4441,41 +4493,29 @@ struct ClipToolView: View {
                         visibleEndSeconds: visibleEndSeconds,
                         captureMarkers: model.captureTimelineMarkers,
                         highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
-                        onSeek: { seekPlayer(to: $0) }
+                        quickExportFlashToken: model.quickExportFlashToken,
+                        onSeek: { seekPlayer(to: $0) },
+                        onSetStart: { model.setClipStart($0) },
+                        onSetEnd: { model.setClipEnd($0) },
+                        onHoverChanged: { hovering in
+                            isWaveformHovered = hovering
+                            if !isMiddleMousePanning {
+                                updateTimelineCursor()
+                            }
+                        }
                     )
                     .frame(height: 58)
+                    .padding(.vertical, 4)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .onAppear { timelineInteractiveWidth = geo.size.width }
+                                .onChange(of: geo.size.width) { width in
+                                    timelineInteractiveWidth = width
+                                }
+                        }
+                    )
                 }
-
-                UnifiedClipTimelineSelector(
-                    startSeconds: Binding(
-                        get: { model.clipStartSeconds },
-                        set: { model.setClipStart($0) }
-                    ),
-                    playheadSeconds: Binding(
-                        get: { playheadSeconds },
-                        set: { seekPlayer(to: $0) }
-                    ),
-                    endSeconds: Binding(
-                        get: { model.clipEndSeconds },
-                        set: { model.setClipEnd($0) }
-                    ),
-                    totalDurationSeconds: totalDurationSeconds,
-                    visibleStartSeconds: visibleStartSeconds,
-                    visibleEndSeconds: visibleEndSeconds,
-                    captureMarkers: model.captureTimelineMarkers,
-                    highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
-                    onSeek: { seekPlayer(to: $0) }
-                )
-                .frame(height: 44)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear { timelineInteractiveWidth = geo.size.width }
-                            .onChange(of: geo.size.width) { width in
-                                timelineInteractiveWidth = width
-                            }
-                    }
-                )
 
                 if !isCompactLayout {
                     HStack {
@@ -4620,6 +4660,9 @@ struct ClipToolView: View {
             )
             .onHover { hovering in
                 isTimelineHovered = hovering
+                if !isMiddleMousePanning {
+                    NSCursor.arrow.set()
+                }
             }
         }
     }
@@ -4894,6 +4937,7 @@ struct ClipToolView: View {
             installFlagsMonitor()
             installScrollMonitor()
             installMouseDownMonitor()
+            installMiddleMousePanMonitor()
         }
 
         let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
@@ -4969,6 +5013,10 @@ struct ClipToolView: View {
             waveformTask?.cancel()
             removeKeyMonitor()
             isOptionKeyPressed = false
+            isMiddleMousePanning = false
+            middleMousePanLastWindowX = nil
+            isWaveformHovered = false
+            NSCursor.arrow.set()
             player.pause()
         }
     }
@@ -4988,10 +5036,20 @@ struct WaveformView: View {
     let visibleEndSeconds: Double
     let captureMarkers: [CaptureTimelineMarker]
     let highlightedMarkerID: UUID?
+    let quickExportFlashToken: Int
     let onSeek: (Double) -> Void
+    let onSetStart: (Double) -> Void
+    let onSetEnd: (Double) -> Void
+    let onHoverChanged: (Bool) -> Void
     @State private var dragWindowStart: Double?
     @State private var dragWindowEnd: Double?
     @State private var isHovered = false
+    @State private var isStartEdgeHovered = false
+    @State private var isEndEdgeHovered = false
+    @State private var startEdgeDragAnchor: Double?
+    @State private var endEdgeDragAnchor: Double?
+    @State private var selectionFlashOpacity: Double = 0
+    @State private var selectionFlashGlowOpacity: Double = 0
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -5016,8 +5074,13 @@ struct WaveformView: View {
             let startX = xPosition(for: startSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
             let playheadX = xPosition(for: playheadSeconds, width: width)
+            let edgeHeight = max(8, height - 6)
+            let startEdgeVisualWidth: CGFloat = isStartEdgeHovered ? 5 : 3
+            let endEdgeVisualWidth: CGFloat = isEndEdgeHovered ? 5 : 3
+            let startEdgeHitWidth: CGFloat = isStartEdgeHovered ? 22 : 16
+            let endEdgeHitWidth: CGFloat = isEndEdgeHovered ? 22 : 16
 
-            ZStack(alignment: .leading) {
+            ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.black.opacity(isHovered ? 0.16 : 0.12))
 
@@ -5041,6 +5104,12 @@ struct WaveformView: View {
                             .frame(width: max(1, endX - startX))
                             .offset(x: startX)
                     )
+
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .fill(Color.white.opacity(selectionFlashOpacity))
+                    .frame(width: max(1, endX - startX))
+                    .offset(x: startX)
+                    .allowsHitTesting(false)
 
                 Canvas { context, size in
                     guard !samples.isEmpty else { return }
@@ -5093,6 +5162,70 @@ struct WaveformView: View {
                     .frame(width: 2, height: height)
                     .offset(x: playheadX - 1)
 
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.white.opacity(0.94))
+                    .frame(width: startEdgeVisualWidth, height: edgeHeight)
+                    .shadow(color: Color.accentColor.opacity(isStartEdgeHovered ? 0.35 : 0), radius: isStartEdgeHovered ? 4 : 0)
+                    .offset(x: startX - (startEdgeVisualWidth / 2), y: 3)
+                    .animation(.easeOut(duration: 0.12), value: isStartEdgeHovered)
+                    .allowsHitTesting(false)
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: startEdgeHitWidth, height: height)
+                    .contentShape(Rectangle())
+                    .offset(x: startX - (startEdgeHitWidth / 2))
+                    .onHover { hovering in
+                        isStartEdgeHovered = hovering
+                    }
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
+                            .onChanged { value in
+                                if startEdgeDragAnchor == nil {
+                                    startEdgeDragAnchor = startSeconds
+                                }
+                                let anchor = startEdgeDragAnchor ?? startSeconds
+                                let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
+                                let newValue = min(max(0, anchor + deltaSeconds), endSeconds)
+                                onSetStart(newValue)
+                            }
+                            .onEnded { _ in
+                                startEdgeDragAnchor = nil
+                            }
+                    )
+
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.white.opacity(0.94))
+                    .frame(width: endEdgeVisualWidth, height: edgeHeight)
+                    .shadow(color: Color.accentColor.opacity(isEndEdgeHovered ? 0.35 : 0), radius: isEndEdgeHovered ? 4 : 0)
+                    .offset(x: endX - (endEdgeVisualWidth / 2), y: 3)
+                    .animation(.easeOut(duration: 0.12), value: isEndEdgeHovered)
+                    .allowsHitTesting(false)
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: endEdgeHitWidth, height: height)
+                    .contentShape(Rectangle())
+                    .offset(x: endX - (endEdgeHitWidth / 2))
+                    .onHover { hovering in
+                        isEndEdgeHovered = hovering
+                    }
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
+                            .onChanged { value in
+                                if endEdgeDragAnchor == nil {
+                                    endEdgeDragAnchor = endSeconds
+                                }
+                                let anchor = endEdgeDragAnchor ?? endSeconds
+                                let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
+                                let newValue = max(min(totalDurationSeconds, anchor + deltaSeconds), startSeconds)
+                                onSetEnd(newValue)
+                            }
+                            .onEnded { _ in
+                                endEdgeDragAnchor = nil
+                            }
+                    )
+
                 ForEach(captureMarkers) { marker in
                     let markerX = xPosition(for: marker.seconds, width: width)
                     let isHighlighted = marker.id == highlightedMarkerID
@@ -5105,8 +5238,19 @@ struct WaveformView: View {
                             radius: isHighlighted ? 4 : 0
                         )
                         .offset(x: markerX - (isHighlighted ? 2.5 : 1.5), y: isHighlighted ? 4 : 8)
+                        .allowsHitTesting(false)
                 }
+
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .stroke(Color.white.opacity(0.95), lineWidth: 2.0)
+                    .frame(width: max(1, endX - startX))
+                    .frame(height: max(1, height - 8))
+                    .offset(x: startX, y: 4)
+                    .shadow(color: Color.accentColor.opacity(selectionFlashGlowOpacity), radius: 14)
+                    .opacity(selectionFlashGlowOpacity)
+                    .allowsHitTesting(false)
             }
+            .coordinateSpace(name: "waveformTimeline")
             .clipShape(RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
@@ -5115,6 +5259,19 @@ struct WaveformView: View {
             .contentShape(Rectangle())
             .onHover { hovering in
                 isHovered = hovering
+                onHoverChanged(hovering)
+            }
+            .task(id: quickExportFlashToken) {
+                guard quickExportFlashToken > 0 else { return }
+                withAnimation(.easeOut(duration: 0.14)) {
+                    selectionFlashOpacity = 0.52
+                    selectionFlashGlowOpacity = 1.0
+                }
+                try? await Task.sleep(nanoseconds: 260_000_000)
+                withAnimation(.easeOut(duration: 0.34)) {
+                    selectionFlashOpacity = 0
+                    selectionFlashGlowOpacity = 0
+                }
             }
             .animation(.spring(response: 0.24, dampingFraction: 0.72), value: highlightedMarkerID)
             .gesture(
@@ -5132,7 +5289,7 @@ struct WaveformView: View {
                         dragWindowStart = nil
                         dragWindowEnd = nil
                     }
-            )
+            , including: .gesture)
             .overlay(alignment: .bottomLeading) {
                 Text(formatSeconds(visibleStartSeconds))
                     .font(.caption2.monospacedDigit())
@@ -5152,11 +5309,6 @@ struct WaveformView: View {
 }
 
 struct UnifiedClipTimelineSelector: View {
-    private enum TimelineHandle {
-        case start
-        case end
-    }
-
     @Binding var startSeconds: Double
     @Binding var playheadSeconds: Double
     @Binding var endSeconds: Double
@@ -5169,7 +5321,10 @@ struct UnifiedClipTimelineSelector: View {
     @State private var seekDragWindowStart: Double?
     @State private var seekDragWindowEnd: Double?
     @State private var isHovered = false
-    @State private var hoveredHandle: TimelineHandle?
+    @State private var isStartHandleHovered = false
+    @State private var isEndHandleHovered = false
+    @State private var startHandleDragAnchor: Double?
+    @State private var endHandleDragAnchor: Double?
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -5193,10 +5348,10 @@ struct UnifiedClipTimelineSelector: View {
             let startX = xPosition(for: startSeconds, width: width)
             let playheadX = xPosition(for: playheadSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
-            let handleSize: CGFloat = 14
-            let handleCenterY: CGFloat = 20
+            let handleSize: CGFloat = 16
+            let handleOffsetY: CGFloat = 13
 
-            ZStack(alignment: .leading) {
+            ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.black.opacity(isHovered ? 0.30 : 0.24))
                     .frame(height: 10)
@@ -5241,7 +5396,14 @@ struct UnifiedClipTimelineSelector: View {
                     .fill(Color.white.opacity(0.95))
                     .frame(width: 2, height: 24)
                     .offset(x: playheadX - 1, y: 8)
-                    .gesture(
+                    .allowsHitTesting(false)
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 16, height: 28)
+                    .contentShape(Rectangle())
+                    .offset(x: playheadX - 8, y: 6)
+                    .highPriorityGesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
                                 if seekDragWindowStart == nil || seekDragWindowEnd == nil {
@@ -5269,21 +5431,35 @@ struct UnifiedClipTimelineSelector: View {
                     )
                     .overlay(
                         Circle()
-                            .stroke(Color.white.opacity(hoveredHandle == .start ? 0.9 : 0), lineWidth: 1.5)
-                            .scaleEffect(hoveredHandle == .start ? 1.32 : 1.0)
-                            .animation(.easeOut(duration: 0.12), value: hoveredHandle == .start)
+                            .stroke(Color.white.opacity(isStartHandleHovered ? 0.9 : 0), lineWidth: 1.5)
+                            .scaleEffect(isStartHandleHovered ? 1.3 : 1.0)
+                            .animation(.easeOut(duration: 0.12), value: isStartHandleHovered)
                     )
-                    .shadow(color: Color.accentColor.opacity(hoveredHandle == .start ? 0.35 : 0), radius: hoveredHandle == .start ? 5 : 0)
-                    .position(x: startX, y: handleCenterY)
+                    .shadow(color: Color.accentColor.opacity(isStartHandleHovered ? 0.35 : 0), radius: isStartHandleHovered ? 5 : 0)
+                    .offset(x: startX - (handleSize / 2), y: handleOffsetY)
+                    .allowsHitTesting(false)
+
+                Circle()
+                    .fill(Color.clear)
+                    .frame(width: handleSize, height: handleSize)
                     .contentShape(Circle())
+                    .offset(x: startX - (handleSize / 2), y: handleOffsetY)
                     .onHover { isOver in
-                        hoveredHandle = isOver ? .start : (hoveredHandle == .start ? nil : hoveredHandle)
+                        isStartHandleHovered = isOver
                     }
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .named("clipTimelineTrack"))
                             .onChanged { value in
-                                let newValue = min(timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds), endSeconds)
-                                startSeconds = max(0, newValue)
+                                if startHandleDragAnchor == nil {
+                                    startHandleDragAnchor = startSeconds
+                                }
+                                let anchor = startHandleDragAnchor ?? startSeconds
+                                let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
+                                let newValue = min(max(0, anchor + deltaSeconds), endSeconds)
+                                startSeconds = newValue
+                            }
+                            .onEnded { _ in
+                                startHandleDragAnchor = nil
                             }
                     )
 
@@ -5297,21 +5473,35 @@ struct UnifiedClipTimelineSelector: View {
                     )
                     .overlay(
                         Circle()
-                            .stroke(Color.white.opacity(hoveredHandle == .end ? 0.9 : 0), lineWidth: 1.5)
-                            .scaleEffect(hoveredHandle == .end ? 1.32 : 1.0)
-                            .animation(.easeOut(duration: 0.12), value: hoveredHandle == .end)
+                            .stroke(Color.white.opacity(isEndHandleHovered ? 0.9 : 0), lineWidth: 1.5)
+                            .scaleEffect(isEndHandleHovered ? 1.3 : 1.0)
+                            .animation(.easeOut(duration: 0.12), value: isEndHandleHovered)
                     )
-                    .shadow(color: Color.accentColor.opacity(hoveredHandle == .end ? 0.35 : 0), radius: hoveredHandle == .end ? 5 : 0)
-                    .position(x: endX, y: handleCenterY)
+                    .shadow(color: Color.accentColor.opacity(isEndHandleHovered ? 0.35 : 0), radius: isEndHandleHovered ? 5 : 0)
+                    .offset(x: endX - (handleSize / 2), y: handleOffsetY)
+                    .allowsHitTesting(false)
+
+                Circle()
+                    .fill(Color.clear)
+                    .frame(width: handleSize, height: handleSize)
                     .contentShape(Circle())
+                    .offset(x: endX - (handleSize / 2), y: handleOffsetY)
                     .onHover { isOver in
-                        hoveredHandle = isOver ? .end : (hoveredHandle == .end ? nil : hoveredHandle)
+                        isEndHandleHovered = isOver
                     }
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .named("clipTimelineTrack"))
                             .onChanged { value in
-                                let newValue = max(timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds), startSeconds)
-                                endSeconds = min(totalDurationSeconds, newValue)
+                                if endHandleDragAnchor == nil {
+                                    endHandleDragAnchor = endSeconds
+                                }
+                                let anchor = endHandleDragAnchor ?? endSeconds
+                                let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
+                                let newValue = max(min(totalDurationSeconds, anchor + deltaSeconds), startSeconds)
+                                endSeconds = newValue
+                            }
+                            .onEnded { _ in
+                                endHandleDragAnchor = nil
                             }
                     )
             }
@@ -5337,7 +5527,7 @@ struct UnifiedClipTimelineSelector: View {
                         seekDragWindowStart = nil
                         seekDragWindowEnd = nil
                     }
-            )
+            , including: .gesture)
         }
     }
 }
