@@ -1559,6 +1559,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     @Published var clipStartSeconds: Double = 0
     @Published var clipEndSeconds: Double = 0
+    @Published var clipPlayheadSeconds: Double = 0
     @Published var clipStartText = "00:00:00.000"
     @Published var clipEndText = "00:00:00.000"
     @Published var selectedClipFormat: ClipFormat = .mp4
@@ -1967,6 +1968,7 @@ final class WorkspaceViewModel: ObservableObject {
         captureTimelineMarkers = []
         highlightedCaptureTimelineMarkerID = nil
         highlightedClipBoundary = nil
+        clipPlayheadSeconds = 0
         resetClipRange()
     }
 
@@ -1995,6 +1997,7 @@ final class WorkspaceViewModel: ObservableObject {
         captureTimelineMarkers = []
         highlightedCaptureTimelineMarkerID = nil
         highlightedClipBoundary = nil
+        clipPlayheadSeconds = 0
         uiMessage = "Ready"
         resetClipRange()
     }
@@ -4125,6 +4128,7 @@ struct ClipToolView: View {
     @State private var isMiddleMousePanning = false
     @State private var middleMousePanLastWindowX: CGFloat?
     @State private var markerNavigationAnimationToken: Int = 0
+    @State private var loadedSourcePath: String?
 
     private let timer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
     @State private var lastInteractiveSeekSeconds: Double = -1
@@ -4137,17 +4141,31 @@ struct ClipToolView: View {
             player.replaceCurrentItem(with: nil)
             playheadSeconds = 0
             playerDurationSeconds = 0
+            loadedSourcePath = nil
             waveformTask?.cancel()
             waveformSamples = []
             isWaveformLoading = false
             return
         }
+
+        if loadedSourcePath == sourceURL.path, player.currentItem != nil {
+            let duration = max(playerDurationSeconds, model.sourceDurationSeconds)
+            let restored = max(0, min(model.clipPlayheadSeconds, duration))
+            if abs(playheadSeconds - restored) > (1.0 / 120.0) {
+                seekPlayer(to: restored)
+            }
+            return
+        }
+
+        loadedSourcePath = sourceURL.path
         let item = AVPlayerItem(url: sourceURL)
         player.replaceCurrentItem(with: item)
         let duration = CMTimeGetSeconds(item.asset.duration)
         playerDurationSeconds = duration.isFinite && duration > 0 ? duration : model.sourceDurationSeconds
-        playheadSeconds = 0
+        let restored = max(0, min(model.clipPlayheadSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        playheadSeconds = restored
         viewportStartSeconds = 0
+        player.seek(to: CMTime(seconds: restored, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         loadWaveform(for: sourceURL)
     }
 
@@ -4180,6 +4198,7 @@ struct ClipToolView: View {
         lastInteractiveSeekSeconds = -1
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
+        model.clipPlayheadSeconds = clamped
         updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
     }
 
@@ -4199,6 +4218,7 @@ struct ClipToolView: View {
             toleranceAfter: tolerance
         )
         playheadSeconds = clamped
+        model.clipPlayheadSeconds = clamped
         updateViewportForPlayhead(shouldFollow: false)
     }
 
@@ -4206,6 +4226,7 @@ struct ClipToolView: View {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
+        model.clipPlayheadSeconds = clamped
 
         if timelineZoom > 1 {
             viewportStartSeconds = clampedViewportStart(clamped - (zoomedWindowDuration / 2.0))
@@ -5098,6 +5119,7 @@ struct ClipToolView: View {
             let current = CMTimeGetSeconds(player.currentTime())
             if current.isFinite {
                 playheadSeconds = max(0, current)
+                model.clipPlayheadSeconds = playheadSeconds
                 if player.rate != 0 {
                     isViewportManuallyControlled = false
                 }
