@@ -273,6 +273,11 @@ struct CaptureTimelineMarker: Identifiable, Equatable {
     let seconds: Double
 }
 
+enum ClipBoundaryHighlight: Equatable {
+    case start
+    case end
+}
+
 struct ProfanityHit: Identifiable {
     let id = UUID()
     let start: Double
@@ -1547,6 +1552,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var outputURL: URL?
     @Published private(set) var captureTimelineMarkers: [CaptureTimelineMarker] = []
     @Published var highlightedCaptureTimelineMarkerID: UUID?
+    @Published var highlightedClipBoundary: ClipBoundaryHighlight?
     @Published var captureFrameFlashToken: Int = 0
     @Published var quickExportFlashToken: Int = 0
 
@@ -1959,6 +1965,7 @@ final class WorkspaceViewModel: ObservableObject {
         exportProgress = 0
         captureTimelineMarkers = []
         highlightedCaptureTimelineMarkerID = nil
+        highlightedClipBoundary = nil
         resetClipRange()
     }
 
@@ -1986,6 +1993,7 @@ final class WorkspaceViewModel: ObservableObject {
         outputURL = nil
         captureTimelineMarkers = []
         highlightedCaptureTimelineMarkerID = nil
+        highlightedClipBoundary = nil
         uiMessage = "Ready"
         resetClipRange()
     }
@@ -3606,6 +3614,44 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func addTimelineMarker(at seconds: Double) {
+        addCaptureTimelineMarker(at: seconds)
+        uiMessage = "Marker added at \(formatSeconds(seconds))"
+    }
+
+    func highlightTimelineMarker(near seconds: Double, tolerance: Double = 1.0 / 120.0) {
+        if let marker = captureTimelineMarkers.first(where: { abs($0.seconds - seconds) <= tolerance }) {
+            highlightedCaptureTimelineMarkerID = marker.id
+            highlightedClipBoundary = nil
+            scheduleCaptureMarkerHighlightClear(markerID: marker.id)
+        } else {
+            highlightedCaptureTimelineMarkerID = nil
+        }
+    }
+
+    func highlightBoundaryIfNeeded(
+        near seconds: Double,
+        clipStart: Double,
+        clipEnd: Double,
+        tolerance: Double = 1.0 / 120.0
+    ) {
+        if abs(seconds - clipStart) <= tolerance {
+            highlightedCaptureTimelineMarkerID = nil
+            highlightedClipBoundary = .start
+            scheduleClipBoundaryHighlightClear(.start)
+            return
+        }
+
+        if abs(seconds - clipEnd) <= tolerance {
+            highlightedCaptureTimelineMarkerID = nil
+            highlightedClipBoundary = .end
+            scheduleClipBoundaryHighlightClear(.end)
+            return
+        }
+
+        highlightedClipBoundary = nil
+    }
+
     private func addCaptureTimelineMarker(at seconds: Double) {
         let clamped = max(0, min(seconds, max(sourceDurationSeconds, seconds)))
 
@@ -3631,6 +3677,16 @@ final class WorkspaceViewModel: ObservableObject {
             guard let self, self.highlightedCaptureTimelineMarkerID == markerID else { return }
             withAnimation(.easeOut(duration: 0.18)) {
                 self.highlightedCaptureTimelineMarkerID = nil
+            }
+        }
+    }
+
+    private func scheduleClipBoundaryHighlightClear(_ boundary: ClipBoundaryHighlight) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 420_000_000)
+            guard let self, self.highlightedClipBoundary == boundary else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                self.highlightedClipBoundary = nil
             }
         }
     }
@@ -4157,6 +4213,35 @@ struct ClipToolView: View {
         }
     }
 
+    private func navigateToMarker(previous: Bool) {
+        let epsilon = 1.0 / 240.0
+        var points = model.captureTimelineMarkers.map(\.seconds)
+        points.append(model.clipStartSeconds)
+        points.append(model.clipEndSeconds)
+        points.sort()
+
+        var deduped: [Double] = []
+        for point in points {
+            if let last = deduped.last, abs(point - last) <= epsilon {
+                continue
+            }
+            deduped.append(point)
+        }
+        guard !deduped.isEmpty else { return }
+
+        let target: Double?
+        if previous {
+            target = deduped.last(where: { $0 < playheadSeconds - epsilon }) ?? deduped.first
+        } else {
+            target = deduped.first(where: { $0 > playheadSeconds + epsilon }) ?? deduped.last
+        }
+
+        guard let target else { return }
+        seekPlayerAndFocusViewport(to: target)
+        model.highlightTimelineMarker(near: target)
+        model.highlightBoundaryIfNeeded(near: target, clipStart: model.clipStartSeconds, clipEnd: model.clipEndSeconds)
+    }
+
     private var totalDurationSeconds: Double {
         max(0.001, max(playerDurationSeconds, model.sourceDurationSeconds))
     }
@@ -4266,11 +4351,11 @@ struct ClipToolView: View {
 
             if !hasDisallowedModifier && !flags.contains(.shift) {
                 if event.specialKey == .upArrow {
-                    seekPlayerAndFocusViewport(to: model.clipStartSeconds)
+                    navigateToMarker(previous: true)
                     return nil
                 }
                 if event.specialKey == .downArrow {
-                    seekPlayerAndFocusViewport(to: model.clipEndSeconds)
+                    navigateToMarker(previous: false)
                     return nil
                 }
             }
@@ -4287,6 +4372,10 @@ struct ClipToolView: View {
                 if chars == "x" {
                     model.resetClipRange()
                     seekPlayer(to: model.clipStartSeconds)
+                    return nil
+                }
+                if chars == "m" {
+                    model.addTimelineMarker(at: playheadSeconds)
                     return nil
                 }
             }
@@ -4527,6 +4616,7 @@ struct ClipToolView: View {
                         visibleEndSeconds: visibleEndSeconds,
                         captureMarkers: model.captureTimelineMarkers,
                         highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
+                        highlightedClipBoundary: model.highlightedClipBoundary,
                         captureFrameFlashToken: model.captureFrameFlashToken,
                         quickExportFlashToken: model.quickExportFlashToken,
                         onSeek: { seekPlayerInteractive(to: $0) },
@@ -5072,6 +5162,7 @@ struct WaveformView: View {
     let visibleEndSeconds: Double
     let captureMarkers: [CaptureTimelineMarker]
     let highlightedMarkerID: UUID?
+    let highlightedClipBoundary: ClipBoundaryHighlight?
     let captureFrameFlashToken: Int
     let quickExportFlashToken: Int
     let onSeek: (Double) -> Void
@@ -5130,6 +5221,8 @@ struct WaveformView: View {
             let edgeGlowWidth = min(max(selectionWidth * 0.18, 18), 44)
             let startEdgeGlowOpacity: Double = isStartEdgeDragging ? 1.0 : (isStartEdgeHovered ? 0.78 : 0)
             let endEdgeGlowOpacity: Double = isEndEdgeDragging ? 1.0 : (isEndEdgeHovered ? 0.78 : 0)
+            let startBoundaryPulseOpacity: Double = highlightedClipBoundary == .start ? 0.95 : 0
+            let endBoundaryPulseOpacity: Double = highlightedClipBoundary == .end ? 0.95 : 0
 
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
@@ -5193,6 +5286,38 @@ struct WaveformView: View {
                     .frame(width: edgeGlowWidth, height: height)
                     .offset(x: max(startX, endX - edgeGlowWidth))
                     .animation(.easeOut(duration: 0.16), value: isEndEdgeActive)
+                    .allowsHitTesting(false)
+
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                systemAccent.opacity(startBoundaryPulseOpacity),
+                                .clear
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: edgeGlowWidth, height: height)
+                    .offset(x: startX)
+                    .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
+                    .allowsHitTesting(false)
+
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                systemAccent.opacity(endBoundaryPulseOpacity)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: edgeGlowWidth, height: height)
+                    .offset(x: max(startX, endX - edgeGlowWidth))
+                    .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
                     .allowsHitTesting(false)
 
                 Canvas { context, size in
@@ -5301,21 +5426,6 @@ struct WaveformView: View {
                             }
                     )
 
-                ForEach(captureMarkers) { marker in
-                    let markerX = xPosition(for: marker.seconds, width: width)
-                    let isHighlighted = marker.id == highlightedMarkerID
-                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                        .fill(isHighlighted ? Color.orange : Color.orange.opacity(0.72))
-                        .frame(width: isHighlighted ? 5 : 3, height: isHighlighted ? height - 8 : height - 16)
-                        .scaleEffect(isHighlighted ? 1.16 : 1.0, anchor: .center)
-                        .shadow(
-                            color: isHighlighted ? Color.orange.opacity(0.55) : Color.clear,
-                            radius: isHighlighted ? 4 : 0
-                        )
-                        .offset(x: markerX - (isHighlighted ? 2.5 : 1.5), y: isHighlighted ? 4 : 8)
-                        .allowsHitTesting(false)
-                }
-
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .stroke(Color.white.opacity(0.95), lineWidth: 2.0)
                     .frame(width: max(1, endX - startX))
@@ -5328,16 +5438,37 @@ struct WaveformView: View {
             .coordinateSpace(name: "waveformTimeline")
             .clipShape(RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
             .overlay(alignment: .topLeading) {
-                Rectangle()
-                    .fill(Color(nsColor: .systemRed))
-                    .frame(width: playheadWidth, height: height + 8)
-                    .offset(x: playheadX - (playheadWidth / 2), y: -4)
-                    .shadow(
-                        color: Color(nsColor: .systemRed).opacity(isPlayheadCaptureFlashing ? 0.9 : 0),
-                        radius: isPlayheadCaptureFlashing ? 6 : 0
-                    )
-                    .animation(.easeOut(duration: 0.14), value: isPlayheadCaptureFlashing)
-                    .allowsHitTesting(false)
+                ZStack(alignment: .topLeading) {
+                    ForEach(captureMarkers) { marker in
+                        let markerX = xPosition(for: marker.seconds, width: width)
+                        let isHighlighted = marker.id == highlightedMarkerID
+                        let pinColor = Color.orange
+
+                        VStack(spacing: 0) {
+                            Circle()
+                                .fill(pinColor.opacity(isHighlighted ? 1.0 : 0.9))
+                                .frame(width: isHighlighted ? 9 : 8, height: isHighlighted ? 9 : 8)
+                            Rectangle()
+                                .fill(pinColor.opacity(isHighlighted ? 0.96 : 0.8))
+                                .frame(width: isHighlighted ? 2.6 : 2.0, height: height + 4)
+                        }
+                        .offset(x: markerX - (isHighlighted ? 4.5 : 4.0), y: -7)
+                        .shadow(color: pinColor.opacity(isHighlighted ? 0.6 : 0.0), radius: isHighlighted ? 4 : 0)
+                        .animation(.easeOut(duration: 0.14), value: isHighlighted)
+                        .allowsHitTesting(false)
+                    }
+
+                    Rectangle()
+                        .fill(Color(nsColor: .systemRed))
+                        .frame(width: playheadWidth, height: height + 8)
+                        .offset(x: playheadX - (playheadWidth / 2), y: -4)
+                        .shadow(
+                            color: Color(nsColor: .systemRed).opacity(isPlayheadCaptureFlashing ? 0.9 : 0),
+                            radius: isPlayheadCaptureFlashing ? 6 : 0
+                        )
+                        .animation(.easeOut(duration: 0.14), value: isPlayheadCaptureFlashing)
+                        .allowsHitTesting(false)
+                }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
