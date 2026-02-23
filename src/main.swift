@@ -326,6 +326,21 @@ struct ProfanityHit: Identifiable {
     }
 }
 
+struct TranscriptSegment: Identifiable {
+    let id = UUID()
+    let start: Double
+    let end: Double
+    let text: String
+
+    var duration: Double {
+        max(0, end - start)
+    }
+
+    var formatted: String {
+        "\(formatSeconds(start)) → \(formatSeconds(end))  \(text)"
+    }
+}
+
 enum FileStatus {
     case idle
     case running
@@ -374,6 +389,7 @@ struct DetectionOutput {
     let segments: [Segment]
     let silentSegments: [Segment]
     let profanityHits: [ProfanityHit]
+    let transcriptSegments: [TranscriptSegment]?
     let mediaDuration: Double?
 }
 
@@ -792,6 +808,7 @@ func runDetection(
     detectAudioSilence: Bool,
     detectProfanity: Bool,
     profanityWords: Set<String> = defaultProfanityWords,
+    cachedTranscriptSegments: [TranscriptSegment]? = nil,
     silenceMinDuration: Double = defaultMinSilenceDurationSeconds,
     onStatusUpdate: @escaping @Sendable (String) -> Void = { _ in },
     onBlackSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
@@ -900,6 +917,7 @@ func runDetection(
     let segments = detectBlackFrames ? buildSegments(blackIntervals: intervals, minDuration: minDurationSeconds) : []
     var silentSegments: [Segment] = []
     var profanityHits: [ProfanityHit] = []
+    var transcriptSegmentsForProfanity: [TranscriptSegment]? = nil
 
     if detectAudioSilence {
         onStatusUpdate("Analyzing audio for silent gaps")
@@ -926,31 +944,45 @@ func runDetection(
     }
 
     if detectProfanity {
-        onStatusUpdate("Transcribing audio for profanity")
+        let usingCachedTranscript = (cachedTranscriptSegments != nil)
+        onStatusUpdate(usingCachedTranscript ? "Scanning transcript for profanity" : "Transcribing audio for profanity")
         let profanityBase = (detectAudioSilence || detectBlackFrames) ? 0.70 : 0.0
         let profanitySpan = (detectAudioSilence || detectBlackFrames) ? 0.29 : 0.99
-        let profanityResult = detectProfanityHits(
-            file: file,
-            profanityWords: profanityWords,
-            shouldCancel: {
-                shouldCancel()
-            },
-            progressHandler: { profanityProgress in
-                let clamped = min(1, max(0, profanityProgress))
-                progressHandler(min(0.99, profanityBase + (clamped * profanitySpan)))
+        if let cachedTranscriptSegments {
+            transcriptSegmentsForProfanity = cachedTranscriptSegments
+            profanityHits = detectProfanityHits(in: cachedTranscriptSegments, profanityWords: profanityWords)
+            profanityHits.forEach { onProfanityDetected($0) }
+            progressHandler(min(0.99, profanityBase + profanitySpan))
+        } else {
+            let transcriptResult = transcribeAudioWithWhisper(
+                file: file,
+                shouldCancel: {
+                    shouldCancel()
+                },
+                progressHandler: { profanityProgress in
+                    let clamped = min(1, max(0, profanityProgress))
+                    progressHandler(min(0.99, profanityBase + (clamped * profanitySpan)))
+                }
+            )
+            switch transcriptResult {
+            case .success(let transcriptSegments):
+                transcriptSegmentsForProfanity = transcriptSegments
+                profanityHits = detectProfanityHits(in: transcriptSegments, profanityWords: profanityWords)
+                profanityHits.forEach { onProfanityDetected($0) }
+            case .failure(let error):
+                return .failure(error)
             }
-        )
-        switch profanityResult {
-        case .success(let hits):
-            profanityHits = hits
-            hits.forEach { onProfanityDetected($0) }
-        case .failure(let error):
-            return .failure(error)
         }
     }
 
     progressHandler(1.0)
-    return .success(DetectionOutput(segments: segments, silentSegments: silentSegments, profanityHits: profanityHits, mediaDuration: outputDuration))
+    return .success(DetectionOutput(
+        segments: segments,
+        silentSegments: silentSegments,
+        profanityHits: profanityHits,
+        transcriptSegments: transcriptSegmentsForProfanity,
+        mediaDuration: outputDuration
+    ))
 }
 
 func detectAudioSilenceSegments(
@@ -1293,18 +1325,16 @@ private func runSynchronousProcessWithProgress(
     return .failure(.failed(errorText))
 }
 
-private func detectProfanityFromTranscriptionJSON(_ jsonData: Data, profanityWords: Set<String>) -> [ProfanityHit] {
+private func parseTranscriptionSegments(_ jsonData: Data) -> [TranscriptSegment] {
     guard let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
         return []
     }
 
-    var hits: [ProfanityHit] = []
+    var segmentsOut: [TranscriptSegment] = []
     let transcription = object["transcription"] as? [[String: Any]] ?? object["segments"] as? [[String: Any]] ?? []
     for segment in transcription {
-        let text = (segment["text"] as? String ?? "")
-        let tokens = text.split(whereSeparator: { $0.isWhitespace }).map { normalizedToken(String($0)) }
-        let matchedWords = tokens.filter { profanityWords.contains($0) }
-        if matchedWords.isEmpty { continue }
+        let text = (segment["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { continue }
 
         let startMs: Double? = ((segment["offsets"] as? [String: Any])?["from"] as? Double)
         let endMs: Double? = ((segment["offsets"] as? [String: Any])?["to"] as? Double)
@@ -1314,13 +1344,30 @@ private func detectProfanityFromTranscriptionJSON(_ jsonData: Data, profanityWor
         let start = max(0, (startMs ?? (startSecAlt ?? 0)) / (startMs != nil ? 1000.0 : 1.0))
         let endRaw = (endMs ?? (endSecAlt ?? (start + 0.2))) / (endMs != nil ? 1000.0 : 1.0)
         let end = max(start + 0.05, endRaw)
-        let duration = end - start
-
-        for word in matchedWords {
-            hits.append(ProfanityHit(start: start, end: end, duration: duration, word: word))
-        }
+        segmentsOut.append(TranscriptSegment(start: start, end: end, text: text))
     }
 
+    segmentsOut.sort { lhs, rhs in
+        if abs(lhs.start - rhs.start) > 0.0001 { return lhs.start < rhs.start }
+        return lhs.text < rhs.text
+    }
+    return segmentsOut
+}
+
+private func detectProfanityHits(
+    in transcriptSegments: [TranscriptSegment],
+    profanityWords: Set<String>
+) -> [ProfanityHit] {
+    var hits: [ProfanityHit] = []
+    for segment in transcriptSegments {
+        let tokens = segment.text.split(whereSeparator: { $0.isWhitespace }).map { normalizedToken(String($0)) }
+        let matchedWords = tokens.filter { profanityWords.contains($0) }
+        if matchedWords.isEmpty { continue }
+        let duration = segment.duration
+        for word in matchedWords {
+            hits.append(ProfanityHit(start: segment.start, end: segment.end, duration: duration, word: word))
+        }
+    }
     hits.sort { lhs, rhs in
         if abs(lhs.start - rhs.start) > 0.0001 { return lhs.start < rhs.start }
         return lhs.word < rhs.word
@@ -1328,18 +1375,17 @@ private func detectProfanityFromTranscriptionJSON(_ jsonData: Data, profanityWor
     return hits
 }
 
-func detectProfanityHits(
+private func transcribeAudioWithWhisper(
     file: URL,
-    profanityWords: Set<String>,
     shouldCancel: @escaping @Sendable () -> Bool = { false },
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in }
-) -> Result<[ProfanityHit], DetectionError> {
+) -> Result<[TranscriptSegment], DetectionError> {
     if shouldCancel() {
         return .failure(.cancelled)
     }
 
     guard let ffmpegURL = findSystemFFmpegExecutable() else {
-        return .failure(.failed("No ffmpeg executable found for profanity transcription."))
+        return .failure(.failed("No ffmpeg executable found for Whisper transcription."))
     }
     guard let whisperURL = findWhisperExecutable() else {
         return .failure(.failed("Bundled whisper-cli not found (Contents/Resources/whisper-cli)."))
@@ -1348,7 +1394,7 @@ func detectProfanityHits(
         return .failure(.failed("Bundled Whisper model not found (Contents/Resources/profanity-model.bin)."))
     }
 
-    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("bvt-profanity-\(UUID().uuidString)", isDirectory: true)
+    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("bvt-whisper-\(UUID().uuidString)", isDirectory: true)
     do {
         try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
     } catch {
@@ -1429,7 +1475,32 @@ func detectProfanityHits(
         return .failure(.failed("Whisper did not produce transcript JSON output."))
     }
 
-    return .success(detectProfanityFromTranscriptionJSON(jsonData, profanityWords: profanityWords))
+    return .success(parseTranscriptionSegments(jsonData))
+}
+
+func detectProfanityHits(
+    file: URL,
+    profanityWords: Set<String>,
+    cachedTranscriptSegments: [TranscriptSegment]? = nil,
+    shouldCancel: @escaping @Sendable () -> Bool = { false },
+    progressHandler: @escaping @Sendable (Double) -> Void = { _ in }
+) -> Result<[ProfanityHit], DetectionError> {
+    if let cachedTranscriptSegments {
+        progressHandler(1.0)
+        return .success(detectProfanityHits(in: cachedTranscriptSegments, profanityWords: profanityWords))
+    }
+
+    let transcriptResult = transcribeAudioWithWhisper(
+        file: file,
+        shouldCancel: shouldCancel,
+        progressHandler: progressHandler
+    )
+    switch transcriptResult {
+    case .failure(let error):
+        return .failure(error)
+    case .success(let transcriptSegments):
+        return .success(detectProfanityHits(in: transcriptSegments, profanityWords: profanityWords))
+    }
 }
 
 func copyToClipboard(_ text: String) {
@@ -1555,6 +1626,10 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var sourceSessionID = UUID()
     @Published var analysis: FileAnalysis?
     @Published var sourceInfo: SourceMediaInfo?
+    @Published var transcriptSegments: [TranscriptSegment] = []
+    @Published var transcriptStatusText: String = "No transcript generated yet."
+    @Published var hasCachedTranscript = false
+    @Published var isGeneratingTranscript = false
 
     @Published var isAnalyzing = false {
         didSet { updateDockProgressIndicator() }
@@ -1813,7 +1888,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var canAnalyze: Bool {
-        sourceURL != nil && !isAnalyzing && !isExporting && (effectiveAnalyzeBlackFrames || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
+        sourceURL != nil && !isAnalyzing && !isExporting && !isGeneratingTranscript && (effectiveAnalyzeBlackFrames || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
     }
 
     var hasVideoTrack: Bool {
@@ -1887,7 +1962,17 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var canExport: Bool {
-        sourceURL != nil && !isAnalyzing && !isExporting
+        sourceURL != nil && !isAnalyzing && !isExporting && !isGeneratingTranscript
+    }
+
+    var canGenerateTranscript: Bool {
+        sourceURL != nil
+            && hasAudioTrack
+            && whisperTranscriptionAvailable
+            && !isAnalyzing
+            && !isExporting
+            && !isGeneratingTranscript
+            && !hasCachedTranscript
     }
 
     var sourceDurationSeconds: Double {
@@ -2008,6 +2093,10 @@ final class WorkspaceViewModel: ObservableObject {
         sourceSessionID = UUID()
         analysis = FileAnalysis(fileURL: url)
         sourceInfo = loadSourceMediaInfo(for: url)
+        transcriptSegments = []
+        hasCachedTranscript = false
+        transcriptStatusText = hasAudioTrack ? "No transcript generated yet." : "No audio track available for transcript."
+        isGeneratingTranscript = false
         clipEncodingMode = hasVideoTrack ? defaultClipEncodingMode : .audioOnly
         applySuggestedClipBitrateFromSource()
         outputURL = nil
@@ -2041,6 +2130,10 @@ final class WorkspaceViewModel: ObservableObject {
         sourceSessionID = UUID()
         analysis = nil
         sourceInfo = nil
+        transcriptSegments = []
+        hasCachedTranscript = false
+        transcriptStatusText = "No transcript generated yet."
+        isGeneratingTranscript = false
         waveformCache.removeAll(keepingCapacity: false)
         waveformCacheOrder.removeAll(keepingCapacity: false)
         outputURL = nil
@@ -2053,12 +2146,97 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func stopCurrentActivity() {
+        if isGeneratingTranscript {
+            stopAnalysis()
+            return
+        }
         if isAnalyzing {
             stopAnalysis()
             return
         }
         if isExporting {
             stopExport()
+        }
+    }
+
+    func generateTranscriptFromInspect() {
+        guard let url = sourceURL else { return }
+        guard !hasCachedTranscript else { return }
+        guard hasAudioTrack else {
+            transcriptStatusText = "No audio track available for transcript."
+            return
+        }
+        guard whisperTranscriptionAvailable else {
+            transcriptStatusText = "Whisper binary/model is not bundled in this app build."
+            return
+        }
+        guard !isAnalyzing && !isExporting && !isGeneratingTranscript else { return }
+
+        isGeneratingTranscript = true
+        isAnalyzing = true
+        lastActivityState = .running
+        wasCancelled = false
+        analyzeProgress = 0
+        analyzePhaseText = "Transcribing audio"
+        updateAnalyzeStatusText(fileName: url.lastPathComponent, progress: 0)
+        transcriptStatusText = "Generating transcript…"
+        uiMessage = transcriptStatusText
+        cancelFlag.reset()
+
+        analyzeTask = Task { [weak self] in
+            guard let self else { return }
+            let flag = cancelFlag
+            let result = await Task.detached(priority: .userInitiated) {
+                transcribeAudioWithWhisper(
+                    file: url,
+                    shouldCancel: {
+                        flag.isCancelled()
+                    },
+                    progressHandler: { progress in
+                        Task { @MainActor [weak self] in
+                            self?.setAnalyzeProgress(progress, fileName: url.lastPathComponent)
+                        }
+                    }
+                )
+            }.value
+
+            await MainActor.run {
+                self.applyTranscriptGenerationResult(result)
+            }
+        }
+    }
+
+    func exportTranscriptTXTFromInspect() {
+        guard let sourceURL else { return }
+        guard !transcriptSegments.isEmpty else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + "_transcript.txt"
+        panel.message = "Export transcript as text"
+        panel.prompt = "Export"
+
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        let content = transcriptSegments
+            .map { "\($0.formatted)" }
+            .joined(separator: "\n")
+
+        do {
+            try content.write(to: destination, atomically: true, encoding: .utf8)
+            outputURL = destination
+            uiMessage = "Transcript exported to \(destination.lastPathComponent)"
+            lastActivityState = .success
+            if let soundName = completionSound.soundName,
+               let sound = NSSound(named: soundName) {
+                sound.play()
+            }
+            notifyCompletion("Transcript Export Complete", message: uiMessage)
+        } catch {
+            uiMessage = "Transcript export failed: \(error.localizedDescription)"
+            lastActivityState = .failed
+            notifyCompletion("Transcript Export Failed", message: uiMessage)
         }
     }
 
@@ -2248,6 +2426,7 @@ final class WorkspaceViewModel: ObservableObject {
         let requestedProfanity = effectiveAnalyzeProfanity
         let requestedProfanityWordsSnapshot = normalizedProfanityWordsStorageString(profanityWordsText)
         let requestedProfanityWordsSet = selectedProfanityWords
+        let cachedTranscript = hasCachedTranscript ? transcriptSegments : nil
 
         let previous = analysis
         let hasCompletedPrevious: Bool
@@ -2353,6 +2532,7 @@ final class WorkspaceViewModel: ObservableObject {
                     detectAudioSilence: detectSilence,
                     detectProfanity: detectProfanity,
                     profanityWords: profanityWords,
+                    cachedTranscriptSegments: cachedTranscript,
                     silenceMinDuration: silenceMinDuration,
                     onStatusUpdate: { status in
                         Task { @MainActor [weak self] in
@@ -2477,6 +2657,7 @@ final class WorkspaceViewModel: ObservableObject {
         profanityWordsSnapshot: String
     ) {
         isAnalyzing = false
+        isGeneratingTranscript = false
         analyzeTask = nil
         analyzeProgress = 0
         analyzePhaseText = "Preparing analysis"
@@ -2495,6 +2676,11 @@ final class WorkspaceViewModel: ObservableObject {
             current.progress = 1
             current.status = .done
             analysis = current
+            if includedProfanity, let transcript = output.transcriptSegments {
+                transcriptSegments = transcript
+                hasCachedTranscript = true
+                transcriptStatusText = transcript.isEmpty ? "Transcript generated (no speech detected)." : "Transcript generated (\(transcript.count) segment(s))."
+            }
             if current.segments.isEmpty && current.silentSegments.isEmpty && current.profanityHits.isEmpty {
                 var noneParts: [String] = []
                 if includedBlack { noneParts.append("black segments") }
@@ -2549,6 +2735,48 @@ final class WorkspaceViewModel: ObservableObject {
             lastActivityState = .failed
             notifyCompletion("Black Frame Analysis Failed", message: uiMessage)
         }
+    }
+
+    private func applyTranscriptGenerationResult(
+        _ result: Result<[TranscriptSegment], DetectionError>
+    ) {
+        isGeneratingTranscript = false
+        isAnalyzing = false
+        analyzeTask = nil
+        analyzeProgress = 0
+        analyzePhaseText = "Preparing analysis"
+
+        switch result {
+        case .success(let transcript):
+            transcriptSegments = transcript
+            hasCachedTranscript = true
+            if transcript.isEmpty {
+                transcriptStatusText = "Transcript generated (no speech detected)."
+            } else {
+                transcriptStatusText = "Transcript generated (\(transcript.count) segment(s))."
+            }
+            analyzeStatusText = transcriptStatusText
+            uiMessage = transcriptStatusText
+            lastActivityState = .success
+            if let soundName = completionSound.soundName,
+               let sound = NSSound(named: soundName) {
+                sound.play()
+            }
+            notifyCompletion("Transcript Complete", message: transcriptStatusText)
+        case .failure(.cancelled):
+            transcriptStatusText = "Transcript generation stopped."
+            analyzeStatusText = transcriptStatusText
+            uiMessage = transcriptStatusText
+            lastActivityState = .cancelled
+            notifyCompletion("Transcript Stopped", message: transcriptStatusText)
+        case .failure(.failed(let reason)):
+            transcriptStatusText = "Transcript failed: \(reason)"
+            analyzeStatusText = "Transcript generation failed"
+            uiMessage = transcriptStatusText
+            lastActivityState = .failed
+            notifyCompletion("Transcript Failed", message: transcriptStatusText)
+        }
+
     }
 
     private func stopExport() {
@@ -4003,6 +4231,14 @@ struct ToolContentView: View {
                     sourceURL: model.sourceURL,
                     analysis: model.analysis,
                     sourceInfo: model.sourceInfo,
+                    transcriptSegments: model.transcriptSegments,
+                    transcriptStatusText: model.transcriptStatusText,
+                    canGenerateTranscript: model.canGenerateTranscript,
+                    isGeneratingTranscript: model.isGeneratingTranscript,
+                    whisperTranscriptionAvailable: model.whisperTranscriptionAvailable,
+                    hasAudioTrack: model.hasAudioTrack,
+                    generateTranscript: { model.generateTranscriptFromInspect() },
+                    exportTranscriptTXT: { model.exportTranscriptTXTFromInspect() },
                     isCompactLayout: isCompactLayout
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -6967,8 +7203,24 @@ struct InspectToolView: View {
     let sourceURL: URL?
     let analysis: FileAnalysis?
     let sourceInfo: SourceMediaInfo?
+    let transcriptSegments: [TranscriptSegment]
+    let transcriptStatusText: String
+    let canGenerateTranscript: Bool
+    let isGeneratingTranscript: Bool
+    let whisperTranscriptionAvailable: Bool
+    let hasAudioTrack: Bool
+    let generateTranscript: () -> Void
+    let exportTranscriptTXT: () -> Void
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var transcriptSearchText = ""
+    @State private var transcriptFontSize: CGFloat = 14
+
+    private var filteredTranscriptSegments: [TranscriptSegment] {
+        let query = transcriptSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return transcriptSegments }
+        return transcriptSegments.filter { $0.text.localizedCaseInsensitiveContains(query) }
+    }
 
     private func fileIcon(for url: URL) -> NSImage {
         let icon = NSWorkspace.shared.icon(forFile: url.path)
@@ -7078,6 +7330,95 @@ struct InspectToolView: View {
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
+                }
+
+                GroupBox("Transcript") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if transcriptSegments.isEmpty {
+                            Text(transcriptStatusText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if !whisperTranscriptionAvailable {
+                                Text("Whisper binary/model is not available in this app bundle.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            } else if !hasAudioTrack {
+                                Text("No audio track available.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Button(isGeneratingTranscript ? "Generating Transcript…" : "Generate Transcript") {
+                                generateTranscript()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(!canGenerateTranscript || isGeneratingTranscript)
+                        } else {
+                            HStack(spacing: 8) {
+                                TextField("Search transcript", text: $transcriptSearchText)
+                                    .textFieldStyle(.roundedBorder)
+
+                                HStack(spacing: 4) {
+                                    Button {
+                                        transcriptFontSize = max(11, transcriptFontSize - 1)
+                                    } label: {
+                                        Image(systemName: "textformat.size.smaller")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+
+                                    Button {
+                                        transcriptFontSize = min(24, transcriptFontSize + 1)
+                                    } label: {
+                                        Image(systemName: "textformat.size.larger")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+
+                                Button("Export TXT") {
+                                    exportTranscriptTXT()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+
+                            Text(transcriptStatusText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(filteredTranscriptSegments) { segment in
+                                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                            Text(formatSeconds(segment.start))
+                                                .font(.system(size: max(11, transcriptFontSize - 1), weight: .regular, design: .monospaced))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                                .fixedSize(horizontal: true, vertical: false)
+                                                .frame(width: 112, alignment: .leading)
+                                            Text(segment.text)
+                                                .font(.system(size: transcriptFontSize))
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                }
+                            }
+                            .frame(minHeight: 120, maxHeight: 220)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
                     .background(
                         adaptiveContainerFill(
                             material: .thinMaterial,
