@@ -2,9 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT_DIR/src/main.swift"
+SRC_DIR="$ROOT_DIR/src"
 DIST="$ROOT_DIR/dist"
 MODULE_CACHE="$ROOT_DIR/.build/module-cache"
+SWIFTC_BUILD_DIR="$ROOT_DIR/.build/swiftc"
+SWIFTC_OBJECTS_DIR="$SWIFTC_BUILD_DIR/objects"
+SWIFTC_DEPS_DIR="$SWIFTC_BUILD_DIR/deps"
+SWIFTC_DIAGNOSTICS_DIR="$SWIFTC_BUILD_DIR/diagnostics"
+SWIFTC_MODULE_DIR="$SWIFTC_BUILD_DIR/module"
+SWIFTC_OUTPUT_FILE_MAP="$SWIFTC_BUILD_DIR/output-file-map.json"
 APP_NAME="Bulwark Video Tools"
 APP_EXECUTABLE="BulwarkVideoTools"
 BUNDLE_ID="com.bulwark.BulwarkVideoTools"
@@ -44,15 +50,66 @@ esac
 
 mkdir -p "$DIST"
 mkdir -p "$MODULE_CACHE"
+mkdir -p "$SWIFTC_OBJECTS_DIR" "$SWIFTC_DEPS_DIR" "$SWIFTC_DIAGNOSTICS_DIR" "$SWIFTC_MODULE_DIR"
 if [[ "$QUICK_BUILD" -eq 0 ]]; then
   rm -rf "$APP"
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES"
 mkdir -p "$ROOT_DIR/assets"
 
+SWIFT_SOURCES=("$SRC_DIR"/*.swift)
+
+python3 - "$SWIFTC_OUTPUT_FILE_MAP" "$SWIFTC_OBJECTS_DIR" "$SWIFTC_DEPS_DIR" "$SWIFTC_DIAGNOSTICS_DIR" "$SWIFTC_MODULE_DIR" "$APP_EXECUTABLE" "${SWIFT_SOURCES[@]}" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+ofm_path = sys.argv[1]
+objects_dir = sys.argv[2]
+deps_dir = sys.argv[3]
+diagnostics_dir = sys.argv[4]
+module_dir = sys.argv[5]
+module_name = sys.argv[6]
+sources = sys.argv[7:]
+
+os.makedirs(objects_dir, exist_ok=True)
+os.makedirs(deps_dir, exist_ok=True)
+os.makedirs(diagnostics_dir, exist_ok=True)
+os.makedirs(module_dir, exist_ok=True)
+
+result = {
+    "": {
+        "swift-dependencies": os.path.join(module_dir, f"{module_name}.swiftdeps"),
+        "swiftmodule": os.path.join(module_dir, f"{module_name}.swiftmodule"),
+        "swiftdoc": os.path.join(module_dir, f"{module_name}.swiftdoc"),
+        "swiftsourceinfo": os.path.join(module_dir, f"{module_name}.swiftsourceinfo"),
+        "dependencies": os.path.join(module_dir, f"{module_name}.d"),
+        "diagnostics": os.path.join(module_dir, f"{module_name}-master.dia"),
+    }
+}
+
+for source in sources:
+    base = os.path.splitext(os.path.basename(source))[0]
+    digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:8]
+    stem = f"{base}-{digest}"
+    result[source] = {
+        "object": os.path.join(objects_dir, f"{stem}.o"),
+        "swift-dependencies": os.path.join(deps_dir, f"{stem}.swiftdeps"),
+        "dependencies": os.path.join(deps_dir, f"{stem}.d"),
+        "diagnostics": os.path.join(diagnostics_dir, f"{stem}.dia"),
+    }
+
+with open(ofm_path, "w", encoding="utf-8") as f:
+    json.dump(result, f, indent=2, sort_keys=True)
+PY
+
 swiftc \
   "${SWIFTC_OPT_FLAGS[@]}" \
   -parse-as-library \
+  -incremental \
+  -output-file-map "$SWIFTC_OUTPUT_FILE_MAP" \
+  -module-name "$APP_EXECUTABLE" \
   -module-cache-path "$MODULE_CACHE" \
   -framework SwiftUI \
   -framework AppKit \
@@ -60,7 +117,7 @@ swiftc \
   -framework CoreVideo \
   -framework CoreMedia \
   -framework Foundation \
-  "$SRC" \
+  "${SWIFT_SOURCES[@]}" \
   -o "$BIN"
 
 cat > "$PLIST" <<PLIST
