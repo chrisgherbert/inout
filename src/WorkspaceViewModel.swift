@@ -1746,10 +1746,12 @@ final class WorkspaceViewModel: ObservableObject {
             let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
             let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
             // CRITICAL REGRESSION GUARD:
+            // DO NOT REORDER THIS SEEK SEQUENCE.
             // Keep this hybrid seek order for advanced ffmpeg exports:
             //   -ss <coarse pre-roll> -i <source> -ss <fine offset> -t <duration>
             // Using only post-input seek here has repeatedly reintroduced a black
             // first frame on long-GOP sources in both captioned and non-captioned paths.
+            // Any caption path must reuse this exact order as well.
             let decoderPreRollSeconds = 2.5
             let coarseSeekSeconds = max(0.0, self.clipStartSeconds - decoderPreRollSeconds)
             let fineSeekSeconds = max(0.0, self.clipStartSeconds - coarseSeekSeconds)
@@ -1800,10 +1802,6 @@ final class WorkspaceViewModel: ObservableObject {
                 audioFilters.append("alimiter=limit=0.988553")
             }
 
-            if !videoFilters.isEmpty {
-                baselineArgs.append(contentsOf: ["-vf", videoFilters.joined(separator: ",")])
-            }
-
             if let selectedAudioTrackIndex {
                 let audioInputRef = "0:a:\(selectedAudioTrackIndex)"
                 if !audioFilters.isEmpty {
@@ -1826,96 +1824,56 @@ final class WorkspaceViewModel: ObservableObject {
 
             let encodeError: String?
             if self.clipAdvancedBurnInCaptions {
-                let stagingDirectory = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("bvt-caption-stage-\(UUID().uuidString)", isDirectory: true)
-                do {
-                    try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
-                } catch {
-                    await MainActor.run {
-                        self.exportTask = nil
-                        self.isExporting = false
-                        self.exportProgress = 0
-                        self.exportStatusText = "Clip export failed: Unable to stage caption export."
-                        self.uiMessage = self.exportStatusText
-                        self.lastActivityState = .failed
-                        self.notifyCompletion("Compatible Clip Export Failed", message: self.exportStatusText)
-                    }
-                    return
+                await MainActor.run {
+                    self.exportProgress = max(self.exportProgress, 0.12)
+                    self.exportStatusText = "Generating captions…"
                 }
-                defer {
-                    try? FileManager.default.removeItem(at: stagingDirectory)
-                }
-
-                let stagedClip = stagingDirectory.appendingPathComponent("base.\(self.selectedClipFormat.fileExtension)")
-                var stageArgs = baselineArgs
-                stageArgs.append(stagedClip.path)
-                let stageError = await self.runFFmpegProcessWithProgress(
-                    executableURL: ffmpegURL,
-                    arguments: stageArgs,
-                    durationSeconds: clipDuration,
-                    statusPrefix: "Encoding base clip",
-                    progressRange: 0.10...0.55
+                let captionPrep = await self.prepareWhisperBurnInCaptions(
+                    sourceURL: sourceURL,
+                    ffmpegURL: ffmpegURL,
+                    startSeconds: self.clipStartSeconds,
+                    durationSeconds: clipDuration
                 )
                 if self.exportCancellationRequested {
                     encodeError = nil
-                } else if let stageError {
-                    encodeError = stageError
-                } else {
-                    await MainActor.run {
-                        self.exportProgress = max(self.exportProgress, 0.56)
-                        self.exportStatusText = "Generating captions…"
+                } else if let prepared = captionPrep.preparation {
+                    defer {
+                        try? FileManager.default.removeItem(at: prepared.tempDirectory)
                     }
-                    let captionPrep = await self.prepareWhisperBurnInCaptions(
-                        sourceURL: stagedClip,
-                        ffmpegURL: ffmpegURL,
-                        startSeconds: 0,
-                        durationSeconds: clipDuration
-                    )
-                    if let prepared = captionPrep.preparation {
-                        let cueCount = self.countSRTCues(at: prepared.srtURL)
-                        if cueCount <= 0 {
-                            encodeError = "Caption generation produced 0 cues. Staged clip: \(stagedClip.path)"
-                        } else {
-                            await MainActor.run {
-                                self.exportStatusText = "Burning captions… (\(cueCount) cues)"
-                            }
-                            var burnArgs = [
-                                "-y",
-                                "-hide_banner",
-                                "-loglevel", "error",
-                                "-i", stagedClip.path,
-                                "-map", "0:v:0",
-                                "-c:v", videoCodec,
-                                "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
-                                "-pix_fmt", "yuv420p",
-                                "-b:v", "\(bitrateKbps)k",
-                                "-vf", self.subtitlesFilterArgument(path: prepared.srtURL.path, style: self.clipAdvancedCaptionStyle),
-                                "-map", "0:a:0?",
-                                "-c:a", "copy"
-                            ]
-                            if self.selectedClipFormat == .mp4 || self.selectedClipFormat == .mov {
-                                burnArgs.append(contentsOf: ["-movflags", "+faststart"])
-                            }
-                            burnArgs.append(destination.path)
-                            let burnError = await self.runFFmpegProcessWithProgress(
-                                executableURL: ffmpegURL,
-                                arguments: burnArgs,
-                                durationSeconds: clipDuration,
-                                statusPrefix: "Burning captions",
-                                progressRange: 0.78...1.0
-                            )
-                            if let burnError {
-                                encodeError = "Burn pass failed: \(burnError)\nSRT: \(prepared.srtURL.path)\nStage: \(stagedClip.path)"
-                            } else {
-                                encodeError = nil
-                            }
-                        }
+
+                    let cueCount = self.countSRTCues(at: prepared.srtURL)
+                    if cueCount <= 0 {
+                        encodeError = "Caption generation produced 0 cues. SRT: \(prepared.srtURL.path)"
                     } else {
-                        encodeError = captionPrep.error ?? "Unknown caption generation failure."
+                        await MainActor.run {
+                            self.exportStatusText = "Encoding captioned clip… (\(cueCount) cues)"
+                        }
+                        var finalVideoFilters = videoFilters
+                        finalVideoFilters.append(
+                            self.subtitlesFilterArgument(path: prepared.srtURL.path, style: self.clipAdvancedCaptionStyle)
+                        )
+
+                        var args = baselineArgs
+                        if !finalVideoFilters.isEmpty {
+                            args.append(contentsOf: ["-vf", finalVideoFilters.joined(separator: ",")])
+                        }
+                        args.append(destination.path)
+                        encodeError = await self.runFFmpegProcessWithProgress(
+                            executableURL: ffmpegURL,
+                            arguments: args,
+                            durationSeconds: clipDuration,
+                            statusPrefix: "Encoding captioned clip",
+                            progressRange: 0.55...1.0
+                        )
                     }
+                } else {
+                    encodeError = captionPrep.error ?? "Unknown caption generation failure."
                 }
             } else {
                 var args = baselineArgs
+                if !videoFilters.isEmpty {
+                    args.append(contentsOf: ["-vf", videoFilters.joined(separator: ",")])
+                }
                 args.append(destination.path)
                 encodeError = await self.runFFmpegProcessWithProgress(
                     executableURL: ffmpegURL,
