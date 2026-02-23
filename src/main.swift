@@ -4464,6 +4464,10 @@ struct ClipToolView: View {
     @State private var suppressVisualPlayheadSyncUntil: Date = .distantPast
     @State private var playheadJumpAnimationToken: Int = 0
     @State private var playheadJumpFromSeconds: Double = 0
+    @State private var isPlayheadDragActive = false
+    @State private var playheadDragLocationX: CGFloat?
+    @State private var playheadDragWidth: CGFloat = 0
+    @State private var playheadDragAutoPanTask: Task<Void, Never>?
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
         if duration <= 300 {
@@ -4824,6 +4828,71 @@ struct ClipToolView: View {
         }
         viewportStartSeconds = nextStart
         isViewportManuallyControlled = true
+    }
+
+    private func autoPanViewportIfNeededForPlayheadDrag(x: CGFloat, width: CGFloat) -> Bool {
+        guard timelineZoom > 1, width > 0 else { return false }
+        let edgeZone = min(max(28.0, width * 0.08), 64.0)
+        var panPoints: CGFloat = 0
+
+        if x < edgeZone {
+            let t = min(1.0, max(0.0, (edgeZone - x) / edgeZone))
+            panPoints = 2.0 + (t * 22.0)
+        } else if x > (width - edgeZone) {
+            let t = min(1.0, max(0.0, (x - (width - edgeZone)) / edgeZone))
+            panPoints = -(2.0 + (t * 22.0))
+        }
+
+        if abs(panPoints) >= 0.5 {
+            let previous = viewportStartSeconds
+            panViewport(byPoints: panPoints)
+            return abs(viewportStartSeconds - previous) > 0.00001
+        }
+        return false
+    }
+
+    private func timeForPlayheadDragLocation(x: CGFloat, width: CGFloat) -> Double {
+        guard width > 0 else { return playheadSeconds }
+        let ratio = min(max(0, x / width), 1.0)
+        let duration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
+        return min(totalDurationSeconds, max(0, visibleStartSeconds + (Double(ratio) * duration)))
+    }
+
+    private func startPlayheadDragAutoPanLoopIfNeeded() {
+        guard playheadDragAutoPanTask == nil else { return }
+        playheadDragAutoPanTask = Task { @MainActor in
+            while !Task.isCancelled && isPlayheadDragActive {
+                guard let x = playheadDragLocationX, playheadDragWidth > 0 else {
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    continue
+                }
+                if autoPanViewportIfNeededForPlayheadDrag(x: x, width: playheadDragWidth) {
+                    seekPlayerInteractive(to: timeForPlayheadDragLocation(x: x, width: playheadDragWidth))
+                }
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+        }
+    }
+
+    private func stopPlayheadDragAutoPanLoop() {
+        playheadDragAutoPanTask?.cancel()
+        playheadDragAutoPanTask = nil
+    }
+
+    private func updatePlayheadDragLocation(_ x: CGFloat, width: CGFloat) {
+        playheadDragLocationX = x
+        playheadDragWidth = width
+    }
+
+    private func setPlayheadDragActive(_ active: Bool) {
+        isPlayheadDragActive = active
+        if active {
+            startPlayheadDragAutoPanLoopIfNeeded()
+        } else {
+            stopPlayheadDragAutoPanLoop()
+            playheadDragLocationX = nil
+            playheadDragWidth = 0
+        }
     }
 
     private func adjustTimelineZoom(by deltaSteps: Int) {
@@ -5200,6 +5269,12 @@ struct ClipToolView: View {
                             } else {
                                 seekPlayerInteractive(to: target)
                             }
+                        },
+                        onPlayheadDragEdgePan: { x, width in
+                            updatePlayheadDragLocation(x, width: width)
+                        },
+                        onPlayheadDragStateChanged: { isActive in
+                            setPlayheadDragActive(isActive)
                         },
                         onSetStart: { model.setClipStart($0) },
                         onSetEnd: { model.setClipEnd($0) },
@@ -5761,6 +5836,7 @@ struct ClipToolView: View {
             isMiddleMousePanning = false
             middleMousePanLastWindowX = nil
             isWaveformHovered = false
+            stopPlayheadDragAutoPanLoop()
             NSCursor.arrow.set()
             player.pause()
         }
@@ -5791,11 +5867,12 @@ struct WaveformView: View {
     let captureFrameFlashToken: Int
     let quickExportFlashToken: Int
     let onSeek: (Double, Bool) -> Void
+    let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
+    let onPlayheadDragStateChanged: (Bool) -> Void
     let onSetStart: (Double) -> Void
     let onSetEnd: (Double) -> Void
     let onHoverChanged: (Bool) -> Void
-    @State private var dragWindowStart: Double?
-    @State private var dragWindowEnd: Double?
+    @State private var didStartPlayheadDrag = false
     @State private var isHovered = false
     @State private var isStartEdgeHovered = false
     @State private var isEndEdgeHovered = false
@@ -6349,21 +6426,20 @@ struct WaveformView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        let shouldSnapToMarker = dragWindowStart == nil || dragWindowEnd == nil
-                        if dragWindowStart == nil || dragWindowEnd == nil {
-                            dragWindowStart = visibleStartSeconds
-                            dragWindowEnd = visibleEndSeconds
+                        let shouldSnapToMarker = !didStartPlayheadDrag
+                        if !didStartPlayheadDrag {
+                            didStartPlayheadDrag = true
+                            onPlayheadDragStateChanged(true)
                         }
-                        let windowStart = dragWindowStart ?? visibleStartSeconds
-                        let windowEnd = dragWindowEnd ?? visibleEndSeconds
+                        onPlayheadDragEdgePan(value.location.x, width)
                         onSeek(
-                            timeValue(for: value.location.x, width: width, windowStart: windowStart, windowEnd: windowEnd),
+                            timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds),
                             shouldSnapToMarker
                         )
                     }
                     .onEnded { _ in
-                        dragWindowStart = nil
-                        dragWindowEnd = nil
+                        didStartPlayheadDrag = false
+                        onPlayheadDragStateChanged(false)
                     }
             , including: .gesture)
             .overlay(alignment: .bottomLeading) {
