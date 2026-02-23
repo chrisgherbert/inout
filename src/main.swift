@@ -6443,16 +6443,38 @@ struct WaveformView: View {
             .overlay(alignment: .bottomLeading) {
                 Text(formatSeconds(visibleStartSeconds))
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color.black.opacity(0.78))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.6)
+                    )
                     .padding(.leading, 6)
                     .padding(.bottom, 4)
+                    .allowsHitTesting(false)
             }
             .overlay(alignment: .bottomTrailing) {
                 Text(formatSeconds(visibleEndSeconds))
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color.black.opacity(0.78))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.6)
+                    )
                     .padding(.trailing, 6)
                     .padding(.bottom, 4)
+                    .allowsHitTesting(false)
             }
         }
     }
