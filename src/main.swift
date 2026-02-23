@@ -3246,7 +3246,9 @@ final class WorkspaceViewModel: ObservableObject {
 
             let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
             let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
-            let hybridSeekPreRoll = 0.75
+            // Larger preroll helps avoid occasional dark/invalid first frame on long-GOP media.
+            // Cost is minimal (a couple extra seconds of decode) compared with full frame-accurate seek.
+            let hybridSeekPreRoll = 2.5
             let coarseSeekSeconds = max(0.0, self.clipStartSeconds - hybridSeekPreRoll)
             let fineSeekSeconds = max(0.0, self.clipStartSeconds - coarseSeekSeconds)
             let coarseSeek = String(format: "%.6f", coarseSeekSeconds)
