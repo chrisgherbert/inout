@@ -10,6 +10,10 @@ struct ClipTimelineControlsPanel: View {
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
+    let playheadSeconds: Double
+    let clipStartSeconds: Double
+    let clipEndSeconds: Double
+    let captureMarkers: [CaptureTimelineMarker]
     let onViewportStartChange: (Double) -> Void
 
     var body: some View {
@@ -27,6 +31,7 @@ struct ClipTimelineControlsPanel: View {
                         in: 0...Double(allowedTimelineZoomLevels.count - 1),
                         step: 1
                     )
+                    .controlSize(.small)
                     let displayZoom = allowedTimelineZoomLevels[timelineZoomIndex]
                     Text("\(Int(displayZoom.rounded()))x")
                         .font(.caption.monospacedDigit())
@@ -37,23 +42,20 @@ struct ClipTimelineControlsPanel: View {
                     .buttonStyle(.bordered)
                 }
 
-                if timelineZoom > 1 {
-                    TimelineViewportScroller(
-                        totalDurationSeconds: totalDurationSeconds,
-                        visibleStartSeconds: visibleStartSeconds,
-                        visibleEndSeconds: visibleEndSeconds
-                    ) { newStart in
-                        onViewportStartChange(newStart)
-                    }
-                    .frame(height: 14)
+                TimelineMiniMapView(
+                    totalDurationSeconds: totalDurationSeconds,
+                    playheadSeconds: playheadSeconds,
+                    clipStartSeconds: clipStartSeconds,
+                    clipEndSeconds: clipEndSeconds,
+                    visibleStartSeconds: visibleStartSeconds,
+                    visibleEndSeconds: visibleEndSeconds,
+                    captureMarkers: captureMarkers,
+                    onViewportStartChange: onViewportStartChange
+                )
+                .frame(height: 18)
 
-                    HStack(spacing: 6) {
-                        Image(systemName: "hand.draw")
-                        Text("Drag viewport or use trackpad scroll to pan")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                }
+                TimelineMiniMapRulerView(totalDurationSeconds: totalDurationSeconds)
+                    .frame(height: 14)
             }
             .padding(10)
             .background(
@@ -67,6 +69,181 @@ struct ClipTimelineControlsPanel: View {
             .overlay(
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
+            )
+        }
+    }
+}
+
+private struct TimelineMiniMapRulerView: View {
+    let totalDurationSeconds: Double
+
+    private func label(for seconds: Double) -> String {
+        let clamped = max(0, Int(seconds.rounded()))
+        let h = clamped / 3600
+        let m = (clamped % 3600) / 60
+        let s = clamped % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%02d:%02d", m, s)
+    }
+
+    private func x(for seconds: Double, width: CGFloat) -> CGFloat {
+        let duration = max(0.001, totalDurationSeconds)
+        return CGFloat(min(max(0, seconds / duration), 1.0)) * width
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(1, proxy.size.width)
+            // Keep this intentionally sparse and stable.
+            let divisions = totalDurationSeconds >= 3600 ? 4 : 3
+            let step = max(0.001, totalDurationSeconds / Double(divisions))
+            let ticks = (0...divisions).map { Double($0) * step }
+
+            ZStack(alignment: .topLeading) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.10))
+                    .frame(height: 0.6)
+                    .offset(y: 2)
+
+                ForEach(Array(ticks.enumerated()), id: \.offset) { _, seconds in
+                    let tickX = x(for: seconds, width: width)
+                    VStack(spacing: 2) {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.22))
+                            .frame(width: 1, height: 4)
+                        Text(label(for: seconds))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .offset(x: tickX, y: 0)
+                }
+            }
+        }
+    }
+}
+
+private struct TimelineMiniMapView: View {
+    let totalDurationSeconds: Double
+    let playheadSeconds: Double
+    let clipStartSeconds: Double
+    let clipEndSeconds: Double
+    let visibleStartSeconds: Double
+    let visibleEndSeconds: Double
+    let captureMarkers: [CaptureTimelineMarker]
+    let onViewportStartChange: (Double) -> Void
+    @State private var isDraggingThumb = false
+    @State private var thumbGrabOffsetSeconds: Double = 0
+
+    private func x(for seconds: Double, width: CGFloat) -> CGFloat {
+        let duration = max(0.001, totalDurationSeconds)
+        let ratio = min(max(0, seconds / duration), 1)
+        return ratio * width
+    }
+
+    private func seconds(for x: CGFloat, width: CGFloat) -> Double {
+        let duration = max(0.001, totalDurationSeconds)
+        let clampedX = min(max(0, x), width)
+        return Double(clampedX / max(1, width)) * duration
+    }
+
+    private func startFromLocationX(_ x: CGFloat, width: CGFloat) -> Double {
+        let duration = max(0.001, totalDurationSeconds)
+        let visibleDuration = max(0.001, visibleEndSeconds - visibleStartSeconds)
+        let maxStart = max(0, duration - visibleDuration)
+        guard maxStart > 0 else { return 0 }
+
+        let clampedX = min(max(0, x), width)
+        let centerSeconds = Double(clampedX / max(1, width)) * duration
+        return min(max(0, centerSeconds - (visibleDuration * 0.5)), maxStart)
+    }
+
+    private func clampedStart(_ start: Double) -> Double {
+        let duration = max(0.001, totalDurationSeconds)
+        let visibleDuration = max(0.001, visibleEndSeconds - visibleStartSeconds)
+        let maxStart = max(0, duration - visibleDuration)
+        return min(max(0, start), maxStart)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(1, proxy.size.width)
+            let height = proxy.size.height
+            let startX = x(for: min(clipStartSeconds, clipEndSeconds), width: width)
+            let endX = x(for: max(clipStartSeconds, clipEndSeconds), width: width)
+            let clipWidth = max(1.5, endX - startX)
+            let playheadX = x(for: playheadSeconds, width: width)
+            let viewStartX = x(for: visibleStartSeconds, width: width)
+            let viewEndX = x(for: visibleEndSeconds, width: width)
+            let viewWidth = max(1.5, viewEndX - viewStartX)
+            let canPan = totalDurationSeconds > (visibleEndSeconds - visibleStartSeconds + 0.0001)
+            let markerColor = Color(nsColor: .systemOrange)
+            let playheadColor = Color(nsColor: .systemRed)
+            let clipColor = Color(nsColor: .controlAccentColor)
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.08))
+
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 0.6)
+
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.primary.opacity(0.12))
+                    .frame(width: viewWidth, height: max(8, height - 2))
+                    .offset(x: viewStartX, y: 1)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .stroke(Color.primary.opacity(0.28), lineWidth: 0.8)
+                            .frame(width: viewWidth, height: max(8, height - 2))
+                            .offset(x: viewStartX, y: 1)
+                    )
+
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(clipColor.opacity(0.95))
+                    .frame(width: clipWidth, height: 2.5)
+                    .offset(x: startX, y: (height / 2) - 1.25)
+
+                ForEach(captureMarkers) { marker in
+                    Circle()
+                        .fill(markerColor)
+                        .frame(width: 5, height: 5)
+                        .offset(x: x(for: marker.seconds, width: width) - 2.5, y: (height / 2) - 2.5)
+                }
+
+                RoundedRectangle(cornerRadius: 1.2, style: .continuous)
+                    .fill(playheadColor)
+                    .frame(width: 2.2, height: max(10, height - 3))
+                    .offset(x: playheadX - 1.1, y: 1.5)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard canPan else { return }
+                        let pointerSeconds = seconds(for: value.location.x, width: width)
+                        if !isDraggingThumb {
+                            let isInsideThumb = value.startLocation.x >= viewStartX && value.startLocation.x <= viewEndX
+                            if isInsideThumb {
+                                isDraggingThumb = true
+                                thumbGrabOffsetSeconds = pointerSeconds - visibleStartSeconds
+                            } else {
+                                isDraggingThumb = false
+                                thumbGrabOffsetSeconds = 0
+                            }
+                        }
+
+                        if isDraggingThumb {
+                            onViewportStartChange(clampedStart(pointerSeconds - thumbGrabOffsetSeconds))
+                        } else {
+                            onViewportStartChange(startFromLocationX(value.location.x, width: width))
+                        }
+                    }
+                    .onEnded { _ in
+                        isDraggingThumb = false
+                        thumbGrabOffsetSeconds = 0
+                    }
             )
         }
     }

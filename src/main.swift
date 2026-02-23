@@ -879,6 +879,7 @@ func runDetection(
     onBlackSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
     onSilentSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
     onProfanityDetected: @escaping @Sendable (ProfanityHit) -> Void = { _ in },
+    onConsoleOutput: @escaping @Sendable (String, String) -> Void = { _, _ in },
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
     shouldCancel: @escaping @Sendable () -> Bool = { false }
 ) -> Result<DetectionOutput, DetectionError> {
@@ -1027,7 +1028,8 @@ func runDetection(
                 progressHandler: { profanityProgress in
                     let clamped = min(1, max(0, profanityProgress))
                     progressHandler(min(0.99, profanityBase + (clamped * profanitySpan)))
-                }
+                },
+                onConsoleOutput: onConsoleOutput
             )
             switch transcriptResult {
             case .success(let transcriptSegments):
@@ -1263,7 +1265,9 @@ private func findSystemFFmpegExecutable() -> URL? {
 private func runSynchronousProcess(
     executableURL: URL,
     arguments: [String],
-    shouldCancel: @escaping @Sendable () -> Bool
+    shouldCancel: @escaping @Sendable () -> Bool,
+    source: String,
+    onOutputLine: @escaping @Sendable (String, String) -> Void = { _, _ in }
 ) -> Result<(stdout: String, stderr: String), DetectionError> {
     let process = Process()
     process.executableURL = executableURL
@@ -1273,23 +1277,71 @@ private func runSynchronousProcess(
     let stderrPipe = Pipe()
     process.standardOutput = stdoutPipe
     process.standardError = stderrPipe
+    onOutputLine("$ \(executableURL.path) " + arguments.joined(separator: " "), source)
+
+    var stdoutData = Data()
+    var stderrData = Data()
+    let lock = NSLock()
+
+    func emitLines(_ data: Data, sourceTag: String) {
+        guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+        for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+            let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !line.isEmpty {
+                onOutputLine(line, sourceTag)
+            }
+        }
+    }
+
+    stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        guard !chunk.isEmpty else { return }
+        lock.lock()
+        stdoutData.append(chunk)
+        lock.unlock()
+        emitLines(chunk, sourceTag: source)
+    }
+
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        guard !chunk.isEmpty else { return }
+        lock.lock()
+        stderrData.append(chunk)
+        lock.unlock()
+        emitLines(chunk, sourceTag: source)
+    }
 
     do {
         try process.run()
     } catch {
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
         return .failure(.failed("Failed to run \(executableURL.lastPathComponent): \(error.localizedDescription)"))
     }
 
     while process.isRunning {
         if shouldCancel() {
             process.terminate()
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
             return .failure(.cancelled)
         }
         Thread.sleep(forTimeInterval: 0.05)
     }
 
-    let stdout = String(decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    let stderr = String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    stdoutPipe.fileHandleForReading.readabilityHandler = nil
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
+    lock.lock()
+    let trailingStdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+    let trailingStderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+    stdoutData.append(trailingStdout)
+    stderrData.append(trailingStderr)
+    let stdout = String(decoding: stdoutData, as: UTF8.self)
+    let stderr = String(decoding: stderrData, as: UTF8.self)
+    lock.unlock()
+    emitLines(trailingStdout, sourceTag: source)
+    emitLines(trailingStderr, sourceTag: source)
+
     if process.terminationStatus == 0 {
         return .success((stdout: stdout, stderr: stderr))
     }
@@ -1305,7 +1357,9 @@ private func runSynchronousProcessWithProgress(
     executableURL: URL,
     arguments: [String],
     shouldCancel: @escaping @Sendable () -> Bool,
-    progressHandler: @escaping @Sendable (Double) -> Void
+    progressHandler: @escaping @Sendable (Double) -> Void,
+    source: String,
+    onOutputLine: @escaping @Sendable (String, String) -> Void = { _, _ in }
 ) -> Result<(stdout: String, stderr: String), DetectionError> {
     let process = Process()
     process.executableURL = executableURL
@@ -1315,6 +1369,7 @@ private func runSynchronousProcessWithProgress(
     let stderrPipe = Pipe()
     process.standardOutput = stdoutPipe
     process.standardError = stderrPipe
+    onOutputLine("$ \(executableURL.path) " + arguments.joined(separator: " "), source)
 
     var stdoutData = Data()
     var stderrData = Data()
@@ -1323,8 +1378,11 @@ private func runSynchronousProcessWithProgress(
     func consume(_ data: Data) {
         guard !data.isEmpty else { return }
         if let text = String(data: data, encoding: .utf8) {
-            for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-                if let progress = extractPercentProgress(from: String(line)) {
+            for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+                let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty else { continue }
+                onOutputLine(line, source)
+                if let progress = extractPercentProgress(from: line) {
                     progressHandler(progress)
                 }
             }
@@ -1443,7 +1501,8 @@ private func detectProfanityHits(
 func transcribeAudioWithWhisper(
     file: URL,
     shouldCancel: @escaping @Sendable () -> Bool = { false },
-    progressHandler: @escaping @Sendable (Double) -> Void = { _ in }
+    progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
+    onConsoleOutput: @escaping @Sendable (String, String) -> Void = { _, _ in }
 ) -> Result<[TranscriptSegment], DetectionError> {
     if shouldCancel() {
         return .failure(.cancelled)
@@ -1484,7 +1543,9 @@ func transcribeAudioWithWhisper(
             "-f", "wav",
             wavURL.path
         ],
-        shouldCancel: shouldCancel
+        shouldCancel: shouldCancel,
+        source: "ffmpeg",
+        onOutputLine: onConsoleOutput
     )
     switch ffmpegResult {
     case .failure(let error):
@@ -1503,7 +1564,9 @@ func transcribeAudioWithWhisper(
             "-pp"
         ],
         shouldCancel: shouldCancel,
-        progressHandler: progressHandler
+        progressHandler: progressHandler,
+        source: "whisper",
+        onOutputLine: onConsoleOutput
     )
     switch whisperResult {
     case .success:
@@ -1523,7 +1586,9 @@ func transcribeAudioWithWhisper(
                 "-pp"
             ],
             shouldCancel: shouldCancel,
-            progressHandler: progressHandler
+            progressHandler: progressHandler,
+            source: "whisper",
+            onOutputLine: onConsoleOutput
         )
 
         switch cpuRetry {
@@ -2796,7 +2861,11 @@ struct ClipToolView: View {
             timelineZoom: timelineZoom,
             totalDurationSeconds: totalDurationSeconds,
             visibleStartSeconds: visibleStartSeconds,
-            visibleEndSeconds: visibleEndSeconds
+            visibleEndSeconds: visibleEndSeconds,
+            playheadSeconds: playheadSeconds,
+            clipStartSeconds: model.clipStartSeconds,
+            clipEndSeconds: model.clipEndSeconds,
+            captureMarkers: model.captureTimelineMarkers
         ) { newStart in
             viewportStartSeconds = clampedViewportStart(newStart)
             isViewportManuallyControlled = true
@@ -3846,6 +3915,7 @@ private final class WaveformRasterCoordinator {
     private(set) var cachedBucketImages: [Double: CGImage] = [:]
     private(set) var cachedIsDarkAppearance = false
     var lastAppliedContentsRect: CGRect = .null
+    var lastContentsRectUpdateTime: CFTimeInterval = 0
     var lastAppliedBounds: CGRect = .zero
     var lastAppliedZoomBucket: Double = -1
     var lastPlayheadJumpAnimationToken: Int = -1
@@ -3876,6 +3946,7 @@ private final class WaveformRasterCoordinator {
         cachedIsDarkAppearance = isDarkAppearance
         cachedBucketImages = [:]
         lastAppliedContentsRect = .null
+        lastContentsRectUpdateTime = 0
         lastAppliedBounds = .zero
         lastAppliedZoomBucket = -1
         return true
@@ -4089,10 +4160,15 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
         if !newContentsRect.equalTo(context.coordinator.lastAppliedContentsRect) {
             let oldRect = context.coordinator.lastAppliedContentsRect
+            let now = CACurrentMediaTime()
+            let lastUpdate = context.coordinator.lastContentsRectUpdateTime
+            // If updates are arriving rapidly, treat as continuous interaction
+            // (drag/scroll) and avoid heavy catch-up animations.
+            let isContinuousViewportInteraction = lastUpdate > 0 && (now - lastUpdate) < 0.08
             if oldRect != .null {
                 let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
                 // Smooth large viewport jumps (keyboard marker nav / fast thumb pan).
-                if deltaX > 0.03 {
+                if deltaX > 0.03 && !isContinuousViewportInteraction {
                     let anim = CABasicAnimation(keyPath: "contentsRect")
                     anim.fromValue = oldRect
                     anim.toValue = newContentsRect
@@ -4107,7 +4183,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
             if oldRect != .null {
                 let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
-                if deltaX > 0.03 {
+                if deltaX > 0.03 && !isContinuousViewportInteraction {
                     let normWidth = max(0.000001, newContentsRect.width)
                     let markerScrollShiftX = CGFloat((newContentsRect.origin.x - oldRect.origin.x) / normWidth) * nsView.bounds.width
                     if markerScrollShiftX != 0 {
@@ -4121,6 +4197,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                     }
                 }
             }
+            context.coordinator.lastContentsRectUpdateTime = now
         }
 
         if !nsView.bounds.equalTo(context.coordinator.lastAppliedBounds) {
@@ -4883,45 +4960,112 @@ struct StatusFooterStripView: View {
     }
 
     var body: some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 8) {
-                stateIconView
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(stateColor)
-                    .frame(width: 20, height: 20, alignment: .center)
-                Text(model.lastResultLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-            }
-            .frame(width: 140, alignment: .leading)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 14) {
+                HStack(spacing: 8) {
+                    stateIconView
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(stateColor)
+                        .frame(width: 20, height: 20, alignment: .center)
+                    Text(model.lastResultLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+                .frame(width: 140, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(model.activityText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.activityText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
 
-                ProgressView(value: model.activityProgress ?? 0)
-                    .progressViewStyle(.linear)
-                    .opacity(model.activityProgress == nil ? 0.35 : 1.0)
-            }
+                    ProgressView(value: model.activityProgress ?? 0)
+                        .progressViewStyle(.linear)
+                        .opacity(model.activityProgress == nil ? 0.35 : 1.0)
+                }
 
-            Group {
-                if model.isActivityRunning {
-                    Button(role: .destructive) {
-                        model.stopCurrentActivity()
-                    } label: {
-                        Label("Stop", systemImage: "stop.fill")
+                HStack(spacing: 8) {
+                    Group {
+                        if model.isActivityRunning {
+                            Button(role: .destructive) {
+                                model.stopCurrentActivity()
+                            } label: {
+                                Label("Stop", systemImage: "stop.fill")
+                            }
+                            .buttonStyle(.bordered)
+                        } else if model.outputURL != nil {
+                            Button("Show in Finder") {
+                                model.revealOutput()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
+
+                    Button(model.showActivityConsole ? "Hide Console" : "Console") {
+                        model.showActivityConsole.toggle()
                     }
                     .buttonStyle(.bordered)
-                } else if model.outputURL != nil {
-                    Button("Show in Finder") {
-                        model.revealOutput()
+
+                    if model.showActivityConsole {
+                        Button("Copy") {
+                            model.copyActivityConsole()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(model.activityConsoleText.isEmpty)
+
+                        Button("Clear") {
+                            model.clearActivityConsole()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(model.activityConsoleText.isEmpty)
                     }
-                    .buttonStyle(.bordered)
                 }
             }
-            .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
+
+            if model.showActivityConsole {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(model.activityConsoleText.isEmpty ? "Console output will appear here while tools run." : model.activityConsoleText)
+                                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Color.clear
+                                .frame(height: 1)
+                                .id("console-end")
+                        }
+                    }
+                    .frame(minHeight: 90, maxHeight: 150)
+                    .padding(8)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    )
+                    .onChange(of: model.activityConsoleText) { _ in
+                        guard model.showActivityConsole else { return }
+                        if reduceMotion {
+                            proxy.scrollTo("console-end", anchor: .bottom)
+                        } else {
+                            withAnimation(.linear(duration: 0.1)) {
+                                proxy.scrollTo("console-end", anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onAppear {
+                        proxy.scrollTo("console-end", anchor: .bottom)
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)

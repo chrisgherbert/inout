@@ -201,6 +201,8 @@ final class WorkspaceViewModel: ObservableObject {
 
     @Published var uiMessage = "Ready"
     @Published var lastActivityState: ActivityState = .idle
+    @Published var showActivityConsole = false
+    @Published var activityConsoleText = ""
 
     private var analyzeTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -216,6 +218,8 @@ final class WorkspaceViewModel: ObservableObject {
     private var waveformCache: [String: [Double]] = [:]
     private var waveformCacheOrder: [String] = []
     private let maxWaveformCacheEntries = 6
+    private let maxActivityConsoleCharacters = 200_000
+    private let activityConsoleTrimCharacters = 150_000
 
     init() {
         willTerminateObserver = NotificationCenter.default.addObserver(
@@ -548,6 +552,7 @@ final class WorkspaceViewModel: ObservableObject {
         highlightedCaptureTimelineMarkerID = nil
         highlightedClipBoundary = nil
         clipPlayheadSeconds = 0
+        clearActivityConsole()
         resetClipRange()
     }
 
@@ -581,8 +586,44 @@ final class WorkspaceViewModel: ObservableObject {
         highlightedCaptureTimelineMarkerID = nil
         highlightedClipBoundary = nil
         clipPlayheadSeconds = 0
+        clearActivityConsole()
         uiMessage = "Ready"
         resetClipRange()
+    }
+
+    func clearActivityConsole() {
+        activityConsoleText = ""
+    }
+
+    func copyActivityConsole() {
+        guard !activityConsoleText.isEmpty else { return }
+        copyToClipboard(activityConsoleText)
+    }
+
+    func appendActivityConsole(_ line: String, source: String? = nil) {
+        let cleaned = line.replacingOccurrences(of: "\r", with: "").trimmingCharacters(in: .newlines)
+        guard !cleaned.isEmpty else { return }
+
+        let renderedLine: String
+        if let source, !source.isEmpty {
+            renderedLine = "[\(source)] \(cleaned)"
+        } else {
+            renderedLine = cleaned
+        }
+
+        if activityConsoleText.isEmpty {
+            activityConsoleText = renderedLine
+        } else {
+            activityConsoleText += "\n" + renderedLine
+        }
+
+        if activityConsoleText.count > maxActivityConsoleCharacters {
+            let trimCount = activityConsoleText.count - activityConsoleTrimCharacters
+            if trimCount > 0 {
+                let start = activityConsoleText.index(activityConsoleText.startIndex, offsetBy: trimCount)
+                activityConsoleText = String(activityConsoleText[start...])
+            }
+        }
     }
 
     func stopCurrentActivity() {
@@ -617,6 +658,8 @@ final class WorkspaceViewModel: ObservableObject {
         lastActivityState = .running
         wasCancelled = false
         analyzeProgress = 0
+        clearActivityConsole()
+        appendActivityConsole("Transcript generation started", source: "analysis")
         analyzePhaseText = "Transcribing audio"
         updateAnalyzeStatusText(fileName: url.lastPathComponent, progress: 0)
         transcriptStatusText = "Generating transcript…"
@@ -635,6 +678,11 @@ final class WorkspaceViewModel: ObservableObject {
                     progressHandler: { progress in
                         Task { @MainActor [weak self] in
                             self?.setAnalyzeProgress(progress, fileName: url.lastPathComponent)
+                        }
+                    },
+                    onConsoleOutput: { line, source in
+                        Task { @MainActor [weak self] in
+                            self?.appendActivityConsole(line, source: source)
                         }
                     }
                 )
@@ -922,6 +970,8 @@ final class WorkspaceViewModel: ObservableObject {
         lastActivityState = .running
         wasCancelled = false
         analyzeProgress = 0
+        clearActivityConsole()
+        appendActivityConsole("Analysis started", source: "analysis")
         analyzePhaseText = "Preparing analysis"
         updateAnalyzeStatusText(fileName: url.lastPathComponent, progress: 0)
         cancelFlag.reset()
@@ -992,6 +1042,11 @@ final class WorkspaceViewModel: ObservableObject {
                     onProfanityDetected: { hit in
                         Task { @MainActor [weak self] in
                             self?.appendDetectedProfanityHit(hit)
+                        }
+                    },
+                    onConsoleOutput: { line, source in
+                        Task { @MainActor [weak self] in
+                            self?.appendActivityConsole(line, source: source)
                         }
                     }
                 ) { progress in
@@ -1257,6 +1312,8 @@ final class WorkspaceViewModel: ObservableObject {
         lastActivityState = .running
         exportCancellationRequested = false
         exportProgress = 0
+        clearActivityConsole()
+        appendActivityConsole("Audio export started", source: "export")
         exportStatusText = "Preparing export…"
         outputURL = nil
 
@@ -1453,6 +1510,8 @@ final class WorkspaceViewModel: ObservableObject {
         lastActivityState = .running
         exportCancellationRequested = false
         exportProgress = 0
+        clearActivityConsole()
+        appendActivityConsole(skipSaveDialog ? "Quick clip export started" : "Clip export started", source: "export")
         exportStatusText = skipSaveDialog ? "Quick exporting clip…" : "Exporting clip…"
         outputURL = nil
 
@@ -1686,18 +1745,13 @@ final class WorkspaceViewModel: ObservableObject {
 
             let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
             let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
-            // DO NOT REMOVE / DO NOT "SIMPLIFY" THIS SEEK PATTERN.
-            // This exact hybrid seek flow (coarse pre-roll + fine seek) is required to
-            // avoid recurring leading black-frame artifacts in advanced FFmpeg exports.
-            // Required argument order:
-            //   -ss <coarse> -i <source> -ss <fine> -t <duration>
-            // If changed to a single -ss, pure post-input seek, or trim-only path,
-            // black first frames have repeatedly returned in real-world long-GOP media.
-            // Historical fixes: 9017353, 941372f.
-            // Keep the 9017353 hybrid seek order, but with a larger preroll budget for
-            // long-GOP media where 2.5s can still under-run first-frame references.
-            let hybridSeekPreRoll = 6.0
-            let coarseSeekSeconds = max(0.0, self.clipStartSeconds - hybridSeekPreRoll)
+            // CRITICAL REGRESSION GUARD:
+            // Keep this hybrid seek order for advanced ffmpeg exports:
+            //   -ss <coarse pre-roll> -i <source> -ss <fine offset> -t <duration>
+            // Using only post-input seek here has repeatedly reintroduced a black
+            // first frame on long-GOP sources in both captioned and non-captioned paths.
+            let decoderPreRollSeconds = 2.5
+            let coarseSeekSeconds = max(0.0, self.clipStartSeconds - decoderPreRollSeconds)
             let fineSeekSeconds = max(0.0, self.clipStartSeconds - coarseSeekSeconds)
             let coarseSeek = String(format: "%.6f", coarseSeekSeconds)
             let fineSeek = String(format: "%.6f", fineSeekSeconds)
@@ -1715,13 +1769,9 @@ final class WorkspaceViewModel: ObservableObject {
             let audioCodec = isWebM ? "libopus" : "aac"
             var videoFilters: [String] = []
             var audioFilters: [String] = []
-            var captionTempDirectory: URL?
-            defer {
-                if let captionTempDirectory {
-                    try? FileManager.default.removeItem(at: captionTempDirectory)
-                }
-            }
-            var ffmpegArgs = [
+            // Baseline args for advanced export. For captioned exports we run this
+            // exact baseline path to a temp clip first, then do a dedicated burn pass.
+            var baselineArgs = [
                 "-y",
                 "-hide_banner",
                 "-loglevel", "error",
@@ -1740,47 +1790,6 @@ final class WorkspaceViewModel: ObservableObject {
                 videoFilters.append(scaleFilter)
             }
 
-            if self.clipAdvancedBurnInCaptions {
-                await MainActor.run {
-                    self.exportProgress = max(self.exportProgress, 0.12)
-                    self.exportStatusText = "Generating captions…"
-                }
-                let captionPrep = await self.prepareWhisperBurnInCaptions(
-                    sourceURL: sourceURL,
-                    ffmpegURL: ffmpegURL,
-                    startSeconds: self.clipStartSeconds,
-                    durationSeconds: clipDuration
-                )
-                if let prepared = captionPrep.preparation {
-                    captionTempDirectory = prepared.tempDirectory
-                    videoFilters.append(
-                        self.subtitlesFilterArgument(
-                            path: prepared.srtURL.path,
-                            style: self.clipAdvancedCaptionStyle
-                        )
-                    )
-                } else {
-                    let reason = captionPrep.error ?? "Unknown caption generation failure."
-                    await MainActor.run {
-                        self.exportTask = nil
-                        self.isExporting = false
-                        self.exportProgress = 0
-                        if self.exportCancellationRequested {
-                            self.exportStatusText = "Clip export cancelled"
-                            self.uiMessage = self.exportStatusText
-                            self.lastActivityState = .cancelled
-                            self.notifyCompletion("Compatible Clip Export Stopped", message: self.exportStatusText)
-                        } else {
-                            self.exportStatusText = "Clip export failed: \(reason)"
-                            self.uiMessage = self.exportStatusText
-                            self.lastActivityState = .failed
-                            self.notifyCompletion("Compatible Clip Export Failed", message: self.exportStatusText)
-                        }
-                    }
-                    return
-                }
-            }
-
             if applyAudioFade && hasSourceAudio {
                 audioFilters.append("afade=t=in:st=0:d=\(String(format: "%.3f", fadeDuration))")
                 audioFilters.append("afade=t=out:st=\(String(format: "%.3f", fadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
@@ -1792,39 +1801,129 @@ final class WorkspaceViewModel: ObservableObject {
             }
 
             if !videoFilters.isEmpty {
-                ffmpegArgs.append(contentsOf: ["-vf", videoFilters.joined(separator: ",")])
+                baselineArgs.append(contentsOf: ["-vf", videoFilters.joined(separator: ",")])
             }
 
             if let selectedAudioTrackIndex {
                 let audioInputRef = "0:a:\(selectedAudioTrackIndex)"
                 if !audioFilters.isEmpty {
-                    ffmpegArgs.append(contentsOf: [
+                    baselineArgs.append(contentsOf: [
                         "-filter_complex", "[\(audioInputRef)]\(audioFilters.joined(separator: ","))[aout]",
                         "-map", "[aout]"
                     ])
                 } else {
-                    ffmpegArgs.append(contentsOf: ["-map", audioInputRef])
+                    baselineArgs.append(contentsOf: ["-map", audioInputRef])
                 }
-                ffmpegArgs.append(contentsOf: [
+                baselineArgs.append(contentsOf: [
                     "-c:a", audioCodec,
                     "-b:a", "\(audioBitrateKbps)k"
                 ])
             }
 
             if self.selectedClipFormat == .mp4 || self.selectedClipFormat == .mov {
-                ffmpegArgs.append(contentsOf: ["-movflags", "+faststart"])
+                baselineArgs.append(contentsOf: ["-movflags", "+faststart"])
             }
 
-            ffmpegArgs.append(destination.path)
+            let encodeError: String?
+            if self.clipAdvancedBurnInCaptions {
+                let stagingDirectory = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("bvt-caption-stage-\(UUID().uuidString)", isDirectory: true)
+                do {
+                    try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+                } catch {
+                    await MainActor.run {
+                        self.exportTask = nil
+                        self.isExporting = false
+                        self.exportProgress = 0
+                        self.exportStatusText = "Clip export failed: Unable to stage caption export."
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
+                        self.notifyCompletion("Compatible Clip Export Failed", message: self.exportStatusText)
+                    }
+                    return
+                }
+                defer {
+                    try? FileManager.default.removeItem(at: stagingDirectory)
+                }
 
-            let advancedStatusPrefix = self.clipAdvancedBurnInCaptions ? "Burning captions" : "Encoding advanced clip"
-            let encodeError = await self.runFFmpegProcessWithProgress(
-                executableURL: ffmpegURL,
-                arguments: ffmpegArgs,
-                durationSeconds: clipDuration,
-                statusPrefix: advancedStatusPrefix,
-                progressRange: self.clipAdvancedBurnInCaptions ? (0.55...1.0) : nil
-            )
+                let stagedClip = stagingDirectory.appendingPathComponent("base.\(self.selectedClipFormat.fileExtension)")
+                var stageArgs = baselineArgs
+                stageArgs.append(stagedClip.path)
+                let stageError = await self.runFFmpegProcessWithProgress(
+                    executableURL: ffmpegURL,
+                    arguments: stageArgs,
+                    durationSeconds: clipDuration,
+                    statusPrefix: "Encoding base clip",
+                    progressRange: 0.10...0.55
+                )
+                if self.exportCancellationRequested {
+                    encodeError = nil
+                } else if let stageError {
+                    encodeError = stageError
+                } else {
+                    await MainActor.run {
+                        self.exportProgress = max(self.exportProgress, 0.56)
+                        self.exportStatusText = "Generating captions…"
+                    }
+                    let captionPrep = await self.prepareWhisperBurnInCaptions(
+                        sourceURL: stagedClip,
+                        ffmpegURL: ffmpegURL,
+                        startSeconds: 0,
+                        durationSeconds: clipDuration
+                    )
+                    if let prepared = captionPrep.preparation {
+                        let cueCount = self.countSRTCues(at: prepared.srtURL)
+                        if cueCount <= 0 {
+                            encodeError = "Caption generation produced 0 cues. Staged clip: \(stagedClip.path)"
+                        } else {
+                            await MainActor.run {
+                                self.exportStatusText = "Burning captions… (\(cueCount) cues)"
+                            }
+                            var burnArgs = [
+                                "-y",
+                                "-hide_banner",
+                                "-loglevel", "error",
+                                "-i", stagedClip.path,
+                                "-map", "0:v:0",
+                                "-c:v", videoCodec,
+                                "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
+                                "-pix_fmt", "yuv420p",
+                                "-b:v", "\(bitrateKbps)k",
+                                "-vf", self.subtitlesFilterArgument(path: prepared.srtURL.path, style: self.clipAdvancedCaptionStyle),
+                                "-map", "0:a:0?",
+                                "-c:a", "copy"
+                            ]
+                            if self.selectedClipFormat == .mp4 || self.selectedClipFormat == .mov {
+                                burnArgs.append(contentsOf: ["-movflags", "+faststart"])
+                            }
+                            burnArgs.append(destination.path)
+                            let burnError = await self.runFFmpegProcessWithProgress(
+                                executableURL: ffmpegURL,
+                                arguments: burnArgs,
+                                durationSeconds: clipDuration,
+                                statusPrefix: "Burning captions",
+                                progressRange: 0.78...1.0
+                            )
+                            if let burnError {
+                                encodeError = "Burn pass failed: \(burnError)\nSRT: \(prepared.srtURL.path)\nStage: \(stagedClip.path)"
+                            } else {
+                                encodeError = nil
+                            }
+                        }
+                    } else {
+                        encodeError = captionPrep.error ?? "Unknown caption generation failure."
+                    }
+                }
+            } else {
+                var args = baselineArgs
+                args.append(destination.path)
+                encodeError = await self.runFFmpegProcessWithProgress(
+                    executableURL: ffmpegURL,
+                    arguments: args,
+                    durationSeconds: clipDuration,
+                    statusPrefix: "Encoding advanced clip"
+                )
+            }
 
             await MainActor.run {
                 self.exportTask = nil
@@ -1900,7 +1999,7 @@ final class WorkspaceViewModel: ObservableObject {
         let wavURL = tempDirectory.appendingPathComponent("caption-audio.wav")
         let outputPrefix = tempDirectory.appendingPathComponent("caption-track")
         let srtURL = tempDirectory.appendingPathComponent("caption-track.srt")
-        let start = String(format: "%.3f", startSeconds)
+        let startSeek = String(format: "%.3f", max(0.0, startSeconds))
         let duration = String(format: "%.3f", max(0.001, durationSeconds))
 
         let extractError = await runFFmpegProcessWithProgress(
@@ -1909,7 +2008,7 @@ final class WorkspaceViewModel: ObservableObject {
                 "-y",
                 "-hide_banner",
                 "-loglevel", "error",
-                "-ss", start,
+                "-ss", startSeek,
                 "-t", duration,
                 "-i", sourceURL.path,
                 "-vn",
@@ -1970,18 +2069,68 @@ final class WorkspaceViewModel: ObservableObject {
             return (nil, "Whisper did not produce subtitle output.")
         }
 
+        do {
+            let rawSRT = try String(contentsOf: srtURL, encoding: .utf8)
+            let cueCount = rawSRT.components(separatedBy: .newlines).filter { $0.contains("-->") }.count
+            guard cueCount > 0 else {
+                return (nil, "Whisper produced subtitle file with 0 cues.")
+            }
+        } catch {
+            return (nil, "Unable to validate subtitle file: \(error.localizedDescription)")
+        }
+
         return (BurnInCaptionPreparation(srtURL: srtURL, tempDirectory: tempDirectory), nil)
     }
 
+    private func countSRTCues(at url: URL) -> Int {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return 0 }
+        return text.components(separatedBy: .newlines).filter { $0.contains("-->") }.count
+    }
+
+    private func shellQuoted(_ argument: String) -> String {
+        if argument.isEmpty { return "\"\"" }
+        let requiresQuote = argument.contains { $0.isWhitespace || $0 == "\"" || $0 == "'" }
+        if !requiresQuote { return argument }
+        return "\"" + argument.replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+
+    private func formatProcessCommand(executableURL: URL, arguments: [String]) -> String {
+        ([executableURL.path] + arguments).map(shellQuoted).joined(separator: " ")
+    }
+
     private func runProcess(executableURL: URL, arguments: [String]) async -> String? {
-        await withCheckedContinuation { continuation in
+        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: arguments)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
             process.arguments = arguments
 
             let stderr = Pipe()
+            let stdout = Pipe()
             process.standardError = stderr
-            process.standardOutput = Pipe()
+            process.standardOutput = stdout
+
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsole("$ \(commandLine)", source: executableURL.lastPathComponent)
+            }
+
+            let streamToConsole: (Data, String) -> Void = { data, source in
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+                    let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !line.isEmpty else { continue }
+                    Task { @MainActor [weak self] in
+                        self?.appendActivityConsole(line, source: source)
+                    }
+                }
+            }
+
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                streamToConsole(handle.availableData, "stdout")
+            }
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                streamToConsole(handle.availableData, "stderr")
+            }
 
             do {
                 try process.run()
@@ -1989,18 +2138,26 @@ final class WorkspaceViewModel: ObservableObject {
                     self.activeProcess = process
                 }
             } catch {
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
                 continuation.resume(returning: error.localizedDescription)
                 return
             }
 
             process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
                 Task { @MainActor in
                     if self.activeProcess === proc {
                         self.activeProcess = nil
                     }
                 }
-                let data = stderr.fileHandleForReading.readDataToEndOfFile()
-                let errorText = String(decoding: data, as: UTF8.self)
+                let trailingStdout = stdout.fileHandleForReading.readDataToEndOfFile()
+                let trailingStderr = stderr.fileHandleForReading.readDataToEndOfFile()
+                streamToConsole(trailingStdout, "stdout")
+                streamToConsole(trailingStderr, "stderr")
+
+                let errorText = String(decoding: trailingStderr, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: nil)
@@ -2019,7 +2176,8 @@ final class WorkspaceViewModel: ObservableObject {
         statusPrefix: String,
         progressRange: ClosedRange<Double>
     ) async -> String? {
-        await withCheckedContinuation { continuation in
+        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: arguments)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
             process.arguments = arguments
@@ -2028,6 +2186,10 @@ final class WorkspaceViewModel: ObservableObject {
             let stdout = Pipe()
             process.standardError = stderr
             process.standardOutput = stdout
+
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsole("$ \(commandLine)", source: "whisper")
+            }
 
             func emitProgress(_ progress: Double) {
                 Task { @MainActor in
@@ -2039,20 +2201,25 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             }
 
-            let parseChunk: (Data) -> Void = { data in
+            let parseChunk: (Data, String) -> Void = { data, source in
                 guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
-                    if let progress = extractPercentProgress(from: String(rawLine)) {
+                for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+                    let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !line.isEmpty else { continue }
+                    Task { @MainActor [weak self] in
+                        self?.appendActivityConsole(line, source: source)
+                    }
+                    if let progress = extractPercentProgress(from: line) {
                         emitProgress(progress)
                     }
                 }
             }
 
             stdout.fileHandleForReading.readabilityHandler = { handle in
-                parseChunk(handle.availableData)
+                parseChunk(handle.availableData, "whisper")
             }
             stderr.fileHandleForReading.readabilityHandler = { handle in
-                parseChunk(handle.availableData)
+                parseChunk(handle.availableData, "whisper")
             }
 
             do {
@@ -2078,8 +2245,8 @@ final class WorkspaceViewModel: ObservableObject {
 
                 let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
                 let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-                parseChunk(stdoutData)
-                parseChunk(stderrData)
+                parseChunk(stdoutData, "whisper")
+                parseChunk(stderrData, "whisper")
 
                 let stderrText = String(decoding: stderrData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                 if proc.terminationStatus == 0 {
@@ -2101,10 +2268,12 @@ final class WorkspaceViewModel: ObservableObject {
         statusPrefix: String,
         progressRange: ClosedRange<Double>? = nil
     ) async -> String? {
-        await withCheckedContinuation { continuation in
+        let ffmpegArguments = arguments + ["-progress", "pipe:1", "-nostats"]
+        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: ffmpegArguments)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
-            process.arguments = arguments + ["-progress", "pipe:1", "-nostats"]
+            process.arguments = ffmpegArguments
 
             let stderr = Pipe()
             let stdout = Pipe()
@@ -2113,6 +2282,11 @@ final class WorkspaceViewModel: ObservableObject {
 
             let safeDuration = max(0.001, durationSeconds)
             var stdoutBuffer = Data()
+            var stderrBuffer = Data()
+
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsole("$ \(commandLine)", source: "ffmpeg")
+            }
 
             let emitProgress: (Double) -> Void = { [weak self] progress in
                 Task { @MainActor in
@@ -2129,34 +2303,45 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             }
 
+            let emitConsoleLine: (String, String) -> Void = { line, source in
+                Task { @MainActor [weak self] in
+                    self?.appendActivityConsole(line, source: source)
+                }
+            }
+
+            func consumeLines(buffer: inout Data, source: String, processLine: (String) -> Void) {
+                while let separatorIndex = buffer.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
+                    let lineData = buffer.subdata(in: 0..<separatorIndex)
+                    buffer.removeSubrange(0...separatorIndex)
+                    guard let line = String(data: lineData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                          !line.isEmpty else { continue }
+                    emitConsoleLine(line, source)
+                    processLine(line)
+                }
+            }
+
             stdout.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 guard !chunk.isEmpty else { return }
                 stdoutBuffer.append(chunk)
-
-                while let newlineRange = stdoutBuffer.firstRange(of: Data([0x0A])) {
-                    let lineData = stdoutBuffer.subdata(in: 0..<newlineRange.lowerBound)
-                    stdoutBuffer.removeSubrange(0...newlineRange.lowerBound)
-                    guard let rawLine = String(data: lineData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines),
-                          !rawLine.isEmpty else { continue }
-
+                consumeLines(buffer: &stdoutBuffer, source: "ffmpeg") { rawLine in
                     if rawLine == "progress=end" {
                         emitProgress(1.0)
-                        continue
+                        return
                     }
 
                     if rawLine.hasPrefix("out_time_us="),
                        let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
                         emitProgress((microseconds / 1_000_000.0) / safeDuration)
-                        continue
+                        return
                     }
 
                     if rawLine.hasPrefix("out_time_ms="),
                        let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
                         // ffmpeg emits this value in microseconds.
                         emitProgress((value / 1_000_000.0) / safeDuration)
-                        continue
+                        return
                     }
 
                     if rawLine.hasPrefix("out_time="),
@@ -2166,6 +2351,13 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             }
 
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                stderrBuffer.append(chunk)
+                consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { _ in }
+            }
+
             do {
                 try process.run()
                 Task { @MainActor in
@@ -2173,12 +2365,14 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             } catch {
                 stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
                 continuation.resume(returning: error.localizedDescription)
                 return
             }
 
             process.terminationHandler = { proc in
                 stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
                 Task { @MainActor in
                     if self.activeProcess === proc {
                         self.activeProcess = nil
@@ -2190,6 +2384,34 @@ final class WorkspaceViewModel: ObservableObject {
                 if !trailingStdout.isEmpty {
                     stdoutBuffer.append(trailingStdout)
                 }
+                if !stderrData.isEmpty {
+                    stderrBuffer.append(stderrData)
+                }
+
+                consumeLines(buffer: &stdoutBuffer, source: "ffmpeg") { rawLine in
+                    if rawLine == "progress=end" {
+                        emitProgress(1.0)
+                        return
+                    }
+
+                    if rawLine.hasPrefix("out_time_us="),
+                       let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
+                        emitProgress((microseconds / 1_000_000.0) / safeDuration)
+                        return
+                    }
+
+                    if rawLine.hasPrefix("out_time_ms="),
+                       let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
+                        emitProgress((value / 1_000_000.0) / safeDuration)
+                        return
+                    }
+
+                    if rawLine.hasPrefix("out_time="),
+                       let seconds = parseTimecode(String(rawLine.dropFirst("out_time=".count))) {
+                        emitProgress(seconds / safeDuration)
+                    }
+                }
+                consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { _ in }
 
                 let stderrText = String(decoding: stderrData, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
