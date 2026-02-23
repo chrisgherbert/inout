@@ -35,6 +35,7 @@ dist/
 *.certSigningRequest
 *.notary.log
 notarization-output/
+scripts/release.env
 
 # Logs / temp
 *.log
