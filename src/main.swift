@@ -4468,6 +4468,7 @@ struct ClipToolView: View {
     @State private var playheadDragLocationX: CGFloat?
     @State private var playheadDragWidth: CGFloat = 0
     @State private var playheadDragAutoPanTask: Task<Void, Never>?
+    @State private var playheadCopyFlash = false
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
         if duration <= 300 {
@@ -4908,6 +4909,21 @@ struct ClipToolView: View {
         updateViewportForPlayhead(shouldFollow: false)
     }
 
+    private func copyPlayheadTimecode() {
+        let timecode = formatSeconds(playheadSeconds)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(timecode, forType: .string)
+        withAnimation(.easeOut(duration: 0.12)) {
+            playheadCopyFlash = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+            withAnimation(.easeOut(duration: 0.18)) {
+                playheadCopyFlash = false
+            }
+        }
+        model.uiMessage = "Copied playhead timecode: \(timecode)"
+    }
+
     private var visibleStartSeconds: Double {
         if timelineZoom <= 1 {
             return 0
@@ -5304,8 +5320,26 @@ struct ClipToolView: View {
                         Text("In: \(formatSeconds(model.clipStartSeconds))")
                             .font(.caption.monospacedDigit())
                         Spacer()
-                        Text("Playhead: \(formatSeconds(playheadSeconds))")
-                            .font(.caption.monospacedDigit())
+                        Button {
+                            copyPlayheadTimecode()
+                        } label: {
+                            Text("Playhead: \(formatSeconds(playheadSeconds))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.secondary)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.accentColor.opacity(playheadCopyFlash ? 0.20 : 0.0))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help("Click to copy playhead timecode")
+                        .contextMenu {
+                            Button("Copy Timecode") {
+                                copyPlayheadTimecode()
+                            }
+                        }
                         Spacer()
                         Text("Out: \(formatSeconds(model.clipEndSeconds))")
                             .font(.caption.monospacedDigit())
