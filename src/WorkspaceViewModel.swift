@@ -1686,9 +1686,17 @@ final class WorkspaceViewModel: ObservableObject {
 
             let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
             let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
-            // Larger preroll helps avoid occasional dark/invalid first frame on long-GOP media.
-            // Cost is minimal (a couple extra seconds of decode) compared with full frame-accurate seek.
-            let hybridSeekPreRoll = 2.5
+            // DO NOT REMOVE / DO NOT "SIMPLIFY" THIS SEEK PATTERN.
+            // This exact hybrid seek flow (coarse pre-roll + fine seek) is required to
+            // avoid recurring leading black-frame artifacts in advanced FFmpeg exports.
+            // Required argument order:
+            //   -ss <coarse> -i <source> -ss <fine> -t <duration>
+            // If changed to a single -ss, pure post-input seek, or trim-only path,
+            // black first frames have repeatedly returned in real-world long-GOP media.
+            // Historical fixes: 9017353, 941372f.
+            // Keep the 9017353 hybrid seek order, but with a larger preroll budget for
+            // long-GOP media where 2.5s can still under-run first-frame references.
+            let hybridSeekPreRoll = 6.0
             let coarseSeekSeconds = max(0.0, self.clipStartSeconds - hybridSeekPreRoll)
             let fineSeekSeconds = max(0.0, self.clipStartSeconds - coarseSeekSeconds)
             let coarseSeek = String(format: "%.6f", coarseSeekSeconds)
@@ -2557,4 +2565,3 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 }
-
