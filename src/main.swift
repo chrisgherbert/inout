@@ -179,6 +179,41 @@ enum AdvancedVideoCodec: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum BurnInCaptionStyle: String, CaseIterable, Identifiable {
+    case broadcastBox = "Broadcast Box"
+    case youtubeClean = "YouTube Clean"
+    case highContrastBlock = "High Contrast Block"
+    case cinematicSubtle = "Cinematic Subtle"
+
+    var id: String { rawValue }
+
+    var description: String {
+        switch self {
+        case .broadcastBox:
+            return "White text with a black rounded box."
+        case .youtubeClean:
+            return "White text with outline and soft shadow."
+        case .highContrastBlock:
+            return "Yellow text with strong black box."
+        case .cinematicSubtle:
+            return "Off-white text with subtle shadow."
+        }
+    }
+
+    var ffmpegForceStyle: String {
+        switch self {
+        case .broadcastBox:
+            return "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H10000000,BorderStyle=4,Outline=1,Shadow=0,MarginV=34,Alignment=2,WrapStyle=1"
+        case .youtubeClean:
+            return "FontName=Helvetica,FontSize=19,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=34,Alignment=2"
+        case .highContrastBlock:
+            return "PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,BackColour=&H10000000,BorderStyle=4,Outline=1,Shadow=0,MarginV=34,Alignment=2,WrapStyle=1"
+        case .cinematicSubtle:
+            return "FontName=Helvetica,FontSize=20,PrimaryColour=&H00F2F2F2,OutlineColour=&H50000000,BorderStyle=1,Outline=1,Shadow=1,MarginV=38,Alignment=2"
+        }
+    }
+}
+
 enum AdvancedFilenamePreset: String, CaseIterable, Identifiable {
     case sourceClipInOut = "Source + Clip Range"
     case sourceInOutDate = "Source + Range + Date"
@@ -1512,6 +1547,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let profanityWords = "prefs.profanityWords"
         static let frameSaveLocationMode = "prefs.frameSaveLocationMode"
         static let customFrameSaveDirectoryPath = "prefs.customFrameSaveDirectoryPath"
+        static let burnInCaptionStyle = "prefs.burnInCaptionStyle"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -1584,6 +1620,11 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipAdvancedBoostAudio = false
     @Published var clipAdvancedAddFadeInOut = false
     @Published var clipAdvancedBurnInCaptions = false
+    @Published var clipAdvancedCaptionStyle: BurnInCaptionStyle = .broadcastBox {
+        didSet {
+            UserDefaults.standard.set(clipAdvancedCaptionStyle.rawValue, forKey: DefaultsKey.burnInCaptionStyle)
+        }
+    }
     @Published var clipAudioOnlyBoostAudio = false
     @Published var clipAudioOnlyAddFadeInOut = false
     @Published var clipAudioOnlyFormat: ClipAudioOnlyFormat = .mp3
@@ -1764,6 +1805,11 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         customFrameSaveDirectoryPath = defaults.string(forKey: DefaultsKey.customFrameSaveDirectoryPath) ?? ""
+
+        if let rawCaptionStyle = defaults.string(forKey: DefaultsKey.burnInCaptionStyle),
+           let style = BurnInCaptionStyle(rawValue: rawCaptionStyle) {
+            clipAdvancedCaptionStyle = style
+        }
     }
 
     var canAnalyze: Bool {
@@ -3029,8 +3075,12 @@ final class WorkspaceViewModel: ObservableObject {
                 )
                 if let prepared = captionPrep.preparation {
                     captionTempDirectory = prepared.tempDirectory
-                    let escapedPath = self.escapeSubtitlesFilterPath(prepared.srtURL.path)
-                    videoFilters.append("subtitles='\(escapedPath)'")
+                    videoFilters.append(
+                        self.subtitlesFilterArgument(
+                            path: prepared.srtURL.path,
+                            style: self.clipAdvancedCaptionStyle
+                        )
+                    )
                 } else {
                     let reason = captionPrep.error ?? "Unknown caption generation failure."
                     await MainActor.run {
@@ -3140,6 +3190,14 @@ final class WorkspaceViewModel: ObservableObject {
             .replacingOccurrences(of: ":", with: "\\:")
             .replacingOccurrences(of: "'", with: "\\'")
             .replacingOccurrences(of: ",", with: "\\,")
+    }
+
+    private func subtitlesFilterArgument(path: String, style: BurnInCaptionStyle) -> String {
+        let escapedPath = escapeSubtitlesFilterPath(path)
+        let escapedStyle = style.ffmpegForceStyle
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        return "subtitles='\(escapedPath)':force_style='\(escapedStyle)'"
     }
 
     private func prepareWhisperBurnInCaptions(
@@ -7985,12 +8043,30 @@ struct PreferencesView: View {
                             .controlSize(.small)
                         }
 
-                        Text("Preset-based naming keeps exports consistent for non-technical users.")
+                    Text("Preset-based naming keeps exports consistent for non-technical users.")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
                 } header: {
                     Text("Advanced Export Filename")
+                }
+
+                Section {
+                    LabeledContent("Default Style") {
+                        Picker("Default Style", selection: $model.clipAdvancedCaptionStyle) {
+                            ForEach(BurnInCaptionStyle.allCases) { style in
+                                Text(style.rawValue).tag(style)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 230)
+                    }
+
+                    Text(model.clipAdvancedCaptionStyle.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Burned-In Captions")
                 }
             }
             .formStyle(.grouped)
