@@ -2058,6 +2058,7 @@ struct ClipToolView: View {
     @ObservedObject var model: WorkspaceViewModel
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.undoManager) private var undoManager
 
     @State private var player = AVPlayer()
     @State private var playheadSeconds: Double = 0
@@ -2662,7 +2663,7 @@ struct ClipToolView: View {
                     return nil
                 }
                 if event.keyCode == 51 || event.keyCode == 117 {
-                    if model.removeHighlightedTimelineMarker() {
+                    if model.removeHighlightedTimelineMarker(undoManager: undoManager) {
                         model.uiMessage = "Marker deleted"
                     }
                     return nil
@@ -2671,20 +2672,20 @@ struct ClipToolView: View {
 
             if flags.isDisjoint(with: [.command, .option, .control]) && !flags.contains(.shift) {
                 if chars == "i" {
-                    model.setClipStart(playheadSeconds)
+                    model.setClipStart(playheadSeconds, undoManager: undoManager)
                     return nil
                 }
                 if chars == "o" {
-                    model.setClipEnd(playheadSeconds)
+                    model.setClipEnd(playheadSeconds, undoManager: undoManager)
                     return nil
                 }
                 if chars == "x" {
-                    model.resetClipRange()
+                    model.resetClipRange(undoManager: undoManager)
                     seekPlayer(to: model.clipStartSeconds)
                     return nil
                 }
                 if chars == "m" {
-                    model.addTimelineMarker(at: playheadSeconds)
+                    model.addTimelineMarker(at: playheadSeconds, undoManager: undoManager)
                     return nil
                 }
             }
@@ -2835,8 +2836,8 @@ struct ClipToolView: View {
     }
 
     private func dismissTimecodeFieldFocus() {
-        model.commitClipStartText()
-        model.commitClipEndText()
+        model.commitClipStartText(undoManager: undoManager)
+        model.commitClipEndText(undoManager: undoManager)
         NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
@@ -2905,8 +2906,8 @@ struct ClipToolView: View {
             onPlayheadDragStateChanged: { isActive in
                 setPlayheadDragActive(isActive)
             },
-            onSetStart: { model.setClipStart($0) },
-            onSetEnd: { model.setClipEnd($0) },
+            onSetStart: { model.setClipStart($0, undoManager: undoManager) },
+            onSetEnd: { model.setClipEnd($0, undoManager: undoManager) },
             onWaveformHoverChanged: { hovering in
                 isWaveformHovered = hovering
                 if !hovering {
@@ -2946,8 +2947,8 @@ struct ClipToolView: View {
             fastClipFormats: fastClipFormats,
             advancedClipFormats: advancedClipFormats
         ) { quickExport in
-            model.commitClipStartText()
-            model.commitClipEndText()
+            model.commitClipStartText(undoManager: undoManager)
+            model.commitClipEndText(undoManager: undoManager)
             model.startClipExport(skipSaveDialog: quickExport)
         }
     }
@@ -3034,17 +3035,17 @@ struct ClipToolView: View {
 
         let step6 = step5
             .onReceive(NotificationCenter.default.publisher(for: .clipSetStartAtPlayhead)) { _ in
-                model.setClipStart(playheadSeconds)
+                model.setClipStart(playheadSeconds, undoManager: undoManager)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipSetEndAtPlayhead)) { _ in
-                model.setClipEnd(playheadSeconds)
+                model.setClipEnd(playheadSeconds, undoManager: undoManager)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipClearRange)) { _ in
-                model.resetClipRange()
+                model.resetClipRange(undoManager: undoManager)
                 seekPlayer(to: model.clipStartSeconds)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipAddMarkerAtPlayhead)) { _ in
-                model.addTimelineMarker(at: playheadSeconds)
+                model.addTimelineMarker(at: playheadSeconds, undoManager: undoManager)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart)) { _ in
                 navigateToMarker(previous: true)

@@ -792,12 +792,44 @@ final class WorkspaceViewModel: ObservableObject {
         return rendered
     }
 
-    func resetClipRange() {
-        let duration = max(0, sourceInfo?.durationSeconds ?? analysis?.mediaDuration ?? 0)
-        clipStartSeconds = 0
-        clipEndSeconds = duration
+    private func applyClipRange(start: Double, end: Double) {
+        let duration = sourceDurationSeconds
+        clipStartSeconds = min(max(0, start), duration)
+        clipEndSeconds = min(max(0, end), duration)
+        if clipEndSeconds < clipStartSeconds {
+            clipEndSeconds = clipStartSeconds
+        }
         clipStartText = formatSeconds(clipStartSeconds)
         clipEndText = formatSeconds(clipEndSeconds)
+    }
+
+    private func setClipRangeWithUndo(
+        start: Double,
+        end: Double,
+        undoManager: UndoManager?,
+        actionName: String
+    ) {
+        let previousStart = clipStartSeconds
+        let previousEnd = clipEndSeconds
+        applyClipRange(start: start, end: end)
+        let didChange = abs(previousStart - clipStartSeconds) > 0.0001 || abs(previousEnd - clipEndSeconds) > 0.0001
+        guard didChange, let undoManager else { return }
+        let undoStart = previousStart
+        let undoEnd = previousEnd
+        undoManager.registerUndo(withTarget: self) { target in
+            target.setClipRangeWithUndo(
+                start: undoStart,
+                end: undoEnd,
+                undoManager: undoManager,
+                actionName: actionName
+            )
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    func resetClipRange(undoManager: UndoManager? = nil) {
+        let duration = max(0, sourceInfo?.durationSeconds ?? analysis?.mediaDuration ?? 0)
+        setClipRangeWithUndo(start: 0, end: duration, undoManager: undoManager, actionName: "Clear Clip In/Out")
     }
 
     private func applySuggestedClipBitrateFromSource() {
@@ -855,42 +887,41 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func clampClipRange() {
-        let duration = sourceDurationSeconds
-        clipStartSeconds = min(max(0, clipStartSeconds), duration)
-        clipEndSeconds = min(max(0, clipEndSeconds), duration)
-        if clipEndSeconds < clipStartSeconds {
-            clipEndSeconds = clipStartSeconds
-        }
-        clipStartText = formatSeconds(clipStartSeconds)
-        clipEndText = formatSeconds(clipEndSeconds)
+        applyClipRange(start: clipStartSeconds, end: clipEndSeconds)
     }
 
-    func commitClipStartText() {
+    func commitClipStartText(undoManager: UndoManager? = nil) {
         guard let parsed = parseTimecode(clipStartText) else {
             clipStartText = formatSeconds(clipStartSeconds)
             return
         }
-        clipStartSeconds = parsed
-        clampClipRange()
+        setClipStart(parsed, undoManager: undoManager)
     }
 
-    func commitClipEndText() {
+    func commitClipEndText(undoManager: UndoManager? = nil) {
         guard let parsed = parseTimecode(clipEndText) else {
             clipEndText = formatSeconds(clipEndSeconds)
             return
         }
-        clipEndSeconds = parsed
-        clampClipRange()
+        setClipEnd(parsed, undoManager: undoManager)
     }
 
-    func setClipStart(_ time: Double) {
-        clipStartSeconds = time
-        clampClipRange()
+    func setClipStart(_ time: Double, undoManager: UndoManager? = nil) {
+        setClipRangeWithUndo(
+            start: time,
+            end: clipEndSeconds,
+            undoManager: undoManager,
+            actionName: "Set Clip Start"
+        )
     }
 
-    func setClipEnd(_ time: Double) {
-        clipEndSeconds = time
-        clampClipRange()
+    func setClipEnd(_ time: Double, undoManager: UndoManager? = nil) {
+        setClipRangeWithUndo(
+            start: clipStartSeconds,
+            end: time,
+            undoManager: undoManager,
+            actionName: "Set Clip End"
+        )
     }
 
     func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -2538,9 +2569,47 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func addTimelineMarker(at seconds: Double) {
+    private func restoreMarkersWithUndo(
+        _ markers: [CaptureTimelineMarker],
+        highlightedID: UUID?,
+        undoManager: UndoManager?,
+        actionName: String
+    ) {
+        let currentMarkers = captureTimelineMarkers
+        let currentHighlightedID = highlightedCaptureTimelineMarkerID
+        captureTimelineMarkers = markers
+        highlightedCaptureTimelineMarkerID = highlightedID
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { target in
+            target.restoreMarkersWithUndo(
+                currentMarkers,
+                highlightedID: currentHighlightedID,
+                undoManager: undoManager,
+                actionName: actionName
+            )
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    func addTimelineMarker(at seconds: Double, undoManager: UndoManager? = nil) {
+        let previousMarkers = captureTimelineMarkers
+        let previousHighlighted = highlightedCaptureTimelineMarkerID
         addCaptureTimelineMarker(at: seconds)
-        uiMessage = "Marker added at \(formatSeconds(seconds))"
+        let didChange = previousMarkers != captureTimelineMarkers
+        if didChange {
+            uiMessage = "Marker added at \(formatSeconds(seconds))"
+            if let undoManager {
+                undoManager.registerUndo(withTarget: self) { target in
+                    target.restoreMarkersWithUndo(
+                        previousMarkers,
+                        highlightedID: previousHighlighted,
+                        undoManager: undoManager,
+                        actionName: "Add Marker"
+                    )
+                }
+                undoManager.setActionName("Add Marker")
+            }
+        }
     }
 
     func nearestTimelineMarker(to seconds: Double, tolerance: Double) -> CaptureTimelineMarker? {
@@ -2560,13 +2629,26 @@ final class WorkspaceViewModel: ObservableObject {
         highlightedCaptureTimelineMarkerID = nearestTimelineMarker(to: seconds, tolerance: tolerance)?.id
     }
 
-    func removeHighlightedTimelineMarker() -> Bool {
+    func removeHighlightedTimelineMarker(undoManager: UndoManager? = nil) -> Bool {
+        let previousMarkers = captureTimelineMarkers
+        let previousHighlighted = highlightedCaptureTimelineMarkerID
         guard let highlightedID = highlightedCaptureTimelineMarkerID,
               let index = captureTimelineMarkers.firstIndex(where: { $0.id == highlightedID }) else {
             return false
         }
         captureTimelineMarkers.remove(at: index)
         highlightedCaptureTimelineMarkerID = nil
+        if let undoManager {
+            undoManager.registerUndo(withTarget: self) { target in
+                target.restoreMarkersWithUndo(
+                    previousMarkers,
+                    highlightedID: previousHighlighted,
+                    undoManager: undoManager,
+                    actionName: "Delete Marker"
+                )
+            }
+            undoManager.setActionName("Delete Marker")
+        }
         return true
     }
 

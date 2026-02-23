@@ -52,7 +52,9 @@ struct CheckBlackFramesApp: App {
         .windowResizability(.contentSize)
 
         .commands {
-            CommandMenu("Clip") {
+            CommandGroup(after: .pasteboard) {
+                Divider()
+
                 Button("Set Clip Start at Playhead") {
                     NotificationCenter.default.post(name: .clipSetStartAtPlayhead, object: nil)
                 }

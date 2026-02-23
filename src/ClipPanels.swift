@@ -251,6 +251,7 @@ private struct TimelineMiniMapView: View {
 
 struct ClipSelectionPanel: View {
     @ObservedObject var model: WorkspaceViewModel
+    @Environment(\.undoManager) private var undoManager
     let isCompactLayout: Bool
     let reduceTransparency: Bool
     let isWaveformLoading: Bool
@@ -375,7 +376,7 @@ struct ClipSelectionPanel: View {
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .frame(width: 140)
-                                .onSubmit { model.commitClipStartText() }
+                                .onSubmit { model.commitClipStartText(undoManager: undoManager) }
                             Button("Set In") { onSetStart(playheadSeconds) }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
@@ -389,7 +390,7 @@ struct ClipSelectionPanel: View {
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .frame(width: 140)
-                                .onSubmit { model.commitClipEndText() }
+                                .onSubmit { model.commitClipEndText(undoManager: undoManager) }
                             Button("Set Out") { onSetEnd(playheadSeconds) }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
@@ -405,7 +406,7 @@ struct ClipSelectionPanel: View {
                             TextField("00:00:00.000", text: $model.clipStartText)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
-                                .onSubmit { model.commitClipStartText() }
+                                .onSubmit { model.commitClipStartText(undoManager: undoManager) }
                             Button("Set In") { onSetStart(playheadSeconds) }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
@@ -418,7 +419,7 @@ struct ClipSelectionPanel: View {
                             TextField("00:00:00.000", text: $model.clipEndText)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
-                                .onSubmit { model.commitClipEndText() }
+                                .onSubmit { model.commitClipEndText(undoManager: undoManager) }
                             Button("Set Out") { onSetEnd(playheadSeconds) }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
