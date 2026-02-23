@@ -4170,7 +4170,19 @@ struct ClipToolView: View {
     @State private var suppressVisualPlayheadSyncUntil: Date = .distantPast
     @State private var playheadJumpAnimationToken: Int = 0
     @State private var playheadJumpFromSeconds: Double = 0
-    private let allowedTimelineZoomLevels: [Double] = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 160, 192, 256]
+    private var allowedTimelineZoomLevels: [Double] {
+        let duration = totalDurationSeconds
+        if duration <= 300 {
+            return [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 320, 384]
+        }
+        if duration <= 1_800 {
+            return [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 160, 192, 256]
+        }
+        if duration <= 7_200 {
+            return [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 160]
+        }
+        return [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128]
+    }
 
     private let timer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
     @State private var lastInteractiveSeekSeconds: Double = -1
@@ -4206,6 +4218,14 @@ struct ClipToolView: View {
         let next = allowedTimelineZoomLevels[clamped]
         if timelineZoom != next {
             timelineZoom = next
+        }
+    }
+
+    private func clampTimelineZoomToAllowedLevels() {
+        let idx = nearestZoomIndex(for: timelineZoom)
+        let clamped = allowedTimelineZoomLevels[idx]
+        if abs(clamped - timelineZoom) > 0.0001 {
+            timelineZoom = clamped
         }
     }
 
@@ -4249,6 +4269,7 @@ struct ClipToolView: View {
         playheadSeconds = restored
         syncVisualPlayheadImmediately(restored)
         viewportStartSeconds = 0
+        clampTimelineZoomToAllowedLevels()
         player.seek(to: CMTime(seconds: restored, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         loadWaveform(for: sourceURL)
     }
@@ -4864,6 +4885,7 @@ struct ClipToolView: View {
                         sourceSessionID: model.sourceSessionID,
                         samples: waveformSamples,
                         zoomLevel: timelineZoom,
+                        renderBuckets: allowedTimelineZoomLevels,
                         startSeconds: model.clipStartSeconds,
                         visualPlayheadSeconds: playheadVisualSeconds,
                         playheadJumpFromSeconds: playheadJumpFromSeconds,
@@ -5442,6 +5464,7 @@ struct WaveformView: View {
     let sourceSessionID: UUID
     let samples: [Double]
     let zoomLevel: Double
+    let renderBuckets: [Double]
     let startSeconds: Double
     let visualPlayheadSeconds: Double
     let playheadJumpFromSeconds: Double
@@ -5785,6 +5808,7 @@ struct WaveformView: View {
                     sourceSessionID: sourceSessionID,
                     samples: samples,
                     zoomLevel: zoomLevel,
+                    renderBuckets: renderBuckets,
                     totalDurationSeconds: totalDurationSeconds,
                     visibleStartSeconds: visibleStartSeconds,
                     visibleEndSeconds: visibleEndSeconds,
@@ -6105,7 +6129,7 @@ private final class WaveformRasterHostView: NSView {
 }
 
 private final class WaveformRasterCoordinator {
-    private let zoomRenderBuckets: [Double] = [1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256]
+    private var zoomRenderBuckets: [Double] = [1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256]
     private(set) var cachedSessionID: UUID?
     private(set) var cachedSamples: [Double] = []
     private(set) var cachedBucketImages: [Double: CGImage] = [:]
@@ -6116,6 +6140,15 @@ private final class WaveformRasterCoordinator {
     var lastPlayheadJumpAnimationToken: Int = -1
     var lastPlayheadCaptureFlashing: Bool = false
     var lastHighlightedMarkerID: UUID?
+
+    func setZoomRenderBuckets(_ buckets: [Double]) {
+        let normalized = Array(Set(buckets.map { max(1, $0) })).sorted()
+        guard !normalized.isEmpty, normalized != zoomRenderBuckets else { return }
+        zoomRenderBuckets = normalized
+        let keep = Set(zoomRenderBuckets)
+        cachedBucketImages = cachedBucketImages.filter { keep.contains($0.key) }
+        lastAppliedZoomBucket = -1
+    }
 
     @discardableResult
     func rebuildImageIfNeeded(sessionID: UUID, samples: [Double], isDarkAppearance: Bool) -> Bool {
@@ -6247,16 +6280,10 @@ private final class WaveformRasterCoordinator {
     }
 
     func bestZoomRenderBucket(for zoomLevel: Double) -> Double {
-        var bestBucket = zoomRenderBuckets[0]
-        var bestDistance = Double.greatestFiniteMagnitude
-        for bucket in zoomRenderBuckets {
-            let distance = abs(bucket - zoomLevel)
-            if distance < bestDistance {
-                bestDistance = distance
-                bestBucket = bucket
-            }
+        for bucket in zoomRenderBuckets where bucket >= zoomLevel {
+            return bucket
         }
-        return bestBucket
+        return zoomRenderBuckets.last ?? max(1, zoomLevel)
     }
 }
 
@@ -6264,6 +6291,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let sourceSessionID: UUID
     let samples: [Double]
     let zoomLevel: Double
+    let renderBuckets: [Double]
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
@@ -6279,6 +6307,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         lhs.sourceSessionID == rhs.sourceSessionID &&
         lhs.samples.count == rhs.samples.count &&
         abs(lhs.zoomLevel - rhs.zoomLevel) < 0.0001 &&
+        lhs.renderBuckets == rhs.renderBuckets &&
         abs(lhs.totalDurationSeconds - rhs.totalDurationSeconds) < 0.0001 &&
         abs(lhs.visibleStartSeconds - rhs.visibleStartSeconds) < 0.0001 &&
         abs(lhs.visibleEndSeconds - rhs.visibleEndSeconds) < 0.0001 &&
@@ -6300,6 +6329,8 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     }
 
     func updateNSView(_ nsView: WaveformRasterHostView, context: Context) {
+        context.coordinator.setZoomRenderBuckets(renderBuckets)
+
         let didRebuildImage = context.coordinator.rebuildImageIfNeeded(
             sessionID: sourceSessionID,
             samples: samples,
