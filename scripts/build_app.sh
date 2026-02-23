@@ -23,14 +23,35 @@ FRAME_SOUND_DEST="$APP_RESOURCES/FrameShutter.aiff"
 QUICK_EXPORT_SOUND_SOURCE="$ROOT_DIR/assets/QuickExportSnip.aiff"
 QUICK_EXPORT_SOUND_DEST="$APP_RESOURCES/QuickExportSnip.aiff"
 
+BUILD_MODE="${1:-dev}"
+QUICK_BUILD=0
+case "$BUILD_MODE" in
+  dev)
+    SWIFTC_OPT_FLAGS=(-Onone -g)
+    ;;
+  quick)
+    SWIFTC_OPT_FLAGS=(-O)
+    QUICK_BUILD=1
+    ;;
+  release)
+    SWIFTC_OPT_FLAGS=(-O)
+    ;;
+  *)
+    echo "Usage: $0 [dev|quick|release]"
+    exit 1
+    ;;
+esac
+
 mkdir -p "$DIST"
 mkdir -p "$MODULE_CACHE"
-rm -rf "$APP"
+if [[ "$QUICK_BUILD" -eq 0 ]]; then
+  rm -rf "$APP"
+fi
 mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES"
 mkdir -p "$ROOT_DIR/assets"
 
 swiftc \
-  -O \
+  "${SWIFTC_OPT_FLAGS[@]}" \
   -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
   -framework SwiftUI \
@@ -93,28 +114,32 @@ PLIST
 chmod +x "$BIN"
 
 if [[ -f "$ICON_SOURCE_PNG" ]]; then
-  ICONSET_DIR="$DIST/AppIcon.iconset"
-  rm -rf "$ICONSET_DIR"
-  mkdir -p "$ICONSET_DIR"
-
-  /usr/bin/sips -z 16 16 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null
-  /usr/bin/sips -z 32 32 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_16x16@2x.png" >/dev/null
-  /usr/bin/sips -z 32 32 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_32x32.png" >/dev/null
-  /usr/bin/sips -z 64 64 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_32x32@2x.png" >/dev/null
-  /usr/bin/sips -z 128 128 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_128x128.png" >/dev/null
-  /usr/bin/sips -z 256 256 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null
-  /usr/bin/sips -z 256 256 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_256x256.png" >/dev/null
-  /usr/bin/sips -z 512 512 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null
-  /usr/bin/sips -z 512 512 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
-  /usr/bin/sips -z 1024 1024 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null
-
-  if /usr/bin/iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS_PATH"; then
-    echo "Bundled app icon (.icns): $ICON_SOURCE_PNG"
+  if [[ "$QUICK_BUILD" -eq 1 && -f "$ICON_ICNS_PATH" ]]; then
+    echo "Quick mode: keeping existing app icon."
   else
-    cp "$ICON_SOURCE_PNG" "$ICON_PNG_PATH"
-    echo "iconutil failed; bundled PNG fallback icon: $ICON_SOURCE_PNG"
+    ICONSET_DIR="$DIST/AppIcon.iconset"
+    rm -rf "$ICONSET_DIR"
+    mkdir -p "$ICONSET_DIR"
+
+    /usr/bin/sips -z 16 16 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null
+    /usr/bin/sips -z 32 32 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_16x16@2x.png" >/dev/null
+    /usr/bin/sips -z 32 32 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_32x32.png" >/dev/null
+    /usr/bin/sips -z 64 64 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_32x32@2x.png" >/dev/null
+    /usr/bin/sips -z 128 128 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_128x128.png" >/dev/null
+    /usr/bin/sips -z 256 256 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_128x128@2x.png" >/dev/null
+    /usr/bin/sips -z 256 256 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_256x256.png" >/dev/null
+    /usr/bin/sips -z 512 512 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null
+    /usr/bin/sips -z 512 512 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
+    /usr/bin/sips -z 1024 1024 "$ICON_SOURCE_PNG" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null
+
+    if /usr/bin/iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS_PATH"; then
+      echo "Bundled app icon (.icns): $ICON_SOURCE_PNG"
+    else
+      cp "$ICON_SOURCE_PNG" "$ICON_PNG_PATH"
+      echo "iconutil failed; bundled PNG fallback icon: $ICON_SOURCE_PNG"
+    fi
+    rm -rf "$ICONSET_DIR"
   fi
-  rm -rf "$ICONSET_DIR"
 else
   echo "App icon not bundled (missing $ICON_SOURCE_PNG)."
 fi
@@ -144,9 +169,13 @@ if [[ -z "$FFMPEG_SOURCE" ]]; then
 fi
 
 if [[ -n "$FFMPEG_SOURCE" && -x "$FFMPEG_SOURCE" ]]; then
-  cp "$FFMPEG_SOURCE" "$APP_RESOURCES/ffmpeg"
-  chmod +x "$APP_RESOURCES/ffmpeg"
-  echo "Bundled ffmpeg: $FFMPEG_SOURCE"
+  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/ffmpeg" ]]; then
+    echo "Quick mode: keeping existing bundled ffmpeg."
+  else
+    cp "$FFMPEG_SOURCE" "$APP_RESOURCES/ffmpeg"
+    chmod +x "$APP_RESOURCES/ffmpeg"
+    echo "Bundled ffmpeg: $FFMPEG_SOURCE"
+  fi
 else
   echo "ffmpeg not bundled (set BUNDLED_FFMPEG_PATH to include one)."
 fi
@@ -156,7 +185,7 @@ if [[ -z "$WHISPER_SOURCE" ]]; then
   local_vendor_nocoreml="$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml/bin/whisper-cli"
   if [[ -x "$local_vendor_nocoreml" ]]; then
     WHISPER_SOURCE="$local_vendor_nocoreml"
-  elif [[ -d "$ROOT_DIR/vendor/whisper.cpp" ]] && command -v cmake >/dev/null 2>&1; then
+  elif [[ "$QUICK_BUILD" -eq 0 && -d "$ROOT_DIR/vendor/whisper.cpp" ]] && command -v cmake >/dev/null 2>&1; then
     echo "Building local no-CoreML whisper-cli for app bundling..."
     cmake -S "$ROOT_DIR/vendor/whisper.cpp" -B "$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml" -DWHISPER_COREML=OFF >/dev/null 2>&1 || true
     cmake --build "$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml" -j >/dev/null 2>&1 || true
@@ -181,17 +210,25 @@ if [[ -z "$WHISPER_SOURCE" ]]; then
 fi
 
 if [[ -n "$WHISPER_SOURCE" && -x "$WHISPER_SOURCE" ]]; then
-  cp "$WHISPER_SOURCE" "$APP_RESOURCES/whisper-cli"
-  chmod +x "$APP_RESOURCES/whisper-cli"
-  echo "Bundled whisper-cli: $WHISPER_SOURCE"
+  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/whisper-cli" ]]; then
+    echo "Quick mode: keeping existing bundled whisper-cli."
+  else
+    cp "$WHISPER_SOURCE" "$APP_RESOURCES/whisper-cli"
+    chmod +x "$APP_RESOURCES/whisper-cli"
+    echo "Bundled whisper-cli: $WHISPER_SOURCE"
+  fi
 else
   echo "whisper-cli not bundled (set BUNDLED_WHISPER_PATH to include one)."
 fi
 
 WHISPER_MODEL_SOURCE="${BUNDLED_WHISPER_MODEL_PATH:-}"
 if [[ -n "$WHISPER_MODEL_SOURCE" && -f "$WHISPER_MODEL_SOURCE" ]]; then
-  cp "$WHISPER_MODEL_SOURCE" "$APP_RESOURCES/profanity-model.bin"
-  echo "Bundled Whisper model: $WHISPER_MODEL_SOURCE"
+  if [[ "$QUICK_BUILD" -eq 1 && -f "$APP_RESOURCES/profanity-model.bin" ]]; then
+    echo "Quick mode: keeping existing bundled Whisper model."
+  else
+    cp "$WHISPER_MODEL_SOURCE" "$APP_RESOURCES/profanity-model.bin"
+    echo "Bundled Whisper model: $WHISPER_MODEL_SOURCE"
+  fi
 else
   local_vendor_model=""
   if [[ -f "$ROOT_DIR/vendor/models/ggml-tiny.en.bin" ]]; then
@@ -201,11 +238,16 @@ else
   fi
 
   if [[ -n "$local_vendor_model" && -f "$local_vendor_model" ]]; then
-    cp "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"
-    echo "Bundled Whisper model: $local_vendor_model"
+    if [[ "$QUICK_BUILD" -eq 1 && -f "$APP_RESOURCES/profanity-model.bin" ]]; then
+      echo "Quick mode: keeping existing bundled Whisper model."
+    else
+      cp "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"
+      echo "Bundled Whisper model: $local_vendor_model"
+    fi
   else
     echo "Whisper model not bundled (set BUNDLED_WHISPER_MODEL_PATH or place a model in $ROOT_DIR/vendor/models)."
   fi
 fi
 
 echo "Built: $APP"
+echo "Mode: $BUILD_MODE"
