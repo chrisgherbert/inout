@@ -5306,6 +5306,7 @@ struct ClipToolView: View {
                     .frame(height: 74)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
+                    .padding(.bottom, -6)
                     .background(
                         GeometryReader { geo in
                             Color.clear
@@ -5347,6 +5348,7 @@ struct ClipToolView: View {
                             .font(.caption.monospacedDigit())
                     }
                     .foregroundStyle(.secondary)
+                    .padding(.top, -7)
                 }
 
                 ViewThatFits(in: .horizontal) {
