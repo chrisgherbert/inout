@@ -519,6 +519,71 @@ func formatFileSize(_ bytes: Int64?) -> String {
     return formatter.string(fromByteCount: bytes)
 }
 
+private enum EstimatedSizeSeverity {
+    case safe
+    case warning
+    case danger
+    case unknown
+}
+
+private func estimatedSizeSeverity(for bytes: Int64?, warningBytes: Int64, dangerBytes: Int64) -> EstimatedSizeSeverity {
+    guard let bytes, bytes > 0 else { return .unknown }
+    if bytes > dangerBytes { return .danger }
+    if bytes >= warningBytes { return .warning }
+    return .safe
+}
+
+private func formatSizeThresholdLabel(gigabytes: Double) -> String {
+    if gigabytes < 1.0 {
+        let mb = (gigabytes * 1024.0).rounded()
+        return "\(Int(mb)) MB"
+    }
+    return String(format: "%.2f GB", gigabytes)
+}
+
+struct EstimatedSizePill: View {
+    let bytes: Int64?
+    let warningThresholdGB: Double
+    let dangerThresholdGB: Double
+
+    private var warningBytes: Int64 {
+        Int64((warningThresholdGB * 1_073_741_824.0).rounded())
+    }
+
+    private var dangerBytes: Int64 {
+        Int64((dangerThresholdGB * 1_073_741_824.0).rounded())
+    }
+
+    private var accent: Color {
+        switch estimatedSizeSeverity(for: bytes, warningBytes: warningBytes, dangerBytes: dangerBytes) {
+        case .safe:
+            return Color(nsColor: .systemGreen)
+        case .warning:
+            return Color(nsColor: .systemYellow)
+        case .danger:
+            return Color(nsColor: .systemRed)
+        case .unknown:
+            return Color.secondary
+        }
+    }
+
+    var body: some View {
+        Text(formatFileSize(bytes))
+            .font(.system(.caption, design: .monospaced).weight(.semibold))
+            .foregroundStyle(accent)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(accent.opacity(0.16))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(accent.opacity(0.45), lineWidth: 0.7)
+            )
+    }
+}
+
 func estimateFileSizeBytes(
     durationSeconds: Double,
     totalBitrateKbps: Double,
@@ -1619,6 +1684,8 @@ final class WorkspaceViewModel: ObservableObject {
         static let frameSaveLocationMode = "prefs.frameSaveLocationMode"
         static let customFrameSaveDirectoryPath = "prefs.customFrameSaveDirectoryPath"
         static let burnInCaptionStyle = "prefs.burnInCaptionStyle"
+        static let estimatedSizeWarningThresholdGB = "prefs.estimatedSizeWarningThresholdGB"
+        static let estimatedSizeDangerThresholdGB = "prefs.estimatedSizeDangerThresholdGB"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -1769,6 +1836,32 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(customFrameSaveDirectoryPath, forKey: DefaultsKey.customFrameSaveDirectoryPath)
         }
     }
+    @Published var estimatedSizeWarningThresholdGB: Double = 1.0 {
+        didSet {
+            var clamped = min(max(0.04, estimatedSizeWarningThresholdGB), 20.0)
+            if clamped >= estimatedSizeDangerThresholdGB {
+                clamped = max(0.04, estimatedSizeDangerThresholdGB - 0.01)
+            }
+            if abs(clamped - estimatedSizeWarningThresholdGB) > 0.0001 {
+                estimatedSizeWarningThresholdGB = clamped
+                return
+            }
+            UserDefaults.standard.set(clamped, forKey: DefaultsKey.estimatedSizeWarningThresholdGB)
+        }
+    }
+    @Published var estimatedSizeDangerThresholdGB: Double = 2.0 {
+        didSet {
+            var clamped = min(max(0.05, estimatedSizeDangerThresholdGB), 40.0)
+            if clamped <= estimatedSizeWarningThresholdGB {
+                clamped = min(40.0, estimatedSizeWarningThresholdGB + 0.01)
+            }
+            if abs(clamped - estimatedSizeDangerThresholdGB) > 0.0001 {
+                estimatedSizeDangerThresholdGB = clamped
+                return
+            }
+            UserDefaults.standard.set(clamped, forKey: DefaultsKey.estimatedSizeDangerThresholdGB)
+        }
+    }
 
     @Published var uiMessage = "Ready"
     @Published var lastActivityState: ActivityState = .idle
@@ -1864,6 +1957,17 @@ final class WorkspaceViewModel: ObservableObject {
         if let rawAppearance = defaults.string(forKey: DefaultsKey.appearance),
            let savedAppearance = AppAppearance(rawValue: rawAppearance) {
             appearance = savedAppearance
+        }
+        let warningGB = defaults.double(forKey: DefaultsKey.estimatedSizeWarningThresholdGB)
+        if warningGB > 0 {
+            estimatedSizeWarningThresholdGB = min(max(0.04, warningGB), 20.0)
+        }
+        let dangerGB = defaults.double(forKey: DefaultsKey.estimatedSizeDangerThresholdGB)
+        if dangerGB > 0 {
+            estimatedSizeDangerThresholdGB = min(max(0.05, dangerGB), 40.0)
+        }
+        if estimatedSizeDangerThresholdGB <= estimatedSizeWarningThresholdGB {
+            estimatedSizeDangerThresholdGB = min(40.0, estimatedSizeWarningThresholdGB + 0.01)
         }
 
         let savedSilenceDuration = defaults.double(forKey: DefaultsKey.silenceMinDurationSeconds)
@@ -4389,9 +4493,11 @@ struct ConvertToolView: View {
                                         Label("Estimated output size", systemImage: "ruler")
                                             .font(.body.weight(.medium))
                                             .foregroundStyle(.tertiary)
-                                        Text(formatFileSize(model.estimatedAudioExportSizeBytes))
-                                            .font(.system(.body, design: .monospaced))
-                                            .foregroundStyle(.secondary)
+                                        EstimatedSizePill(
+                                            bytes: model.estimatedAudioExportSizeBytes,
+                                            warningThresholdGB: model.estimatedSizeWarningThresholdGB,
+                                            dangerThresholdGB: model.estimatedSizeDangerThresholdGB
+                                        )
                                     }
                                 }
                                 Spacer(minLength: 8)
@@ -5702,18 +5808,22 @@ struct ClipToolView: View {
                             Label("Estimated output size", systemImage: "ruler")
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(.tertiary)
-                            Text(formatFileSize(model.estimatedClipAudioOnlySizeBytes))
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                            EstimatedSizePill(
+                                bytes: model.estimatedClipAudioOnlySizeBytes,
+                                warningThresholdGB: model.estimatedSizeWarningThresholdGB,
+                                dangerThresholdGB: model.estimatedSizeDangerThresholdGB
+                            )
                         }
                     } else if model.clipEncodingMode == .compressed {
                         HStack(spacing: 8) {
                             Label("Estimated output size", systemImage: "ruler")
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(.tertiary)
-                            Text(formatFileSize(model.estimatedClipAdvancedSizeBytes))
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                            EstimatedSizePill(
+                                bytes: model.estimatedClipAdvancedSizeBytes,
+                                warningThresholdGB: model.estimatedSizeWarningThresholdGB,
+                                dangerThresholdGB: model.estimatedSizeDangerThresholdGB
+                            )
                         }
                     }
                     Spacer(minLength: 8)
@@ -8564,6 +8674,25 @@ struct PreferencesView: View {
                         .controlSize(.small)
                         .disabled(model.completionSound == .none)
                     }
+                }
+            }
+            Divider()
+
+            settingsSection("Estimated Size Badge") {
+                settingsRow("Warning threshold") {
+                    Stepper(value: $model.estimatedSizeWarningThresholdGB, in: 0.04...20.0, step: 0.01) {
+                        Text(formatSizeThresholdLabel(gigabytes: model.estimatedSizeWarningThresholdGB))
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    .frame(width: 240, alignment: .leading)
+                }
+
+                settingsRow("Danger threshold") {
+                    Stepper(value: $model.estimatedSizeDangerThresholdGB, in: 0.05...40.0, step: 0.01) {
+                        Text(formatSizeThresholdLabel(gigabytes: model.estimatedSizeDangerThresholdGB))
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    .frame(width: 240, alignment: .leading)
                 }
             }
         }
