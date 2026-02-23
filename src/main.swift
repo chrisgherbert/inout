@@ -2077,14 +2077,29 @@ struct ClipToolView: View {
         let oldWindow = max(0.25, totalDurationSeconds / oldZoom)
         let oldStart = oldZoom <= 1 ? 0 : clampedViewportStart(viewportStartSeconds)
 
+        let playheadAnchorSeconds = min(max(0, playheadVisualSeconds), totalDurationSeconds)
         let anchorSeconds: Double = {
             if isWaveformHovered, let pointer = timelinePointerSeconds {
                 return min(max(0, pointer), totalDurationSeconds)
             }
-            return min(max(0, playheadSeconds), totalDurationSeconds)
+            return playheadAnchorSeconds
         }()
-
-        let anchorRatio = min(max((anchorSeconds - oldStart) / oldWindow, 0), 1)
+        let usingPointerAnchor = isWaveformHovered && timelinePointerSeconds != nil
+        let playheadVisibleInCurrentWindow = playheadSeconds >= oldStart && playheadSeconds <= (oldStart + oldWindow)
+        let anchorRatio: Double
+        if oldZoom <= 1.0001 {
+            // First zoom step from "fit" should focus around the chosen anchor time.
+            anchorRatio = 0.5
+        } else if usingPointerAnchor {
+            // Keep cursor-anchored zoom stable under the mouse.
+            anchorRatio = min(max((anchorSeconds - oldStart) / oldWindow, 0), 1)
+        } else if playheadVisibleInCurrentWindow {
+            // Keep current playhead screen position when it is already visible.
+            anchorRatio = min(max((anchorSeconds - oldStart) / oldWindow, 0), 1)
+        } else {
+            // If playhead is offscreen, re-center around it so zoom intent remains clear.
+            anchorRatio = 0.5
+        }
 
         timelineZoom = next
         if next <= 1 {
@@ -2094,7 +2109,13 @@ struct ClipToolView: View {
         }
 
         let newWindow = max(0.25, totalDurationSeconds / max(1.0, next))
-        let newStart = anchorSeconds - (anchorRatio * newWindow)
+        let newStart: Double
+        if oldZoom <= 1.0001 {
+            // Deterministic first zoom step from "fit": center around anchor.
+            newStart = anchorSeconds - (newWindow * 0.5)
+        } else {
+            newStart = anchorSeconds - (anchorRatio * newWindow)
+        }
         viewportStartSeconds = clampedViewportStart(newStart)
         isViewportManuallyControlled = true
     }
@@ -4498,10 +4519,7 @@ private final class TimelineScrollerCoordinator: NSObject {
         let contentWidth = max(1, contentView.frame.width)
         let visibleWidth = max(1, clipView.bounds.width)
         let maxOffset = max(0, contentWidth - visibleWidth)
-        guard maxOffset > 0 else {
-            onViewportStartChanged(0)
-            return
-        }
+        guard maxOffset > 0 else { return }
 
         let ratio = min(max(0, Double(clipView.bounds.origin.x / maxOffset)), 1.0)
         onViewportStartChanged(ratio * maxViewportStartSeconds)
