@@ -4582,6 +4582,14 @@ struct ClipToolView: View {
             }
 
             if !hasDisallowedModifier && !flags.contains(.shift) {
+                if event.specialKey == .home {
+                    seekPlayer(to: 0)
+                    return nil
+                }
+                if event.specialKey == .end {
+                    seekPlayer(to: totalDurationSeconds)
+                    return nil
+                }
                 if event.specialKey == .upArrow {
                     navigateToMarker(previous: true)
                     return nil
@@ -4886,7 +4894,7 @@ struct ClipToolView: View {
                             }
                         }
                     )
-                    .frame(height: 58)
+                    .frame(height: 74)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
                     .background(
@@ -5482,18 +5490,109 @@ struct WaveformView: View {
         return min(totalDurationSeconds, max(0, windowStart + (Double(ratio) * duration)))
     }
 
+    private func snapToPixel(_ value: CGFloat) -> CGFloat {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let pixel = CGFloat(1.0 / scale)
+        return (value / pixel).rounded() * pixel
+    }
+
     private var systemAccent: Color {
         Color(nsColor: .controlAccentColor)
+    }
+
+    private func rulerMajorStep(for visibleDuration: Double) -> Double {
+        let candidates: [Double] = [
+            1.0 / 30.0, 1.0 / 15.0, 0.1, 0.2, 0.5,
+            1, 2, 5, 10, 15, 30, 60, 120, 300, 600
+        ]
+        for step in candidates where (visibleDuration / step) <= 10 {
+            return step
+        }
+        return candidates.last ?? 600
+    }
+
+    private func rulerMinorDivisions(for majorStep: Double) -> Int {
+        if majorStep >= 60 { return 6 }
+        if majorStep >= 1 { return 5 }
+        return 2
+    }
+
+    private func rulerLabel(for seconds: Double, majorStep: Double) -> String {
+        let clamped = max(0, seconds)
+        let whole = Int(clamped)
+        let hours = whole / 3600
+        let minutes = (whole % 3600) / 60
+        let secs = whole % 60
+        if majorStep < 1 {
+            let centiseconds = Int(((clamped - floor(clamped)) * 100).rounded())
+            if hours > 0 {
+                return String(format: "%d:%02d:%02d.%02d", hours, minutes, secs, centiseconds)
+            }
+            return String(format: "%02d:%02d.%02d", minutes, secs, centiseconds)
+        }
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    private func makeRulerTicks(
+        visibleStart: Double,
+        visibleEnd: Double,
+        width: CGFloat,
+        majorStep: Double,
+        minorStep: Double
+    ) -> (minor: [CGFloat], major: [(x: CGFloat, seconds: Double)]) {
+        let duration = max(0.0001, visibleEnd - visibleStart)
+        func xPosition(for value: Double) -> CGFloat {
+            let local = value - visibleStart
+            return CGFloat(local / duration) * width
+        }
+
+        let epsilon = minorStep * 0.001
+        var minorTicks: [CGFloat] = []
+        var majorTicks: [(x: CGFloat, seconds: Double)] = []
+        var t = floor(visibleStart / minorStep) * minorStep
+        var guardCount = 0
+        while t <= (visibleEnd + minorStep) && guardCount < 10_000 {
+            let x = xPosition(for: t)
+            if x >= -1 && x <= width + 1 {
+                let majorRatio = t / majorStep
+                if abs(majorRatio - majorRatio.rounded()) <= epsilon {
+                    majorTicks.append((x: x, seconds: t))
+                } else {
+                    minorTicks.append(x)
+                }
+            }
+            t += minorStep
+            guardCount += 1
+        }
+        return (minorTicks, majorTicks)
+    }
+
+    private func filterLabeledMajorTicks(
+        _ majorTicks: [(x: CGFloat, seconds: Double)],
+        minLabelSpacing: CGFloat = 72
+    ) -> [(x: CGFloat, seconds: Double)] {
+        var labeled: [(x: CGFloat, seconds: Double)] = []
+        var lastX = -CGFloat.greatestFiniteMagnitude
+        for tick in majorTicks where tick.x - lastX >= minLabelSpacing {
+            labeled.append(tick)
+            lastX = tick.x
+        }
+        return labeled
     }
 
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
             let height = proxy.size.height
+            let rulerHeight: CGFloat = 16
+            let rulerGap: CGFloat = 2
             let markerTopGutter: CGFloat = 8
             let markerBottomGutter: CGFloat = 8
-            let timelineVerticalOffset: CGFloat = markerTopGutter
-            let timelineHeight = max(1, height - markerTopGutter - markerBottomGutter)
+            let timelineVerticalOffset: CGFloat = rulerHeight + rulerGap + markerTopGutter
+            let timelineHeight = max(1, height - rulerHeight - rulerGap - markerTopGutter - markerBottomGutter)
             let startX = xPosition(for: startSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
             let selectionMinX = min(startX, endX)
@@ -5521,10 +5620,56 @@ struct WaveformView: View {
             let visibleMarkers = captureMarkers.filter { marker in
                 marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
             }
+            let majorStep = rulerMajorStep(for: visibleDuration)
+            let minorDivisions = max(1, rulerMinorDivisions(for: majorStep))
+            let minorStep = majorStep / Double(minorDivisions)
+            let ticks = makeRulerTicks(
+                visibleStart: visibleStartSeconds,
+                visibleEnd: visibleEndSeconds,
+                width: width,
+                majorStep: majorStep,
+                minorStep: minorStep
+            )
+            let minorTicks = ticks.minor
+            let majorTicks = ticks.major
+            let labeledMajorTicks = filterLabeledMajorTicks(majorTicks)
 
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .fill(Color.black.opacity(isHovered ? 0.16 : 0.12))
+
+                // Dedicated ruler lane for time ticks/labels above the waveform.
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: width, height: rulerHeight)
+                    .overlay(alignment: .bottomLeading) {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.10))
+                            .frame(height: 0.8)
+                    }
+                    .overlay(alignment: .topLeading) {
+                        ZStack(alignment: .topLeading) {
+                            ForEach(Array(minorTicks.enumerated()), id: \.offset) { tick in
+                                Rectangle()
+                                    .fill(Color.primary.opacity(0.10))
+                                    .frame(width: 1, height: 3)
+                                    .offset(x: tick.element, y: rulerHeight - 4)
+                            }
+                            ForEach(Array(majorTicks.enumerated()), id: \.offset) { tick in
+                                Rectangle()
+                                    .fill(Color.primary.opacity(0.18))
+                                    .frame(width: 1, height: 6)
+                                    .offset(x: tick.element.x, y: rulerHeight - 7)
+                            }
+                            ForEach(Array(labeledMajorTicks.enumerated()), id: \.offset) { tick in
+                                Text(rulerLabel(for: tick.element.seconds, majorStep: majorStep))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.primary.opacity(0.55))
+                                    .offset(x: tick.element.x + 2, y: 0)
+                            }
+                        }
+                    }
+                    .allowsHitTesting(false)
 
                 if hasVisibleSelection {
                     RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
@@ -5542,8 +5687,24 @@ struct WaveformView: View {
                         .frame(width: visibleSelectionWidth, height: timelineHeight)
                         .offset(x: visibleSelectionStartX, y: timelineVerticalOffset)
                         .overlay(
-                            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                .stroke(systemAccent.opacity(selectionOutlineOpacity), lineWidth: selectionOutlineWidth)
+                            ZStack {
+                                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                    .stroke(systemAccent.opacity(selectionOutlineOpacity), lineWidth: selectionOutlineWidth)
+                                // Subtle inner shadow for slight depth without heavy contrast.
+                                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                    .stroke(Color.black.opacity(0.14), lineWidth: 1.0)
+                                    .blur(radius: 0.7)
+                                    .mask(
+                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                            .fill(
+                                                LinearGradient(
+                                                    colors: [Color.black.opacity(0.75), Color.clear],
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
+                                                )
+                                            )
+                                    )
+                            }
                                 .frame(width: visibleSelectionWidth, height: timelineHeight)
                                 .offset(x: visibleSelectionStartX, y: timelineVerticalOffset)
                                 .allowsHitTesting(false)
@@ -5639,15 +5800,17 @@ struct WaveformView: View {
                 .offset(y: timelineVerticalOffset)
 
                 ForEach(visibleMarkers) { marker in
+                    let isMarkerHovered = hoveredMarkerID == marker.id
+                    let markerBaseX = snapToPixel(xPosition(for: marker.seconds, width: width))
                     ZStack(alignment: .top) {
-                        // Selection-style hover: soft vertical wash, no focus-ring outline.
+                        // Subtle hover: light wash + tiny lift, no strong glow/ring.
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(
                                 LinearGradient(
-                                    colors: hoveredMarkerID == marker.id
+                                    colors: isMarkerHovered
                                         ? [
-                                            Color.orange.opacity(0.34),
                                             Color.orange.opacity(0.18),
+                                            Color.orange.opacity(0.08),
                                             Color.clear
                                         ]
                                         : [Color.clear, Color.clear, Color.clear],
@@ -5656,15 +5819,19 @@ struct WaveformView: View {
                                 )
                             )
                             .frame(width: markerTapWidth + 4, height: markerTapHeight + 6)
-                            .blur(radius: hoveredMarkerID == marker.id ? 1.6 : 0)
+                            .blur(radius: 0)
 
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(hoveredMarkerID == marker.id ? Color.orange.opacity(0.2) : Color.clear)
+                            .fill(isMarkerHovered ? Color.orange.opacity(0.12) : Color.clear)
                             .frame(width: markerHeadHoverSize, height: markerHeadHoverSize)
                     }
                     .frame(width: markerTapWidth, height: markerTapHeight, alignment: .top)
                     .contentShape(Rectangle())
-                    .offset(x: xPosition(for: marker.seconds, width: width) - (markerTapWidth / 2), y: 0)
+                    .offset(
+                        x: markerBaseX - (markerTapWidth / 2),
+                        y: rulerHeight + rulerGap + (isMarkerHovered ? -1.0 : 0)
+                    )
+                    .animation(.easeOut(duration: 0.12), value: isMarkerHovered)
                         .onHover { hovering in
                             if hovering {
                                 hoveredMarkerID = marker.id
@@ -6218,8 +6385,13 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             let local = seconds - visibleStartSeconds
             return CGFloat(local / visibleDuration) * width
         }
+        let backingScale = nsView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let pixel = CGFloat(1.0 / backingScale)
+        func snapToPixel(_ value: CGFloat) -> CGFloat {
+            (value / pixel).rounded() * pixel
+        }
 
-        let playheadX = xPosition(for: playheadSeconds)
+        let playheadX = snapToPixel(xPosition(for: playheadSeconds))
         let playheadWidth: CGFloat = isPlayheadCaptureFlashing ? 3.6 : 2.0
         let targetPlayheadFrame = CGRect(
             x: playheadX - (playheadWidth / 2.0),
@@ -6274,7 +6446,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
         }
         markerContainer.sublayers = visibleMarkers.map { _, marker in
-            let markerX = xPosition(for: marker.seconds)
+            let markerX = snapToPixel(xPosition(for: marker.seconds))
             let isHighlighted = marker.id == highlightedMarkerID
             let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
 
@@ -7888,20 +8060,37 @@ struct HelpDocumentationView: View {
     ]
 
     private let shortcutItems: [ShortcutItem] = [
+        ShortcutItem(action: "Play/Pause", keys: ["Space"]),
+        ShortcutItem(action: "Pause transport", keys: ["K"]),
+        ShortcutItem(action: "Shuttle forward (repeat to speed up)", keys: ["L"]),
+        ShortcutItem(action: "Shuttle backward (repeat to speed up)", keys: ["J"]),
+        ShortcutItem(action: "Jump to timeline start", keys: ["Home"]),
+        ShortcutItem(action: "Jump to timeline end", keys: ["End"]),
         ShortcutItem(action: "Set clip start at playhead", keys: ["I"]),
         ShortcutItem(action: "Set clip end at playhead", keys: ["O"]),
         ShortcutItem(action: "Clear clip in/out", keys: ["X"]),
         ShortcutItem(action: "Add marker at playhead", keys: ["M"]),
+        ShortcutItem(action: "Delete selected marker", keys: ["Delete"]),
+        ShortcutItem(action: "Delete selected marker", keys: ["Backspace"]),
         ShortcutItem(action: "Previous marker (includes In/Out points)", keys: ["↑"]),
         ShortcutItem(action: "Next marker (includes In/Out points)", keys: ["↓"]),
+        ShortcutItem(action: "Step backward 10 frames", keys: ["⇧", "←"]),
+        ShortcutItem(action: "Step forward 10 frames", keys: ["⇧", "→"]),
+        ShortcutItem(action: "Capture frame", keys: ["⌘", "⌥", "S"]),
         ShortcutItem(action: "Export clip", keys: ["⌘", "E"]),
         ShortcutItem(action: "Quick export clip (no save dialog)", keys: ["⌘", "⇧", "E"]),
         ShortcutItem(action: "Export audio", keys: ["⌘", "⌥", "E"]),
+        ShortcutItem(action: "Choose media", keys: ["⌘", "O"]),
         ShortcutItem(action: "Zoom timeline in", keys: ["⌘", "+"]),
         ShortcutItem(action: "Zoom timeline out", keys: ["⌘", "-"]),
         ShortcutItem(action: "Reset timeline zoom", keys: ["⌘", "0"]),
+        ShortcutItem(action: "Switch to Clip tool", keys: ["⌘", "1"]),
+        ShortcutItem(action: "Switch to Analyze tool", keys: ["⌘", "2"]),
+        ShortcutItem(action: "Switch to Convert tool", keys: ["⌘", "3"]),
+        ShortcutItem(action: "Switch to Inspect tool", keys: ["⌘", "4"]),
         ShortcutItem(action: "Run analysis", keys: ["⌘", "R"]),
-        ShortcutItem(action: "Stop active analysis/export", keys: ["⌘", "."])
+        ShortcutItem(action: "Stop active analysis/export", keys: ["⌘", "."]),
+        ShortcutItem(action: "Open help", keys: ["⌘", "⇧", "/"])
     ]
 
     @ViewBuilder
