@@ -180,36 +180,36 @@ enum AdvancedVideoCodec: String, CaseIterable, Identifiable {
 }
 
 enum BurnInCaptionStyle: String, CaseIterable, Identifiable {
-    case broadcastBox = "Broadcast Box"
-    case youtubeClean = "YouTube Clean"
-    case highContrastBlock = "High Contrast Block"
-    case cinematicSubtle = "Cinematic Subtle"
+    case youtube = "YouTube"
+    case netflix = "Netflix"
+    case vintageYellow = "Vintage Yellow"
+    case crunchyroll = "Crunchyroll"
 
     var id: String { rawValue }
 
     var description: String {
         switch self {
-        case .broadcastBox:
-            return "White text with a black rounded box."
-        case .youtubeClean:
-            return "White text with outline and soft shadow."
-        case .highContrastBlock:
-            return "Yellow text with strong black box."
-        case .cinematicSubtle:
-            return "Off-white text with subtle shadow."
+        case .youtube:
+            return "Roboto with soft boxed readability."
+        case .netflix:
+            return "Consolas with dark backdrop and compact spacing."
+        case .vintageYellow:
+            return "Italic warm-yellow subtitle treatment."
+        case .crunchyroll:
+            return "Simple Trebuchet MS styling."
         }
     }
 
     var ffmpegForceStyle: String {
         switch self {
-        case .broadcastBox:
-            return "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H10000000,BorderStyle=4,Outline=1,Shadow=0,MarginV=34,Alignment=2,WrapStyle=1"
-        case .youtubeClean:
-            return "FontName=Helvetica,FontSize=19,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=34,Alignment=2"
-        case .highContrastBlock:
-            return "PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,BackColour=&H10000000,BorderStyle=4,Outline=1,Shadow=0,MarginV=34,Alignment=2,WrapStyle=1"
-        case .cinematicSubtle:
-            return "FontName=Helvetica,FontSize=20,PrimaryColour=&H00F2F2F2,OutlineColour=&H50000000,BorderStyle=1,Outline=1,Shadow=1,MarginV=38,Alignment=2"
+        case .youtube:
+            return "Fontname=Roboto,OutlineColour=&H40000000,BorderStyle=3,MarginV=48,Alignment=2"
+        case .netflix:
+            return "Fontname=Consolas,BackColour=&H80000000,Spacing=0.2,Outline=0,Shadow=0.75,MarginV=48,Alignment=2"
+        case .vintageYellow:
+            return "PrimaryColour=&H03fcff,Italic=1,Spacing=0.8,MarginV=48,Alignment=2"
+        case .crunchyroll:
+            return "Fontname=Trebuchet MS,MarginV=48,Alignment=2"
         }
     }
 }
@@ -1620,7 +1620,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipAdvancedBoostAudio = false
     @Published var clipAdvancedAddFadeInOut = false
     @Published var clipAdvancedBurnInCaptions = false
-    @Published var clipAdvancedCaptionStyle: BurnInCaptionStyle = .broadcastBox {
+    @Published var clipAdvancedCaptionStyle: BurnInCaptionStyle = .youtube {
         didSet {
             UserDefaults.standard.set(clipAdvancedCaptionStyle.rawValue, forKey: DefaultsKey.burnInCaptionStyle)
         }
@@ -5304,10 +5304,28 @@ struct ClipToolView: View {
                             .toggleStyle(.switch)
                             .controlSize(.mini)
 
-                        Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-                            .disabled(!model.whisperTranscriptionAvailable)
+                        HStack(spacing: 10) {
+                            Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
+                                .toggleStyle(.switch)
+                                .controlSize(.mini)
+                                .disabled(!model.whisperTranscriptionAvailable)
+
+                            if model.clipAdvancedBurnInCaptions {
+                                Picker("Caption style", selection: $model.clipAdvancedCaptionStyle) {
+                                    ForEach(BurnInCaptionStyle.allCases) { style in
+                                        Text(style.rawValue).tag(style)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .controlSize(.mini)
+                                .frame(width: 168, alignment: .leading)
+                                .disabled(!model.whisperTranscriptionAvailable)
+                                .help("Caption style for this export.")
+                            }
+
+                            Spacer(minLength: 0)
+                        }
 
                         if !model.whisperTranscriptionAvailable {
                             Text("Whisper binary/model not available in app bundle.")
