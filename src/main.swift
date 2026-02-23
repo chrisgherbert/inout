@@ -6028,21 +6028,25 @@ struct WaveformView: View {
             let timelineHeight = max(1, height - rulerHeight - rulerGap - markerTopGutter - markerBottomGutter)
             let startX = xPosition(for: startSeconds, width: width)
             let endX = xPosition(for: endSeconds, width: width)
-            let selectionMinX = min(startX, endX)
-            let selectionMaxX = max(startX, endX)
-            let visibleSelectionStartX = max(0, selectionMinX)
-            let visibleSelectionEndX = min(width, selectionMaxX)
-            let visibleSelectionWidth = max(0, visibleSelectionEndX - visibleSelectionStartX)
-            let hasVisibleSelection = visibleSelectionWidth > 0.5
+            let selectionStartX = min(startX, endX)
+            let selectionEndX = max(startX, endX)
+            // Draw only the viewport intersection. This keeps geometry stable at high
+            // zoom levels even when the logical clip range spans far outside view.
+            let drawSelectionStartX = max(0, selectionStartX)
+            let drawSelectionEndX = min(width, selectionEndX)
+            let drawSelectionWidth = max(0, drawSelectionEndX - drawSelectionStartX)
+            let hasSelection = drawSelectionWidth > 0.5
             let isStartEdgeActive = isStartEdgeHovered || isStartEdgeDragging
             let isEndEdgeActive = isEndEdgeHovered || isEndEdgeDragging
             let isEdgeActive = isStartEdgeActive || isEndEdgeActive
             let edgeHoverProximity: CGFloat = 22
             let edgeHitWidth: CGFloat = edgeHoverProximity * 2
+            let edgeVisibilityMargin: CGFloat = max(edgeHitWidth, 36)
+            let startEdgeVisible = startX >= -edgeVisibilityMargin && startX <= (width + edgeVisibilityMargin)
+            let endEdgeVisible = endX >= -edgeVisibilityMargin && endX <= (width + edgeVisibilityMargin)
             let selectionOutlineOpacity: Double = isEdgeActive ? 1.0 : (isHovered ? 0.98 : 0.92)
             let selectionOutlineWidth: CGFloat = isEdgeActive ? 3.4 : 3.0
-            let selectionWidth = max(1, abs(endX - startX))
-            let edgeGlowWidth = min(max(selectionWidth * 0.18, 18), 44)
+            let edgeGlowWidth = min(max(drawSelectionWidth * 0.18, 18), 44)
             let startEdgeGlowOpacity: Double = isStartEdgeDragging ? 1.0 : (isStartEdgeHovered ? 0.78 : 0)
             let endEdgeGlowOpacity: Double = isEndEdgeDragging ? 1.0 : (isEndEdgeHovered ? 0.78 : 0)
             let startBoundaryPulseOpacity: Double = highlightedClipBoundary == .start ? 0.95 : 0
@@ -6098,7 +6102,7 @@ struct WaveformView: View {
                     }
                     .allowsHitTesting(false)
 
-                if hasVisibleSelection {
+                if hasSelection {
                     RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                         .fill(
                             LinearGradient(
@@ -6111,8 +6115,8 @@ struct WaveformView: View {
                                 endPoint: .trailing
                             )
                         )
-                        .frame(width: visibleSelectionWidth, height: timelineHeight)
-                        .offset(x: visibleSelectionStartX, y: timelineVerticalOffset)
+                        .frame(width: drawSelectionWidth, height: timelineHeight)
+                        .offset(x: drawSelectionStartX, y: timelineVerticalOffset)
                         .overlay(
                             ZStack {
                                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
@@ -6132,81 +6136,89 @@ struct WaveformView: View {
                                             )
                                     )
                             }
-                                .frame(width: visibleSelectionWidth, height: timelineHeight)
-                                .offset(x: visibleSelectionStartX, y: timelineVerticalOffset)
+                                .frame(width: drawSelectionWidth, height: timelineHeight)
+                                .offset(x: drawSelectionStartX, y: timelineVerticalOffset)
                                 .allowsHitTesting(false)
                         )
 
                     RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                         .fill(Color.white.opacity(selectionFlashOpacity))
-                        .frame(width: visibleSelectionWidth, height: timelineHeight)
-                        .offset(x: visibleSelectionStartX, y: timelineVerticalOffset)
+                        .frame(width: drawSelectionWidth, height: timelineHeight)
+                        .offset(x: drawSelectionStartX, y: timelineVerticalOffset)
                         .allowsHitTesting(false)
                 }
 
-                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                systemAccent.opacity(startEdgeGlowOpacity),
-                                .clear
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                if startEdgeVisible {
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    systemAccent.opacity(startEdgeGlowOpacity),
+                                    .clear
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .frame(width: edgeGlowWidth, height: timelineHeight)
-                    .offset(x: startX, y: timelineVerticalOffset)
-                    .animation(.easeOut(duration: 0.16), value: isStartEdgeActive)
-                    .allowsHitTesting(false)
+                        .frame(width: edgeGlowWidth, height: timelineHeight)
+                        .offset(x: startX, y: timelineVerticalOffset)
+                        .animation(.easeOut(duration: 0.16), value: isStartEdgeActive)
+                        .allowsHitTesting(false)
+                }
 
-                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                .clear,
-                                systemAccent.opacity(endEdgeGlowOpacity)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                if endEdgeVisible {
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .clear,
+                                    systemAccent.opacity(endEdgeGlowOpacity)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .frame(width: edgeGlowWidth, height: timelineHeight)
-                    .offset(x: max(startX, endX - edgeGlowWidth), y: timelineVerticalOffset)
-                    .animation(.easeOut(duration: 0.16), value: isEndEdgeActive)
-                    .allowsHitTesting(false)
+                        .frame(width: edgeGlowWidth, height: timelineHeight)
+                        .offset(x: max(startX, endX - edgeGlowWidth), y: timelineVerticalOffset)
+                        .animation(.easeOut(duration: 0.16), value: isEndEdgeActive)
+                        .allowsHitTesting(false)
+                }
 
-                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                systemAccent.opacity(startBoundaryPulseOpacity),
-                                .clear
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                if startEdgeVisible {
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    systemAccent.opacity(startBoundaryPulseOpacity),
+                                    .clear
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .frame(width: edgeGlowWidth, height: timelineHeight)
-                    .offset(x: startX, y: timelineVerticalOffset)
-                    .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
-                    .allowsHitTesting(false)
+                        .frame(width: edgeGlowWidth, height: timelineHeight)
+                        .offset(x: startX, y: timelineVerticalOffset)
+                        .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
+                        .allowsHitTesting(false)
+                }
 
-                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                .clear,
-                                systemAccent.opacity(endBoundaryPulseOpacity)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                if endEdgeVisible {
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .clear,
+                                    systemAccent.opacity(endBoundaryPulseOpacity)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .frame(width: edgeGlowWidth, height: timelineHeight)
-                    .offset(x: max(startX, endX - edgeGlowWidth), y: timelineVerticalOffset)
-                    .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
-                    .allowsHitTesting(false)
+                        .frame(width: edgeGlowWidth, height: timelineHeight)
+                        .offset(x: max(startX, endX - edgeGlowWidth), y: timelineVerticalOffset)
+                        .animation(.easeOut(duration: 0.16), value: highlightedClipBoundary)
+                        .allowsHitTesting(false)
+                }
 
                 WaveformRasterLayerView(
                     sourceSessionID: sourceSessionID,
@@ -6230,77 +6242,83 @@ struct WaveformView: View {
                 .frame(maxWidth: .infinity, minHeight: timelineHeight, maxHeight: timelineHeight, alignment: .center)
                 .offset(y: timelineVerticalOffset)
 
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: edgeHitWidth, height: timelineHeight)
-                    .contentShape(Rectangle())
-                    .offset(x: startX - (edgeHitWidth / 2), y: timelineVerticalOffset)
-                    .highPriorityGesture(
-                        DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
-                            .onChanged { value in
-                                if startEdgeDragAnchor == nil {
-                                    startEdgeDragAnchor = startSeconds
+                if startEdgeVisible {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: edgeHitWidth, height: timelineHeight)
+                        .contentShape(Rectangle())
+                        .offset(x: startX - (edgeHitWidth / 2), y: timelineVerticalOffset)
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
+                                .onChanged { value in
+                                    if startEdgeDragAnchor == nil {
+                                        startEdgeDragAnchor = startSeconds
+                                    }
+                                    isStartEdgeDragging = true
+                                    isEndEdgeHovered = false
+                                    NSCursor.closedHand.set()
+                                    let anchor = startEdgeDragAnchor ?? startSeconds
+                                    let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
+                                    let newValue = min(max(0, anchor + deltaSeconds), endSeconds)
+                                    onSetStart(newValue)
                                 }
-                                isStartEdgeDragging = true
-                                isEndEdgeHovered = false
-                                NSCursor.closedHand.set()
-                                let anchor = startEdgeDragAnchor ?? startSeconds
-                                let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
-                                let newValue = min(max(0, anchor + deltaSeconds), endSeconds)
-                                onSetStart(newValue)
-                            }
-                            .onEnded { _ in
-                                startEdgeDragAnchor = nil
-                                isStartEdgeDragging = false
-                                if isStartEdgeHovered || isEndEdgeHovered {
-                                    NSCursor.resizeLeftRight.set()
-                                } else {
-                                    NSCursor.arrow.set()
+                                .onEnded { _ in
+                                    startEdgeDragAnchor = nil
+                                    isStartEdgeDragging = false
+                                    if isStartEdgeHovered || isEndEdgeHovered {
+                                        NSCursor.resizeLeftRight.set()
+                                    } else {
+                                        NSCursor.arrow.set()
+                                    }
                                 }
-                            }
-                    )
+                        )
+                }
 
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: edgeHitWidth, height: timelineHeight)
-                    .contentShape(Rectangle())
-                    .offset(x: endX - (edgeHitWidth / 2), y: timelineVerticalOffset)
-                    .highPriorityGesture(
-                        DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
-                            .onChanged { value in
-                                if endEdgeDragAnchor == nil {
-                                    endEdgeDragAnchor = endSeconds
+                if endEdgeVisible {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: edgeHitWidth, height: timelineHeight)
+                        .contentShape(Rectangle())
+                        .offset(x: endX - (edgeHitWidth / 2), y: timelineVerticalOffset)
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 0, coordinateSpace: .named("waveformTimeline"))
+                                .onChanged { value in
+                                    if endEdgeDragAnchor == nil {
+                                        endEdgeDragAnchor = endSeconds
+                                    }
+                                    isEndEdgeDragging = true
+                                    isStartEdgeHovered = false
+                                    NSCursor.closedHand.set()
+                                    let anchor = endEdgeDragAnchor ?? endSeconds
+                                    let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
+                                    let newValue = max(min(totalDurationSeconds, anchor + deltaSeconds), startSeconds)
+                                    onSetEnd(newValue)
                                 }
-                                isEndEdgeDragging = true
-                                isStartEdgeHovered = false
-                                NSCursor.closedHand.set()
-                                let anchor = endEdgeDragAnchor ?? endSeconds
-                                let deltaSeconds = Double(value.translation.width / max(width, 1)) * visibleDuration
-                                let newValue = max(min(totalDurationSeconds, anchor + deltaSeconds), startSeconds)
-                                onSetEnd(newValue)
-                            }
-                            .onEnded { _ in
-                                endEdgeDragAnchor = nil
-                                isEndEdgeDragging = false
-                                if isStartEdgeHovered || isEndEdgeHovered {
-                                    NSCursor.resizeLeftRight.set()
-                                } else {
-                                    NSCursor.arrow.set()
+                                .onEnded { _ in
+                                    endEdgeDragAnchor = nil
+                                    isEndEdgeDragging = false
+                                    if isStartEdgeHovered || isEndEdgeHovered {
+                                        NSCursor.resizeLeftRight.set()
+                                    } else {
+                                        NSCursor.arrow.set()
+                                    }
                                 }
-                            }
-                    )
+                        )
+                }
 
-                if hasVisibleSelection {
+                if hasSelection {
                     RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                         .stroke(Color.white.opacity(0.95), lineWidth: 2.0)
-                        .frame(width: visibleSelectionWidth)
+                        .frame(width: drawSelectionWidth)
                         .frame(height: max(1, timelineHeight - 8))
-                        .offset(x: visibleSelectionStartX, y: timelineVerticalOffset + 4)
+                        .offset(x: drawSelectionStartX, y: timelineVerticalOffset + 4)
                         .shadow(color: Color.accentColor.opacity(selectionFlashGlowOpacity), radius: 14)
                         .opacity(selectionFlashGlowOpacity)
                         .allowsHitTesting(false)
                 }
             }
+            .frame(width: width, height: height, alignment: .topLeading)
+            .clipped()
             .coordinateSpace(name: "waveformTimeline")
             .overlay(
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
@@ -6858,18 +6876,18 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             nsView.waveformLayer.minificationFilter = .linear
         }
 
-        // Snap to source-image pixel boundaries to avoid shimmer/distortion when overlays animate.
         guard let activeImage = image else {
             nsView.waveformLayer.contents = nil
             CATransaction.commit()
             return
         }
-        let imageWidth = max(1, activeImage.width)
-        let startPixel = min(max(0, Int((rawStartNorm * Double(imageWidth)).rounded())), imageWidth - 1)
-        let endPixel = min(max(startPixel + 1, Int((rawEndNorm * Double(imageWidth)).rounded())), imageWidth)
-        let startNorm = Double(startPixel) / Double(imageWidth)
-        let widthNorm = max(1.0 / Double(imageWidth), Double(endPixel - startPixel) / Double(imageWidth))
-        let newContentsRect = CGRect(x: startNorm, y: 0, width: widthNorm, height: 1)
+        _ = activeImage
+        let newContentsRect = CGRect(
+            x: rawStartNorm,
+            y: 0,
+            width: max(0.000001, rawEndNorm - rawStartNorm),
+            height: 1
+        )
 
         if !newContentsRect.equalTo(context.coordinator.lastAppliedContentsRect) {
             let oldRect = context.coordinator.lastAppliedContentsRect
