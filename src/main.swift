@@ -5884,7 +5884,7 @@ struct WaveformView: View {
     @State private var selectionFlashOpacity: Double = 0
     @State private var selectionFlashGlowOpacity: Double = 0
     @State private var isResizeCursorActive = false
-    @State private var hoveredMarkerID: UUID?
+    @State private var markerSnapLockSeconds: Double?
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -5995,6 +5995,27 @@ struct WaveformView: View {
         return labeled
     }
 
+    private func markerNearX(_ x: CGFloat, width: CGFloat) -> Double? {
+        let markerHitTolerance: CGFloat = 12
+        let visibleMarkers = captureMarkers.filter { marker in
+            marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
+        }
+        var best: (seconds: Double, distance: CGFloat)?
+        for marker in visibleMarkers {
+            let markerX = snapToPixel(xPosition(for: marker.seconds, width: width))
+            let distance = abs(markerX - x)
+            guard distance <= markerHitTolerance else { continue }
+            if let current = best {
+                if distance < current.distance {
+                    best = (marker.seconds, distance)
+                }
+            } else {
+                best = (marker.seconds, distance)
+            }
+        }
+        return best?.seconds
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
@@ -6018,9 +6039,6 @@ struct WaveformView: View {
             let isEdgeActive = isStartEdgeActive || isEndEdgeActive
             let edgeHoverProximity: CGFloat = 22
             let edgeHitWidth: CGFloat = edgeHoverProximity * 2
-            let markerHeadHoverSize: CGFloat = 12
-            let markerTapWidth: CGFloat = 16
-            let markerTapHeight: CGFloat = markerTopGutter + 12
             let selectionOutlineOpacity: Double = isEdgeActive ? 1.0 : (isHovered ? 0.98 : 0.92)
             let selectionOutlineWidth: CGFloat = isEdgeActive ? 3.4 : 3.0
             let selectionWidth = max(1, abs(endX - startX))
@@ -6029,9 +6047,6 @@ struct WaveformView: View {
             let endEdgeGlowOpacity: Double = isEndEdgeDragging ? 1.0 : (isEndEdgeHovered ? 0.78 : 0)
             let startBoundaryPulseOpacity: Double = highlightedClipBoundary == .start ? 0.95 : 0
             let endBoundaryPulseOpacity: Double = highlightedClipBoundary == .end ? 0.95 : 0
-            let visibleMarkers = captureMarkers.filter { marker in
-                marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
-            }
             let majorStep = rulerMajorStep(for: visibleDuration)
             let minorDivisions = max(1, rulerMinorDivisions(for: majorStep))
             let minorStep = majorStep / Double(minorDivisions)
@@ -6207,63 +6222,13 @@ struct WaveformView: View {
                     playheadJumpAnimationToken: playheadJumpAnimationToken,
                     isPlayheadCaptureFlashing: isPlayheadCaptureFlashing,
                     captureMarkers: captureMarkers,
-                    highlightedMarkerID: highlightedMarkerID
+                    highlightedMarkerID: highlightedMarkerID,
+                    onMarkerSeek: { seconds in
+                        onSeek(seconds, true)
+                    }
                 )
                 .frame(maxWidth: .infinity, minHeight: timelineHeight, maxHeight: timelineHeight, alignment: .center)
                 .offset(y: timelineVerticalOffset)
-
-                ForEach(visibleMarkers) { marker in
-                    let isMarkerHovered = hoveredMarkerID == marker.id
-                    let markerBaseX = snapToPixel(xPosition(for: marker.seconds, width: width))
-                    ZStack(alignment: .top) {
-                        // Subtle hover: light wash + tiny lift, no strong glow/ring.
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: isMarkerHovered
-                                        ? [
-                                            Color.orange.opacity(0.18),
-                                            Color.orange.opacity(0.08),
-                                            Color.clear
-                                        ]
-                                        : [Color.clear, Color.clear, Color.clear],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .frame(width: markerTapWidth + 4, height: markerTapHeight + 6)
-                            .blur(radius: 0)
-
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(isMarkerHovered ? Color.orange.opacity(0.12) : Color.clear)
-                            .frame(width: markerHeadHoverSize, height: markerHeadHoverSize)
-                    }
-                    .frame(width: markerTapWidth, height: markerTapHeight, alignment: .top)
-                    .contentShape(Rectangle())
-                    .offset(
-                        x: markerBaseX - (markerTapWidth / 2),
-                        y: rulerHeight + rulerGap + (isMarkerHovered ? -1.0 : 0)
-                    )
-                    .animation(.easeOut(duration: 0.12), value: isMarkerHovered)
-                        .onHover { hovering in
-                            if hovering {
-                                hoveredMarkerID = marker.id
-                                NSCursor.pointingHand.set()
-                            } else if hoveredMarkerID == marker.id {
-                                hoveredMarkerID = nil
-                                if !isStartEdgeDragging && !isEndEdgeDragging && !isResizeCursorActive {
-                                    NSCursor.arrow.set()
-                                }
-                            }
-                        }
-                    .highPriorityGesture(
-                        DragGesture(minimumDistance: 0)
-                            .onEnded { _ in
-                                hoveredMarkerID = marker.id
-                                onSeek(marker.seconds, true)
-                            }
-                    )
-                }
 
                 Rectangle()
                     .fill(Color.clear)
@@ -6348,7 +6313,6 @@ struct WaveformView: View {
                 if !hovering && !isStartEdgeDragging && !isEndEdgeDragging {
                     isStartEdgeHovered = false
                     isEndEdgeHovered = false
-                    hoveredMarkerID = nil
                     isResizeCursorActive = false
                     NSCursor.arrow.set()
                 }
@@ -6426,12 +6390,27 @@ struct WaveformView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        let shouldSnapToMarker = !didStartPlayheadDrag
+                        let isFirstDragEvent = !didStartPlayheadDrag
+                        let shouldSnapToMarker = isFirstDragEvent
                         if !didStartPlayheadDrag {
                             didStartPlayheadDrag = true
                             onPlayheadDragStateChanged(true)
                         }
+                        if let snapLock = markerSnapLockSeconds {
+                            // Keep click-to-snap stable across micro movement/noise.
+                            if abs(value.translation.width) <= 3 && abs(value.translation.height) <= 3 {
+                                onSeek(snapLock, true)
+                                return
+                            }
+                            markerSnapLockSeconds = nil
+                        }
                         onPlayheadDragEdgePan(value.location.x, width)
+                        if isFirstDragEvent,
+                           let markerSeconds = markerNearX(value.location.x, width: width) {
+                            markerSnapLockSeconds = markerSeconds
+                            onSeek(markerSeconds, true)
+                            return
+                        }
                         onSeek(
                             timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds),
                             shouldSnapToMarker
@@ -6439,6 +6418,7 @@ struct WaveformView: View {
                     }
                     .onEnded { _ in
                         didStartPlayheadDrag = false
+                        markerSnapLockSeconds = nil
                         onPlayheadDragStateChanged(false)
                     }
             , including: .gesture)
@@ -6461,10 +6441,27 @@ struct WaveformView: View {
 }
 
 private final class WaveformRasterHostView: NSView {
+    struct MarkerHotspot {
+        let id: UUID
+        let seconds: Double
+        let x: CGFloat
+    }
+
     let waveformClipLayer = CALayer()
     let waveformLayer = CALayer()
     let markerContainerLayer = CALayer()
     let playheadLayer = CALayer()
+    var onMarkerSeek: ((Double) -> Void)?
+    var markerHotspots: [MarkerHotspot] = []
+    var markerLayersByID: [UUID: CALayer] = [:]
+    private var trackingAreaRef: NSTrackingArea?
+    private var markerCursorActive = false
+    private let markerHitTolerance: CGFloat = 12
+    private var hoveredMarkerID: UUID? {
+        didSet {
+            applyMarkerHoverState(animated: true)
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -6506,6 +6503,116 @@ private final class WaveformRasterHostView: NSView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef {
+            removeTrackingArea(trackingAreaRef)
+        }
+        let options: NSTrackingArea.Options = [
+            .activeInKeyWindow,
+            .inVisibleRect,
+            .mouseMoved,
+            .mouseEnteredAndExited
+        ]
+        let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingAreaRef = area
+    }
+
+    private func markerNear(point: NSPoint) -> MarkerHotspot? {
+        // Shared hover/click hit test so both behaviors match exactly.
+        markerHotspots.first(where: { abs($0.x - point.x) <= markerHitTolerance })
+    }
+
+    func applyMarkerHoverState(animated: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(!animated)
+        for (id, layer) in markerLayersByID {
+            let isHighlighted = (layer.value(forKey: "isHighlighted") as? Bool) ?? false
+            let isHovered = id == hoveredMarkerID
+            let targetShadowOpacity: Float = {
+                if isHighlighted && isHovered { return 0.86 }
+                if isHighlighted { return 0.6 }
+                if isHovered { return 0.38 }
+                return 0.0
+            }()
+            let targetShadowRadius: CGFloat = {
+                if isHighlighted && isHovered { return 6.2 }
+                if isHighlighted { return 4.0 }
+                if isHovered { return 3.0 }
+                return 0.0
+            }()
+            let targetScale: CGFloat = {
+                if isHighlighted && isHovered { return 1.12 }
+                if isHighlighted { return 1.0 }
+                if isHovered { return 1.08 }
+                return 1.0
+            }()
+
+            if animated {
+                let shadowAnim = CABasicAnimation(keyPath: "shadowOpacity")
+                shadowAnim.fromValue = layer.presentation()?.shadowOpacity ?? layer.shadowOpacity
+                shadowAnim.toValue = targetShadowOpacity
+                shadowAnim.duration = 0.12
+                shadowAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                shadowAnim.isRemovedOnCompletion = true
+                layer.add(shadowAnim, forKey: "hoverShadowOpacity")
+
+                let radiusAnim = CABasicAnimation(keyPath: "shadowRadius")
+                radiusAnim.fromValue = layer.presentation()?.shadowRadius ?? layer.shadowRadius
+                radiusAnim.toValue = targetShadowRadius
+                radiusAnim.duration = 0.12
+                radiusAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                radiusAnim.isRemovedOnCompletion = true
+                layer.add(radiusAnim, forKey: "hoverShadowRadius")
+
+                let scaleAnim = CABasicAnimation(keyPath: "transform.scale")
+                scaleAnim.fromValue = (layer.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat) ?? 1.0
+                scaleAnim.toValue = targetScale
+                scaleAnim.duration = 0.12
+                scaleAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                scaleAnim.isRemovedOnCompletion = true
+                layer.add(scaleAnim, forKey: "hoverScale")
+            }
+
+            layer.shadowOpacity = targetShadowOpacity
+            layer.shadowRadius = targetShadowRadius
+            layer.transform = CATransform3DMakeScale(targetScale, targetScale, 1)
+        }
+        CATransaction.commit()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let marker = markerNear(point: point) {
+            hoveredMarkerID = marker.id
+            if !markerCursorActive {
+                NSCursor.pointingHand.set()
+                markerCursorActive = true
+            }
+        } else if markerCursorActive {
+            hoveredMarkerID = nil
+            NSCursor.arrow.set()
+            markerCursorActive = false
+        }
+        super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hoveredMarkerID = nil
+        if markerCursorActive {
+            NSCursor.arrow.set()
+            markerCursorActive = false
+        }
+        super.mouseExited(with: event)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // Marker click-to-seek is handled in the SwiftUI gesture path so
+        // hover/click use one resolver and avoid double-seek race conditions.
+        super.mouseDown(with: event)
     }
 
     override func layout() {
@@ -6690,6 +6797,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let isPlayheadCaptureFlashing: Bool
     let captureMarkers: [CaptureTimelineMarker]
     let highlightedMarkerID: UUID?
+    let onMarkerSeek: (Double) -> Void
 
     static func == (lhs: WaveformRasterLayerView, rhs: WaveformRasterLayerView) -> Bool {
         lhs.sourceSessionID == rhs.sourceSessionID &&
@@ -6713,10 +6821,13 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     }
 
     func makeNSView(context: Context) -> WaveformRasterHostView {
-        WaveformRasterHostView()
+        let view = WaveformRasterHostView()
+        view.onMarkerSeek = onMarkerSeek
+        return view
     }
 
     func updateNSView(_ nsView: WaveformRasterHostView, context: Context) {
+        nsView.onMarkerSeek = onMarkerSeek
         context.coordinator.setZoomRenderBuckets(renderBuckets)
 
         let didRebuildImage = context.coordinator.rebuildImageIfNeeded(
@@ -6762,10 +6873,9 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
         if !newContentsRect.equalTo(context.coordinator.lastAppliedContentsRect) {
             let oldRect = context.coordinator.lastAppliedContentsRect
-            var markerScrollShiftX: CGFloat = 0
             if oldRect != .null {
                 let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
-                // Recenter jumps: animate viewport movement so it doesn't appear to snap.
+                // Smooth large viewport jumps (keyboard marker nav / fast thumb pan).
                 if deltaX > 0.03 {
                     let anim = CABasicAnimation(keyPath: "contentsRect")
                     anim.fromValue = oldRect
@@ -6774,22 +6884,26 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                     anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     anim.isRemovedOnCompletion = true
                     nsView.waveformLayer.add(anim, forKey: "viewportRecenter")
-
-                    let normWidth = max(0.000001, newContentsRect.width)
-                    markerScrollShiftX = CGFloat((newContentsRect.origin.x - oldRect.origin.x) / normWidth) * nsView.bounds.width
                 }
             }
             nsView.waveformLayer.contentsRect = newContentsRect
             context.coordinator.lastAppliedContentsRect = newContentsRect
 
-            if markerScrollShiftX != 0 {
-                let markerPan = CABasicAnimation(keyPath: "sublayerTransform.translation.x")
-                markerPan.fromValue = markerScrollShiftX
-                markerPan.toValue = 0
-                markerPan.duration = 0.22
-                markerPan.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                markerPan.isRemovedOnCompletion = true
-                nsView.markerContainerLayer.add(markerPan, forKey: "viewportRecenterMarkers")
+            if oldRect != .null {
+                let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
+                if deltaX > 0.03 {
+                    let normWidth = max(0.000001, newContentsRect.width)
+                    let markerScrollShiftX = CGFloat((newContentsRect.origin.x - oldRect.origin.x) / normWidth) * nsView.bounds.width
+                    if markerScrollShiftX != 0 {
+                        let markerPan = CABasicAnimation(keyPath: "sublayerTransform.translation.x")
+                        markerPan.fromValue = markerScrollShiftX
+                        markerPan.toValue = 0
+                        markerPan.duration = 0.22
+                        markerPan.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                        markerPan.isRemovedOnCompletion = true
+                        nsView.markerContainerLayer.add(markerPan, forKey: "viewportRecenterMarkers")
+                    }
+                }
             }
         }
 
@@ -6864,13 +6978,18 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         let visibleMarkers = captureMarkers.enumerated().filter { _, marker in
             marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
         }
+        var markerHotspots: [WaveformRasterHostView.MarkerHotspot] = []
+        var markerLayersByID: [UUID: CALayer] = [:]
         markerContainer.sublayers = visibleMarkers.map { _, marker in
             let markerX = snapToPixel(xPosition(for: marker.seconds))
+            markerHotspots.append(.init(id: marker.id, seconds: marker.seconds, x: markerX))
             let isHighlighted = marker.id == highlightedMarkerID
             let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
 
             let pin = CALayer()
-            pin.frame = CGRect(x: markerX - (isHighlighted ? 4.5 : 4.0), y: -7, width: isHighlighted ? 9 : 8, height: nsView.bounds.height + 11)
+            // Keep pinhead visually above timeline while leaving most of it inside hit-testable bounds.
+            pin.frame = CGRect(x: markerX - (isHighlighted ? 4.5 : 4.0), y: -2, width: isHighlighted ? 9 : 8, height: nsView.bounds.height + 6)
+            pin.setValue(isHighlighted, forKey: "isHighlighted")
 
             let head = CALayer()
             head.backgroundColor = pinColor.cgColor
@@ -6887,8 +7006,12 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             pin.shadowColor = NSColor.systemOrange.cgColor
             pin.shadowOpacity = isHighlighted ? 0.6 : 0
             pin.shadowRadius = isHighlighted ? 4 : 0
+            markerLayersByID[marker.id] = pin
             return pin
         }
+        nsView.markerHotspots = markerHotspots
+        nsView.markerLayersByID = markerLayersByID
+        nsView.applyMarkerHoverState(animated: false)
 
         if highlightedMarkerID != context.coordinator.lastHighlightedMarkerID,
            let highlightedMarkerID,
