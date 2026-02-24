@@ -287,6 +287,7 @@ private struct TimelineMiniMapView: View {
 struct ClipSelectionPanel: View {
     @ObservedObject var model: WorkspaceViewModel
     @Environment(\.undoManager) private var undoManager
+    @State private var isTimecodeRowHovered = false
     let isCompactLayout: Bool
     let reduceTransparency: Bool
     let isWaveformLoading: Bool
@@ -373,9 +374,7 @@ struct ClipSelectionPanel: View {
                         Text("In: \(formatSeconds(model.clipStartSeconds))")
                             .font(.caption.monospacedDigit())
                         Spacer()
-                        Button {
-                            onCopyPlayheadTimecode()
-                        } label: {
+                        HStack(spacing: 6) {
                             Text("Playhead: \(formatSeconds(playheadSeconds))")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.secondary)
@@ -385,12 +384,22 @@ struct ClipSelectionPanel: View {
                                     Capsule(style: .continuous)
                                         .fill(Color.accentColor.opacity(playheadCopyFlash ? 0.20 : 0.0))
                                 )
-                        }
-                        .buttonStyle(.plain)
-                        .help("Click to copy playhead timecode")
-                        .contextMenu {
-                            Button("Copy Timecode") {
-                                onCopyPlayheadTimecode()
+
+                            if isTimecodeRowHovered {
+                                Button {
+                                    onCopyPlayheadTimecode()
+                                } label: {
+                                    Image(systemName: "doc.on.doc")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Copy playhead timecode")
+                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                                .contextMenu {
+                                    Button("Copy Timecode") {
+                                        onCopyPlayheadTimecode()
+                                    }
+                                }
                             }
                         }
                         Spacer()
@@ -399,6 +408,11 @@ struct ClipSelectionPanel: View {
                     }
                     .foregroundStyle(.secondary)
                     .padding(.top, -7)
+                    .onHover { hovering in
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            isTimecodeRowHovered = hovering
+                        }
+                    }
                 }
 
                 ViewThatFits(in: .horizontal) {
