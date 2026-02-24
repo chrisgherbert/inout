@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-struct ClipTimelineControlsPanel: View {
+struct ClipTimelineControlsPanel<Content: View>: View {
     let reduceTransparency: Bool
     let allowedTimelineZoomLevels: [Double]
     let timelineZoomIndex: Int
@@ -15,6 +15,39 @@ struct ClipTimelineControlsPanel: View {
     let clipEndSeconds: Double
     let captureMarkers: [CaptureTimelineMarker]
     let onViewportStartChange: (Double) -> Void
+    let content: Content
+
+    init(
+        reduceTransparency: Bool,
+        allowedTimelineZoomLevels: [Double],
+        timelineZoomIndex: Int,
+        setTimelineZoomIndex: @escaping (Int) -> Void,
+        timelineZoom: Double,
+        totalDurationSeconds: Double,
+        visibleStartSeconds: Double,
+        visibleEndSeconds: Double,
+        playheadSeconds: Double,
+        clipStartSeconds: Double,
+        clipEndSeconds: Double,
+        captureMarkers: [CaptureTimelineMarker],
+        onViewportStartChange: @escaping (Double) -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.reduceTransparency = reduceTransparency
+        self.allowedTimelineZoomLevels = allowedTimelineZoomLevels
+        self.timelineZoomIndex = timelineZoomIndex
+        self.setTimelineZoomIndex = setTimelineZoomIndex
+        self.timelineZoom = timelineZoom
+        self.totalDurationSeconds = totalDurationSeconds
+        self.visibleStartSeconds = visibleStartSeconds
+        self.visibleEndSeconds = visibleEndSeconds
+        self.playheadSeconds = playheadSeconds
+        self.clipStartSeconds = clipStartSeconds
+        self.clipEndSeconds = clipEndSeconds
+        self.captureMarkers = captureMarkers
+        self.onViewportStartChange = onViewportStartChange
+        self.content = content()
+    }
 
     var body: some View {
         GroupBox("Timeline Controls") {
@@ -56,6 +89,8 @@ struct ClipTimelineControlsPanel: View {
 
                 TimelineMiniMapRulerView(totalDurationSeconds: totalDurationSeconds)
                     .frame(height: 14)
+
+                content
             }
             .padding(10)
             .background(
@@ -282,7 +317,7 @@ struct ClipSelectionPanel: View {
     let onCaptureFrame: () -> Void
 
     var body: some View {
-        GroupBox("Selection") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 if !isCompactLayout && isWaveformLoading {
                     HStack {

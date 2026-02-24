@@ -2900,6 +2900,8 @@ struct ClipToolView: View {
         ) { newStart in
             viewportStartSeconds = clampedViewportStart(newStart)
             isViewportManuallyControlled = true
+        } content: {
+            selectionSection
         }
     }
 
@@ -2988,7 +2990,6 @@ struct ClipToolView: View {
             if model.sourceURL != nil {
                 clipPlayerSection
                 timelineControlsSection
-                selectionSection
                 outputSection
             } else {
                 EmptyToolView(title: "Clip", subtitle: "Choose source media to create a new clip from a selected range.")
