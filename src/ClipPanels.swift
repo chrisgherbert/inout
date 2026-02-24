@@ -683,7 +683,7 @@ struct ClipOutputPanel: View {
                         HStack {
                             Text("Video bitrate")
                                 .frame(width: 120, alignment: .leading)
-                            Slider(value: $model.clipVideoBitrateMbps, in: 2...20, step: 0.5)
+                            Slider(value: $model.clipVideoBitrateMbps, in: 0.5...20, step: 0.5)
                                 .controlSize(.small)
                             Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
                                 .font(.caption.monospacedDigit())

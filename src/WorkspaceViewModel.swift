@@ -845,7 +845,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func applySuggestedClipBitrateFromSource() {
         let step = 0.5
-        let sliderMin = 2.0
+        let sliderMin = 0.5
         let sliderMax = 20.0
 
         let suggested: Double
@@ -877,7 +877,7 @@ final class WorkspaceViewModel: ObservableObject {
             suggested = 2.5
         }
 
-        clipVideoBitrateMbps = min(20.0, max(2.0, suggested))
+        clipVideoBitrateMbps = min(20.0, max(0.5, suggested))
     }
 
     private func preferredAudioTrackIndex(for asset: AVAsset) -> Int? {
@@ -1785,7 +1785,7 @@ final class WorkspaceViewModel: ObservableObject {
                 return
             }
 
-            let bitrateKbps = max(1000, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
+            let bitrateKbps = max(500, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
             let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
             // CRITICAL REGRESSION GUARD:
             // DO NOT REORDER THIS SEEK SEQUENCE.
