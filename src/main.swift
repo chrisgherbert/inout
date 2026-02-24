@@ -2323,6 +2323,17 @@ struct ClipToolView: View {
         updateViewportForPlayhead(shouldFollow: false)
     }
 
+    private func seekPlayerAnimatedFromKeyboard(to time: Double) {
+        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let didChange = abs(clamped - playheadSeconds) > (1.0 / 240.0)
+        seekPlayerAndFocusViewport(to: clamped, focusViewport: true)
+        if didChange {
+            springAnimateVisualPlayhead(to: clamped)
+        } else {
+            syncVisualPlayheadImmediately(clamped)
+        }
+    }
+
     private func seekPlayerAndFocusViewport(to time: Double, focusViewport: Bool = true) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
@@ -2656,14 +2667,26 @@ struct ClipToolView: View {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
             guard clipWindow?.isKeyWindow == true else { return event }
-            if NSApp.keyWindow?.firstResponder is NSTextView {
-                return event
-            }
 
             let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
             let rawChars = event.characters ?? ""
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let hasDisallowedModifier = flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
+
+            if flags.contains(.command) && flags.contains(.option) && !flags.contains(.control) && !flags.contains(.shift) {
+                if chars == "s",
+                   model.sourceURL != nil,
+                   model.hasVideoTrack,
+                   !model.isAnalyzing,
+                   !model.isExporting {
+                    model.captureFrame(at: playheadSeconds)
+                    return nil
+                }
+            }
+
+            if NSApp.keyWindow?.firstResponder is NSTextView {
+                return event
+            }
 
             if flags.isDisjoint(with: [.command, .option, .control, .shift]) {
                 if rawChars == " " {
@@ -2686,11 +2709,11 @@ struct ClipToolView: View {
 
             if flags.contains(.command) && !flags.contains(.option) && !flags.contains(.control) {
                 if event.specialKey == .leftArrow {
-                    seekPlayer(to: 0)
+                    seekPlayerAnimatedFromKeyboard(to: 0)
                     return nil
                 }
                 if event.specialKey == .rightArrow {
-                    seekPlayer(to: totalDurationSeconds)
+                    seekPlayerAnimatedFromKeyboard(to: totalDurationSeconds)
                     return nil
                 }
                 if chars == "=" || chars == "+" {
@@ -2718,13 +2741,26 @@ struct ClipToolView: View {
                 }
             }
 
+            if flags.contains(.option) && flags.contains(.shift) && !flags.contains(.command) && !flags.contains(.control) {
+                let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+                let hundredFrames = 100.0 / fps
+                if event.specialKey == .leftArrow {
+                    seekPlayerAnimatedFromKeyboard(to: playheadSeconds - hundredFrames)
+                    return nil
+                }
+                if event.specialKey == .rightArrow {
+                    seekPlayerAnimatedFromKeyboard(to: playheadSeconds + hundredFrames)
+                    return nil
+                }
+            }
+
             if !hasDisallowedModifier && !flags.contains(.shift) {
                 if event.specialKey == .home {
-                    seekPlayer(to: 0)
+                    seekPlayerAnimatedFromKeyboard(to: 0)
                     return nil
                 }
                 if event.specialKey == .end {
-                    seekPlayer(to: totalDurationSeconds)
+                    seekPlayerAnimatedFromKeyboard(to: totalDurationSeconds)
                     return nil
                 }
                 let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
@@ -2780,12 +2816,12 @@ struct ClipToolView: View {
             let tenFrames = 10.0 / fps
 
             if event.specialKey == .leftArrow {
-                seekPlayer(to: playheadSeconds - tenFrames)
+                seekPlayerAnimatedFromKeyboard(to: playheadSeconds - tenFrames)
                 return nil
             }
 
             if event.specialKey == .rightArrow {
-                seekPlayer(to: playheadSeconds + tenFrames)
+                seekPlayerAnimatedFromKeyboard(to: playheadSeconds + tenFrames)
                 return nil
             }
 
