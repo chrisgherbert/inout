@@ -1169,27 +1169,97 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func exportTranscriptTXTFromInspect() {
+    private func transcriptPlainText() -> String {
+        transcriptSegments
+            .map { $0.formatted }
+            .joined(separator: "\n")
+    }
+
+    private func srtTimestamp(_ seconds: Double) -> String {
+        let safe = max(0, seconds.isFinite ? seconds : 0)
+        let hours = Int(safe / 3600)
+        let minutes = Int((safe.truncatingRemainder(dividingBy: 3600)) / 60)
+        let wholeSeconds = Int(safe.truncatingRemainder(dividingBy: 60))
+        let millis = Int((safe - floor(safe)) * 1000.0)
+        return String(format: "%02d:%02d:%02d,%03d", hours, minutes, wholeSeconds, millis)
+    }
+
+    private func transcriptSRT() -> String {
+        transcriptSegments.enumerated().map { index, segment in
+            let text = segment.text.replacingOccurrences(of: "\r\n", with: "\n")
+            return """
+            \(index + 1)
+            \(srtTimestamp(segment.start)) --> \(srtTimestamp(segment.end))
+            \(text)
+            """
+        }
+        .joined(separator: "\n\n") + "\n"
+    }
+
+    func exportTranscriptFromInspect() {
         guard let sourceURL else { return }
         guard !transcriptSegments.isEmpty else { return }
 
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText]
+        panel.allowedFileTypes = ["txt", "srt"]
+        panel.allowsOtherFileTypes = false
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + "_transcript.txt"
-        panel.message = "Export transcript as text"
+        panel.message = "Export transcript as TXT or SRT"
         panel.prompt = "Export"
+
+        let formatLabel = NSTextField(labelWithString: "Format:")
+        formatLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+
+        let formatPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        formatPopup.addItems(withTitles: ["Plain Text (.txt)", "SubRip (.srt)"])
+        formatPopup.selectItem(at: 0)
+        formatPopup.controlSize = .small
+        formatPopup.frame.size.width = 150
+
+        let rowStack = NSStackView(views: [formatLabel, formatPopup])
+        rowStack.orientation = .horizontal
+        rowStack.alignment = .firstBaseline
+        rowStack.spacing = 8
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let accessoryContainer = NSView(frame: NSRect(x: 0, y: 0, width: 270, height: 30))
+        accessoryContainer.addSubview(rowStack)
+        NSLayoutConstraint.activate([
+            rowStack.leadingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor, constant: 8),
+            rowStack.trailingAnchor.constraint(lessThanOrEqualTo: accessoryContainer.trailingAnchor, constant: -8),
+            rowStack.centerYAnchor.constraint(equalTo: accessoryContainer.centerYAnchor)
+        ])
+        panel.accessoryView = accessoryContainer
 
         guard panel.runModal() == .OK, let destination = panel.url else { return }
 
-        let content = transcriptSegments
-            .map { "\($0.formatted)" }
-            .joined(separator: "\n")
+        let selectedExtension = formatPopup.indexOfSelectedItem == 1 ? "srt" : "txt"
+        let resolvedDestination: URL = {
+            if destination.pathExtension.lowercased() == selectedExtension {
+                return destination
+            }
+            return destination.deletingPathExtension().appendingPathExtension(selectedExtension)
+        }()
+
+        let ext = selectedExtension
+        let content: String
+        switch ext {
+        case "srt":
+            content = transcriptSRT()
+        case "txt", "":
+            content = transcriptPlainText()
+        default:
+            uiMessage = "Transcript export failed: Unsupported format \(ext)"
+            lastActivityState = .failed
+            notifyCompletion("Transcript Export Failed", message: uiMessage)
+            return
+        }
 
         do {
-            try content.write(to: destination, atomically: true, encoding: .utf8)
-            outputURL = destination
-            uiMessage = "Transcript exported to \(destination.lastPathComponent)"
+            try content.write(to: resolvedDestination, atomically: true, encoding: .utf8)
+            outputURL = resolvedDestination
+            uiMessage = "Transcript exported to \(resolvedDestination.lastPathComponent)"
             lastActivityState = .success
             if let soundName = completionSound.soundName,
                let sound = NSSound(named: soundName) {

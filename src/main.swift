@@ -1880,7 +1880,7 @@ struct ToolContentView: View {
                     whisperTranscriptionAvailable: model.whisperTranscriptionAvailable,
                     hasAudioTrack: model.hasAudioTrack,
                     generateTranscript: { model.generateTranscriptFromInspect() },
-                    exportTranscriptTXT: { model.exportTranscriptTXTFromInspect() },
+                    exportTranscript: { model.exportTranscriptFromInspect() },
                     showActivityConsole: model.showActivityConsole,
                     activityConsoleText: model.activityConsoleText,
                     toggleActivityConsole: { model.showActivityConsole.toggle() },
@@ -4911,7 +4911,7 @@ struct InspectToolView: View {
     let whisperTranscriptionAvailable: Bool
     let hasAudioTrack: Bool
     let generateTranscript: () -> Void
-    let exportTranscriptTXT: () -> Void
+    let exportTranscript: () -> Void
     let showActivityConsole: Bool
     let activityConsoleText: String
     let toggleActivityConsole: () -> Void
@@ -5092,8 +5092,8 @@ struct InspectToolView: View {
                                     .controlSize(.small)
                                 }
 
-                                Button("Export TXT") {
-                                    exportTranscriptTXT()
+                                Button("Export…") {
+                                    exportTranscript()
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
