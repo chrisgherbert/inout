@@ -309,8 +309,7 @@ struct ClipSelectionPanel: View {
     let onCaptureFrame: () -> Void
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
                 if !isCompactLayout && isWaveformLoading {
                     HStack {
                         ProgressView()
@@ -506,21 +505,7 @@ struct ClipSelectionPanel: View {
                     }
                 }
             }
-            .padding(10)
-            .background(
-                adaptiveContainerFill(
-                    material: .thinMaterial,
-                    fallback: Color(nsColor: .controlBackgroundColor),
-                    reduceTransparency: reduceTransparency
-                ),
-                in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
-            )
             .onHover(perform: onTimelineHoverChanged)
-        }
     }
 }
 
@@ -531,6 +516,7 @@ struct ClipOutputPanel: View {
     let fastClipFormats: [ClipFormat]
     let advancedClipFormats: [ClipFormat]
     let onStartExport: (_ quickExport: Bool) -> Void
+    let onEnqueueExport: (_ quickExport: Bool) -> Void
 
     var body: some View {
         GroupBox("Output") {
@@ -804,18 +790,27 @@ struct ClipOutputPanel: View {
                     }
                     Spacer(minLength: 8)
                     Button {
-                        onStartExport(NSEvent.modifierFlags.contains(.option))
+                        let quickExport = NSEvent.modifierFlags.contains(.option)
+                        if model.isActivityRunning {
+                            onEnqueueExport(quickExport)
+                        } else {
+                            onStartExport(quickExport)
+                        }
                     } label: {
                         Label(
-                            model.isExporting
-                                ? "Exporting…"
+                            model.isActivityRunning
+                                ? "Queue Clip"
                                 : (isOptionKeyPressed ? "Quick Export Clip" : "Export Clip"),
-                            systemImage: "film.stack"
+                            systemImage: model.isActivityRunning ? "text.badge.plus" : "film.stack"
                         )
                     }
                     .buttonStyle(.borderedProminent)
-                    .help("Export Clip. Option-click for Quick Export (no save dialog).")
-                    .disabled(!model.canExportClip)
+                    .help(
+                        model.isActivityRunning
+                        ? "Queue this clip export in the current window."
+                        : "Export Clip. Option-click for Quick Export (no save dialog)."
+                    )
+                    .disabled(!model.canRequestClipExport)
                 }
             }
             .padding(10)

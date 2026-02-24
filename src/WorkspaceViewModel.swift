@@ -5,6 +5,30 @@ import UniformTypeIdentifiers
 import UserNotifications
 import Foundation
 
+enum ClipExportQueueStatus: String, Equatable {
+    case queued
+    case running
+    case completed
+    case failed
+    case cancelled
+}
+
+struct QueuedClipExport: Identifiable, Equatable {
+    let id: UUID
+    let createdAt: Date
+    let fileName: String
+    let summary: String
+    var status: ClipExportQueueStatus
+    var message: String?
+    var outputURL: URL? = nil
+}
+
+enum QueuedJobKind: Equatable {
+    case clip(skipSaveDialog: Bool)
+    case audioExport
+    case analysis
+}
+
 @MainActor
 final class WorkspaceViewModel: ObservableObject {
     private enum DefaultsKey {
@@ -36,7 +60,12 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var isGeneratingTranscript = false
 
     @Published var isAnalyzing = false {
-        didSet { updateDockProgressIndicator() }
+        didSet {
+            updateDockProgressIndicator()
+            if oldValue && !isAnalyzing {
+                startNextQueuedJobIfPossible()
+            }
+        }
     }
     @Published var analyzeProgress = 0.0 {
         didSet { updateDockProgressIndicator() }
@@ -59,13 +88,20 @@ final class WorkspaceViewModel: ObservableObject {
     }
     @Published var exportAudioBitrateKbps = 128
     @Published var isExporting = false {
-        didSet { updateDockProgressIndicator() }
+        didSet {
+            updateDockProgressIndicator()
+            if oldValue && !isExporting {
+                startNextQueuedJobIfPossible()
+            }
+        }
     }
     @Published var exportProgress = 0.0 {
         didSet { updateDockProgressIndicator() }
     }
     @Published var exportStatusText = "No export yet"
     @Published var outputURL: URL?
+    @Published private(set) var queuedJobs: [QueuedClipExport] = []
+    @Published private(set) var activeQueuedJobID: UUID?
     @Published private(set) var captureTimelineMarkers: [CaptureTimelineMarker] = []
     @Published var highlightedCaptureTimelineMarkerID: UUID?
     @Published var highlightedClipBoundary: ClipBoundaryHighlight?
@@ -217,10 +253,47 @@ final class WorkspaceViewModel: ObservableObject {
     private let cancelFlag = CancellationFlag()
     private var activeExportSession: AVAssetExportSession?
     private var activeProcess: Process?
+    private var activeClipExportRunToken: UUID?
     private var willTerminateObserver: NSObjectProtocol?
     private var exportCancellationRequested = false
     private var notificationAuthRequested = false
     private var originalModeDefaultBitrateMbps: Double = 4.0
+    private struct QueuedClipExportConfig {
+        let clipStartSeconds: Double
+        let clipEndSeconds: Double
+        let clipEncodingMode: ClipEncodingMode
+        let selectedClipFormat: ClipFormat
+        let clipAudioOnlyFormat: ClipAudioOnlyFormat
+        let clipAdvancedVideoCodec: AdvancedVideoCodec
+        let clipCompatibleSpeedPreset: CompatibleSpeedPreset
+        let clipCompatibleMaxResolution: CompatibleMaxResolution
+        let clipVideoBitrateMbps: Double
+        let clipAudioBitrateKbps: Int
+        let clipAdvancedBoostAudio: Bool
+        let clipAdvancedBoostAmount: AdvancedBoostAmount
+        let clipAdvancedAddFadeInOut: Bool
+        let clipAdvancedBurnInCaptions: Bool
+        let clipAdvancedCaptionStyle: BurnInCaptionStyle
+        let clipAudioOnlyBoostAudio: Bool
+        let clipAudioOnlyAddFadeInOut: Bool
+        let destinationURL: URL?
+    }
+    private struct QueuedAudioExportConfig {
+        let selectedAudioFormat: AudioFormat
+        let exportAudioBitrateKbps: Int
+        let destinationURL: URL?
+    }
+    private struct QueuedAnalysisConfig {
+        let analyzeBlackFrames: Bool
+        let analyzeAudioSilence: Bool
+        let analyzeProfanity: Bool
+        let silenceMinDurationSeconds: Double
+        let profanityWordsText: String
+    }
+    private var queuedJobKinds: [UUID: QueuedJobKind] = [:]
+    private var queuedClipExportConfigs: [UUID: QueuedClipExportConfig] = [:]
+    private var queuedAudioExportConfigs: [UUID: QueuedAudioExportConfig] = [:]
+    private var queuedAnalysisConfigs: [UUID: QueuedAnalysisConfig] = [:]
     private var waveformCache: [String: [Double]] = [:]
     private var waveformCacheOrder: [String] = []
     private let maxWaveformCacheEntries = 6
@@ -346,6 +419,10 @@ final class WorkspaceViewModel: ObservableObject {
         sourceURL != nil && !isAnalyzing && !isExporting && !isGeneratingTranscript && (effectiveAnalyzeBlackFrames || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
     }
 
+    var canRequestAnalyze: Bool {
+        sourceURL != nil && !isGeneratingTranscript && (effectiveAnalyzeBlackFrames || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
+    }
+
     var hasVideoTrack: Bool {
         guard let sourceInfo else { return false }
         if let bitrate = sourceInfo.videoBitrateBps, bitrate > 0 { return true }
@@ -420,6 +497,10 @@ final class WorkspaceViewModel: ObservableObject {
         sourceURL != nil && !isAnalyzing && !isExporting && !isGeneratingTranscript
     }
 
+    var canRequestAudioExport: Bool {
+        sourceURL != nil && !isGeneratingTranscript
+    }
+
     var canGenerateTranscript: Bool {
         sourceURL != nil
             && hasAudioTrack
@@ -440,6 +521,20 @@ final class WorkspaceViewModel: ObservableObject {
         clipEndSeconds > clipStartSeconds &&
         !isAnalyzing &&
         !isExporting
+    }
+
+    var canQueueClipExport: Bool {
+        sourceURL != nil &&
+        sourceDurationSeconds > 0 &&
+        clipEndSeconds > clipStartSeconds &&
+        !isGeneratingTranscript
+    }
+
+    var canRequestClipExport: Bool {
+        sourceURL != nil &&
+        sourceDurationSeconds > 0 &&
+        clipEndSeconds > clipStartSeconds &&
+        !isGeneratingTranscript
     }
 
     var clipDurationSeconds: Double {
@@ -518,6 +613,300 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    var hasQueuedJobs: Bool {
+        !queuedJobs.isEmpty
+    }
+
+    private func beginDirectJobTracking(fileName: String, summary: String) -> UUID {
+        let id = UUID()
+        let item = QueuedClipExport(
+            id: id,
+            createdAt: Date(),
+            fileName: fileName,
+            summary: summary,
+            status: .running,
+            message: nil
+        )
+        queuedJobs.append(item)
+        activeQueuedJobID = id
+        return id
+    }
+
+    private func defaultAudioExportFileName(for sourceURL: URL) -> String {
+        if selectedAudioFormat == .mp3 {
+            return sourceURL.deletingPathExtension().lastPathComponent + ".mp3"
+        }
+        return sourceURL.deletingPathExtension().lastPathComponent + ".m4a"
+    }
+
+    private func promptAudioExportDestination(for sourceURL: URL) -> URL? {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = defaultAudioExportFileName(for: sourceURL)
+        panel.allowedContentTypes = selectedAudioFormat == .mp3 ? [.mp3] : [.mpeg4Audio]
+        panel.canCreateDirectories = true
+        panel.title = "Export Audio"
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    private func defaultClipExportFileName(for sourceURL: URL) -> String {
+        let outputExtension = clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.fileExtension : selectedClipFormat.fileExtension
+        let defaultBaseName: String
+        if clipEncodingMode == .compressed {
+            let codecToken = selectedClipFormat == .webm ? "vp9" : (clipAdvancedVideoCodec == .hevc ? "hevc" : "h264")
+            let resolutionToken: String
+            if clipCompatibleMaxResolution == .original {
+                resolutionToken = sourceInfo?.resolution ?? "original"
+            } else {
+                resolutionToken = clipCompatibleMaxResolution.rawValue
+            }
+            defaultBaseName = advancedClipFilenameBase(
+                sourceName: sourceURL.deletingPathExtension().lastPathComponent,
+                startSeconds: clipStartSeconds,
+                endSeconds: clipEndSeconds,
+                codec: codecToken,
+                resolution: resolutionToken
+            )
+        } else {
+            defaultBaseName = sourceURL.deletingPathExtension().lastPathComponent +
+                "_clip_" + formatSeconds(clipStartSeconds).replacingOccurrences(of: ":", with: "-") +
+                "_to_" + formatSeconds(clipEndSeconds).replacingOccurrences(of: ":", with: "-")
+        }
+
+        return URL(fileURLWithPath: defaultBaseName).deletingPathExtension().lastPathComponent + "." + outputExtension
+    }
+
+    private func promptClipExportDestination(for sourceURL: URL, defaultName: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = defaultName
+        panel.allowedContentTypes = [clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.contentType : selectedClipFormat.contentType]
+        panel.canCreateDirectories = true
+        panel.title = "Export Clip"
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    func enqueueCurrentClipExport(skipSaveDialog: Bool = false) {
+        guard canQueueClipExport, let sourceURL else { return }
+        let destinationURL: URL?
+        if skipSaveDialog {
+            destinationURL = nil
+        } else {
+            let defaultName = defaultClipExportFileName(for: sourceURL)
+            guard let chosenURL = promptClipExportDestination(for: sourceURL, defaultName: defaultName) else {
+                uiMessage = "Save cancelled."
+                return
+            }
+            destinationURL = chosenURL
+        }
+        let config = queuedClipExportConfigSnapshot(destinationURL: destinationURL)
+        let modeLabel = config.clipEncodingMode.rawValue
+        let formatLabel = config.clipEncodingMode == .audioOnly ? config.clipAudioOnlyFormat.rawValue : config.selectedClipFormat.rawValue
+        let summary = "\(skipSaveDialog ? "Quick " : "")\(modeLabel) • \(formatLabel) • \(formatSeconds(config.clipStartSeconds)) → \(formatSeconds(config.clipEndSeconds))"
+        let item = QueuedClipExport(
+            id: UUID(),
+            createdAt: Date(),
+            fileName: sourceURL.lastPathComponent,
+            summary: summary,
+            status: .queued,
+            message: nil
+        )
+        queuedJobKinds[item.id] = .clip(skipSaveDialog: skipSaveDialog)
+        queuedClipExportConfigs[item.id] = config
+        queuedJobs.append(item)
+        uiMessage = "Queued job (\(queuedJobs.count) pending)"
+        startNextQueuedJobIfPossible()
+    }
+
+    func enqueueCurrentAudioExport() {
+        guard canRequestAudioExport, let sourceURL else { return }
+        guard let destinationURL = promptAudioExportDestination(for: sourceURL) else {
+            uiMessage = "Save cancelled."
+            return
+        }
+        let item = QueuedClipExport(
+            id: UUID(),
+            createdAt: Date(),
+            fileName: sourceURL.lastPathComponent,
+            summary: "Audio Export • \(selectedAudioFormat.rawValue) • \(exportAudioBitrateKbps) kbps",
+            status: .queued,
+            message: nil
+        )
+        queuedJobKinds[item.id] = .audioExport
+        queuedAudioExportConfigs[item.id] = QueuedAudioExportConfig(
+            selectedAudioFormat: selectedAudioFormat,
+            exportAudioBitrateKbps: exportAudioBitrateKbps,
+            destinationURL: destinationURL
+        )
+        queuedJobs.append(item)
+        uiMessage = "Queued job (\(queuedJobs.count) pending)"
+        startNextQueuedJobIfPossible()
+    }
+
+    func enqueueCurrentAnalysis() {
+        guard canRequestAnalyze, let sourceURL else { return }
+        let item = QueuedClipExport(
+            id: UUID(),
+            createdAt: Date(),
+            fileName: sourceURL.lastPathComponent,
+            summary: "Analysis",
+            status: .queued,
+            message: nil
+        )
+        queuedJobKinds[item.id] = .analysis
+        queuedAnalysisConfigs[item.id] = QueuedAnalysisConfig(
+            analyzeBlackFrames: analyzeBlackFrames,
+            analyzeAudioSilence: analyzeAudioSilence,
+            analyzeProfanity: analyzeProfanity,
+            silenceMinDurationSeconds: silenceMinDurationSeconds,
+            profanityWordsText: profanityWordsText
+        )
+        queuedJobs.append(item)
+        uiMessage = "Queued job (\(queuedJobs.count) pending)"
+        startNextQueuedJobIfPossible()
+    }
+
+    func removeQueuedJob(_ id: UUID) {
+        if activeQueuedJobID == id {
+            stopCurrentActivity()
+            return
+        }
+        queuedJobs.removeAll { $0.id == id }
+        queuedJobKinds[id] = nil
+        queuedClipExportConfigs[id] = nil
+        queuedAudioExportConfigs[id] = nil
+        queuedAnalysisConfigs[id] = nil
+    }
+
+    func retryQueuedJob(_ id: UUID) {
+        guard let index = queuedJobs.firstIndex(where: { $0.id == id }) else { return }
+        queuedJobs[index].status = .queued
+        queuedJobs[index].message = nil
+        queuedJobs[index].outputURL = nil
+        startNextQueuedJobIfPossible()
+    }
+
+    func clearCompletedQueuedJobs() {
+        let removableIDs = Set(
+            queuedJobs
+                .filter { $0.status == .completed || $0.status == .failed || $0.status == .cancelled }
+                .map(\.id)
+        )
+        queuedJobs.removeAll { removableIDs.contains($0.id) }
+        for id in removableIDs {
+            queuedJobKinds[id] = nil
+            queuedClipExportConfigs[id] = nil
+            queuedAudioExportConfigs[id] = nil
+            queuedAnalysisConfigs[id] = nil
+        }
+    }
+
+    private func queuedClipExportConfigSnapshot(destinationURL: URL? = nil) -> QueuedClipExportConfig {
+        QueuedClipExportConfig(
+            clipStartSeconds: clipStartSeconds,
+            clipEndSeconds: clipEndSeconds,
+            clipEncodingMode: clipEncodingMode,
+            selectedClipFormat: selectedClipFormat,
+            clipAudioOnlyFormat: clipAudioOnlyFormat,
+            clipAdvancedVideoCodec: clipAdvancedVideoCodec,
+            clipCompatibleSpeedPreset: clipCompatibleSpeedPreset,
+            clipCompatibleMaxResolution: clipCompatibleMaxResolution,
+            clipVideoBitrateMbps: clipVideoBitrateMbps,
+            clipAudioBitrateKbps: clipAudioBitrateKbps,
+            clipAdvancedBoostAudio: clipAdvancedBoostAudio,
+            clipAdvancedBoostAmount: clipAdvancedBoostAmount,
+            clipAdvancedAddFadeInOut: clipAdvancedAddFadeInOut,
+            clipAdvancedBurnInCaptions: clipAdvancedBurnInCaptions,
+            clipAdvancedCaptionStyle: clipAdvancedCaptionStyle,
+            clipAudioOnlyBoostAudio: clipAudioOnlyBoostAudio,
+            clipAudioOnlyAddFadeInOut: clipAudioOnlyAddFadeInOut,
+            destinationURL: destinationURL
+        )
+    }
+
+    private func applyQueuedClipExportConfig(_ config: QueuedClipExportConfig) {
+        clipStartSeconds = config.clipStartSeconds
+        clipEndSeconds = config.clipEndSeconds
+        clipEncodingMode = config.clipEncodingMode
+        selectedClipFormat = config.selectedClipFormat
+        clipAudioOnlyFormat = config.clipAudioOnlyFormat
+        clipAdvancedVideoCodec = config.clipAdvancedVideoCodec
+        clipCompatibleSpeedPreset = config.clipCompatibleSpeedPreset
+        clipCompatibleMaxResolution = config.clipCompatibleMaxResolution
+        clipVideoBitrateMbps = config.clipVideoBitrateMbps
+        clipAudioBitrateKbps = config.clipAudioBitrateKbps
+        clipAdvancedBoostAudio = config.clipAdvancedBoostAudio
+        clipAdvancedBoostAmount = config.clipAdvancedBoostAmount
+        clipAdvancedAddFadeInOut = config.clipAdvancedAddFadeInOut
+        clipAdvancedBurnInCaptions = config.clipAdvancedBurnInCaptions
+        clipAdvancedCaptionStyle = config.clipAdvancedCaptionStyle
+        clipAudioOnlyBoostAudio = config.clipAudioOnlyBoostAudio
+        clipAudioOnlyAddFadeInOut = config.clipAudioOnlyAddFadeInOut
+        syncClipTextFields()
+    }
+
+    private func clearQueuedJobs() {
+        queuedJobs.removeAll()
+        queuedJobKinds.removeAll()
+        queuedClipExportConfigs.removeAll()
+        queuedAudioExportConfigs.removeAll()
+        queuedAnalysisConfigs.removeAll()
+        activeQueuedJobID = nil
+    }
+
+    private func startNextQueuedJobIfPossible() {
+        guard !isAnalyzing, !isExporting, !isGeneratingTranscript, activeQueuedJobID == nil else { return }
+        guard let next = queuedJobs.first(where: { $0.status == .queued }),
+              let kind = queuedJobKinds[next.id] else { return }
+        if let index = queuedJobs.firstIndex(where: { $0.id == next.id }) {
+            queuedJobs[index].status = .running
+            queuedJobs[index].message = nil
+        }
+        activeQueuedJobID = next.id
+        switch kind {
+        case .clip(let skipSaveDialog):
+            guard let config = queuedClipExportConfigs[next.id] else {
+                completeQueuedJobIfNeeded(next.id, status: .failed, message: "Missing clip export config.")
+                return
+            }
+            applyQueuedClipExportConfig(config)
+            startClipExport(skipSaveDialog: skipSaveDialog, queueJobID: next.id, preselectedDestination: config.destinationURL)
+        case .audioExport:
+            guard let config = queuedAudioExportConfigs[next.id] else {
+                completeQueuedJobIfNeeded(next.id, status: .failed, message: "Missing audio export config.")
+                return
+            }
+            selectedAudioFormat = config.selectedAudioFormat
+            exportAudioBitrateKbps = config.exportAudioBitrateKbps
+            startExport(queueJobID: next.id, preselectedDestination: config.destinationURL)
+        case .analysis:
+            guard let config = queuedAnalysisConfigs[next.id] else {
+                completeQueuedJobIfNeeded(next.id, status: .failed, message: "Missing analysis config.")
+                return
+            }
+            analyzeBlackFrames = config.analyzeBlackFrames
+            analyzeAudioSilence = config.analyzeAudioSilence
+            analyzeProfanity = config.analyzeProfanity
+            silenceMinDurationSeconds = config.silenceMinDurationSeconds
+            profanityWordsText = config.profanityWordsText
+            startAnalysis(queueJobID: next.id)
+        }
+    }
+
+    private func completeQueuedJobIfNeeded(_ queueJobID: UUID?, status: ClipExportQueueStatus, message: String? = nil, outputURL: URL? = nil) {
+        let resolvedJobID = queueJobID ?? activeQueuedJobID
+        guard let resolvedJobID else { return }
+        if let index = queuedJobs.firstIndex(where: { $0.id == resolvedJobID }) {
+            queuedJobs[index].status = status
+            queuedJobs[index].message = message
+            queuedJobs[index].outputURL = outputURL
+        }
+        activeQueuedJobID = nil
+        DispatchQueue.main.async { [weak self] in
+            self?.startNextQueuedJobIfPossible()
+        }
+    }
+
     func chooseSource() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -543,6 +932,7 @@ final class WorkspaceViewModel: ObservableObject {
 
         waveformCache.removeAll(keepingCapacity: false)
         waveformCacheOrder.removeAll(keepingCapacity: false)
+        clearQueuedJobs()
 
         sourceURL = url
         sourceSessionID = UUID()
@@ -592,6 +982,7 @@ final class WorkspaceViewModel: ObservableObject {
         isGeneratingTranscript = false
         waveformCache.removeAll(keepingCapacity: false)
         waveformCacheOrder.removeAll(keepingCapacity: false)
+        clearQueuedJobs()
         outputURL = nil
         captureTimelineMarkers = []
         highlightedCaptureTimelineMarkerID = nil
@@ -663,6 +1054,11 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
         guard !isAnalyzing && !isExporting && !isGeneratingTranscript else { return }
+
+        _ = beginDirectJobTracking(
+            fileName: url.lastPathComponent,
+            summary: "Transcript"
+        )
 
         isGeneratingTranscript = true
         isAnalyzing = true
@@ -814,6 +1210,11 @@ final class WorkspaceViewModel: ObservableObject {
         clipEndText = formatSeconds(clipEndSeconds)
     }
 
+    private func syncClipTextFields() {
+        clipStartText = formatSeconds(clipStartSeconds)
+        clipEndText = formatSeconds(clipEndSeconds)
+    }
+
     private func setClipRangeWithUndo(
         start: Double,
         end: Double,
@@ -948,8 +1349,15 @@ final class WorkspaceViewModel: ObservableObject {
         return true
     }
 
-    func startAnalysis() {
-        guard canAnalyze, let url = sourceURL else { return }
+    func startAnalysis(queueJobID: UUID? = nil) {
+        if queueJobID == nil && (isAnalyzing || isExporting || isGeneratingTranscript) {
+            enqueueCurrentAnalysis()
+            return
+        }
+        guard canRequestAnalyze, let url = sourceURL else {
+            completeQueuedJobIfNeeded(queueJobID, status: .failed, message: "Unable to start analysis.")
+            return
+        }
 
         let requestedBlack = effectiveAnalyzeBlackFrames
         let requestedSilence = effectiveAnalyzeAudioSilence
@@ -1005,7 +1413,15 @@ final class WorkspaceViewModel: ObservableObject {
             analyzeStatusText = "Using cached analysis results."
             uiMessage = analysis?.summary ?? "Using cached analysis results."
             lastActivityState = .success
+            completeQueuedJobIfNeeded(queueJobID, status: .completed, message: uiMessage)
             return
+        }
+
+        if queueJobID == nil {
+            _ = beginDirectJobTracking(
+                fileName: url.lastPathComponent,
+                summary: "Analysis"
+            )
         }
 
         isAnalyzing = true
@@ -1113,6 +1529,14 @@ final class WorkspaceViewModel: ObservableObject {
                 cachedProfanityHits: cachedProfanityHits,
                 profanityWordsSnapshot: requestedProfanityWordsSnapshot
             )
+            switch result {
+            case .success:
+                self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.uiMessage)
+            case .failure(.cancelled):
+                self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.uiMessage)
+            case .failure:
+                self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.uiMessage)
+            }
         }
     }
 
@@ -1300,25 +1724,30 @@ final class WorkspaceViewModel: ObservableObject {
                 sound.play()
             }
             notifyCompletion("Transcript Complete", message: transcriptStatusText)
+            completeQueuedJobIfNeeded(nil, status: .completed, message: transcriptStatusText)
         case .failure(.cancelled):
             transcriptStatusText = "Transcript generation stopped."
             analyzeStatusText = transcriptStatusText
             uiMessage = transcriptStatusText
             lastActivityState = .cancelled
             notifyCompletion("Transcript Stopped", message: transcriptStatusText)
+            completeQueuedJobIfNeeded(nil, status: .cancelled, message: transcriptStatusText)
         case .failure(.failed(let reason)):
             transcriptStatusText = "Transcript failed: \(reason)"
             analyzeStatusText = "Transcript generation failed"
             uiMessage = transcriptStatusText
             lastActivityState = .failed
             notifyCompletion("Transcript Failed", message: transcriptStatusText)
+            completeQueuedJobIfNeeded(nil, status: .failed, message: transcriptStatusText)
         }
 
     }
 
     private func stopExport() {
         guard isExporting else { return }
+        let queueJobID = activeQueuedJobID
         exportCancellationRequested = true
+        activeClipExportRunToken = nil
         activeExportSession?.cancelExport()
         if let process = activeProcess, process.isRunning {
             process.terminate()
@@ -1332,23 +1761,36 @@ final class WorkspaceViewModel: ObservableObject {
         exportStatusText = "Export cancelled"
         uiMessage = exportStatusText
         lastActivityState = .cancelled
+        completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: "Stopped by user.")
     }
 
-    func startExport() {
-        guard canExport, let sourceURL else { return }
-
-        let panel = NSSavePanel()
-        if selectedAudioFormat == .mp3 {
-            panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + ".mp3"
-            panel.allowedContentTypes = [.mp3]
-        } else {
-            panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + ".m4a"
-            panel.allowedContentTypes = [.mpeg4Audio]
+    func startExport(queueJobID: UUID? = nil, preselectedDestination: URL? = nil) {
+        if queueJobID == nil && (isAnalyzing || isExporting || isGeneratingTranscript) {
+            enqueueCurrentAudioExport()
+            return
         }
-        panel.canCreateDirectories = true
-        panel.title = "Export Audio"
+        guard canRequestAudioExport, let sourceURL else {
+            completeQueuedJobIfNeeded(queueJobID, status: .failed, message: "Unable to start audio export.")
+            return
+        }
 
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let destination: URL
+        if let preselectedDestination {
+            destination = preselectedDestination
+        } else {
+            guard let chosenDestination = promptAudioExportDestination(for: sourceURL) else {
+                completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: "Save cancelled.")
+                return
+            }
+            destination = chosenDestination
+        }
+
+        if queueJobID == nil {
+            _ = beginDirectJobTracking(
+                fileName: sourceURL.lastPathComponent,
+                summary: "Audio Export • \(selectedAudioFormat.rawValue) • \(exportAudioBitrateKbps) kbps"
+            )
+        }
 
         isExporting = true
         lastActivityState = .running
@@ -1373,6 +1815,7 @@ final class WorkspaceViewModel: ObservableObject {
                         self.exportStatusText = "Export failed: Unable to create export session"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     }
                     return
                 }
@@ -1412,6 +1855,7 @@ final class WorkspaceViewModel: ObservableObject {
                         self.exportStatusText = "Export cancelled"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                         return
                     }
 
@@ -1421,18 +1865,22 @@ final class WorkspaceViewModel: ObservableObject {
                         self.exportStatusText = "Export complete: \(destination.lastPathComponent)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .success
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.exportStatusText, outputURL: destination)
                     case .failed:
                         self.exportStatusText = "Export failed: \(session.error?.localizedDescription ?? "Unknown error")"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     case .cancelled:
                         self.exportStatusText = "Export cancelled"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                     default:
                         self.exportStatusText = "Export ended with status: \(session.status.rawValue)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     }
                 }
                 return
@@ -1473,6 +1921,7 @@ final class WorkspaceViewModel: ObservableObject {
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .cancelled
                     self.notifyCompletion("MP3 Export Stopped", message: self.exportStatusText)
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                     return
                 }
                 if let mp3Error {
@@ -1480,81 +1929,87 @@ final class WorkspaceViewModel: ObservableObject {
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
                     self.notifyCompletion("MP3 Export Failed", message: self.exportStatusText)
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                 } else {
                     self.outputURL = destination
                     self.exportStatusText = "Export complete: \(destination.lastPathComponent)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .success
                     self.notifyCompletion("MP3 Export Complete", message: self.exportStatusText)
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.exportStatusText, outputURL: destination)
                 }
             }
         }
     }
 
-    func startClipExport(skipSaveDialog: Bool = false) {
-        guard canExportClip, let sourceURL else { return }
+    func startClipExport(skipSaveDialog: Bool = false, queueJobID: UUID? = nil, preselectedDestination: URL? = nil) {
+        func finalizeQueued(_ status: ClipExportQueueStatus, _ message: String? = nil) {
+            completeQueuedJobIfNeeded(queueJobID, status: status, message: message)
+        }
+
+        if queueJobID == nil && (isAnalyzing || isExporting || isGeneratingTranscript) {
+            enqueueCurrentClipExport(skipSaveDialog: skipSaveDialog)
+            return
+        }
+
+        guard canRequestClipExport, let sourceURL else {
+            finalizeQueued(.failed, "Unable to start export.")
+            return
+        }
         if !hasVideoTrack && clipEncodingMode != .audioOnly {
             clipEncodingMode = .audioOnly
         }
 
         clampClipRange()
-        guard clipDurationSeconds > 0 else { return }
-
-        let outputExtension = clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.fileExtension : selectedClipFormat.fileExtension
-        let defaultBaseName: String
-        if clipEncodingMode == .compressed {
-            let codecToken = selectedClipFormat == .webm ? "vp9" : (clipAdvancedVideoCodec == .hevc ? "hevc" : "h264")
-            let resolutionToken: String
-            if clipCompatibleMaxResolution == .original {
-                resolutionToken = sourceInfo?.resolution ?? "original"
-            } else {
-                resolutionToken = clipCompatibleMaxResolution.rawValue
-            }
-            defaultBaseName = advancedClipFilenameBase(
-                sourceName: sourceURL.deletingPathExtension().lastPathComponent,
-                startSeconds: clipStartSeconds,
-                endSeconds: clipEndSeconds,
-                codec: codecToken,
-                resolution: resolutionToken
-            )
-        } else {
-            defaultBaseName = sourceURL.deletingPathExtension().lastPathComponent +
-                "_clip_" + formatSeconds(clipStartSeconds).replacingOccurrences(of: ":", with: "-") +
-                "_to_" + formatSeconds(clipEndSeconds).replacingOccurrences(of: ":", with: "-")
+        guard clipDurationSeconds > 0 else {
+            finalizeQueued(.failed, "Invalid clip duration.")
+            return
         }
 
-        let defaultName = URL(fileURLWithPath: defaultBaseName).deletingPathExtension().lastPathComponent + "." + outputExtension
+        let defaultName = defaultClipExportFileName(for: sourceURL)
 
         let destination: URL
-        if skipSaveDialog {
+        if let preselectedDestination {
+            destination = preselectedDestination
+            try? FileManager.default.removeItem(at: destination)
+        } else if skipSaveDialog {
             let sourceDirectory = sourceURL.deletingLastPathComponent()
             destination = uniqueUnderscoreIndexedURL(in: sourceDirectory, preferredFileName: defaultName)
         } else {
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = defaultName
-            panel.allowedContentTypes = [clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.contentType : selectedClipFormat.contentType]
-            panel.canCreateDirectories = true
-            panel.title = "Export Clip"
-
-            guard panel.runModal() == .OK, let chosenDestination = panel.url else { return }
+            guard let chosenDestination = promptClipExportDestination(for: sourceURL, defaultName: defaultName) else {
+                finalizeQueued(.cancelled, "Save cancelled.")
+                return
+            }
             destination = chosenDestination
             try? FileManager.default.removeItem(at: destination)
         }
 
-        if skipSaveDialog {
+        if queueJobID == nil {
+            let modeLabel = clipEncodingMode.rawValue
+            let formatLabel = clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.rawValue : selectedClipFormat.rawValue
+            let summary = "\(skipSaveDialog ? "Quick " : "")\(modeLabel) • \(formatLabel) • \(formatSeconds(clipStartSeconds)) → \(formatSeconds(clipEndSeconds))"
+            _ = beginDirectJobTracking(
+                fileName: sourceURL.lastPathComponent,
+                summary: summary
+            )
+        }
+
+        if skipSaveDialog && queueJobID == nil {
             DispatchQueue.main.async { [weak self] in
                 self?.quickExportFlashToken &+= 1
             }
             playQuickExportSnipSound()
         }
 
+        let exportRunToken = UUID()
+        activeClipExportRunToken = exportRunToken
         isExporting = true
         lastActivityState = .running
         exportCancellationRequested = false
         exportProgress = 0
         clearActivityConsole()
         appendActivityConsole(skipSaveDialog ? "Quick clip export started" : "Clip export started", source: "export")
-        exportStatusText = skipSaveDialog ? "Quick exporting clip…" : "Exporting clip…"
+        exportStatusText = queueJobID != nil ? "Running queued clip export…" : (skipSaveDialog ? "Quick exporting clip…" : "Exporting clip…")
         outputURL = nil
 
         if clipEncodingMode == .audioOnly {
@@ -1567,12 +2022,15 @@ final class WorkspaceViewModel: ObservableObject {
 
                 guard let ffmpegURL = self.findFFmpegExecutable() else {
                     await MainActor.run {
+                        guard self.activeClipExportRunToken == exportRunToken else { return }
+                        self.activeClipExportRunToken = nil
                         self.exportTask = nil
                         self.isExporting = false
                         self.exportProgress = 0
                         self.exportStatusText = "Clip export failed: No ffmpeg executable found."
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     }
                     return
                 }
@@ -1597,12 +2055,15 @@ final class WorkspaceViewModel: ObservableObject {
                 let sourceAsset = AVURLAsset(url: sourceURL)
                 guard let selectedAudioTrackIndex = self.preferredAudioTrackIndex(for: sourceAsset) else {
                     await MainActor.run {
+                        guard self.activeClipExportRunToken == exportRunToken else { return }
+                        self.activeClipExportRunToken = nil
                         self.exportTask = nil
                         self.isExporting = false
                         self.exportProgress = 0
                         self.exportStatusText = "Clip export failed: No audio track found in source."
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     }
                     return
                 }
@@ -1652,6 +2113,8 @@ final class WorkspaceViewModel: ObservableObject {
                 )
 
                 await MainActor.run {
+                    guard self.activeClipExportRunToken == exportRunToken else { return }
+                    self.activeClipExportRunToken = nil
                     self.exportTask = nil
                     self.isExporting = false
                     self.exportProgress = 0
@@ -1660,6 +2123,7 @@ final class WorkspaceViewModel: ObservableObject {
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
                         self.notifyCompletion("Audio-Only Clip Export Stopped", message: self.exportStatusText)
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                         return
                     }
                     if let encodeError {
@@ -1667,6 +2131,7 @@ final class WorkspaceViewModel: ObservableObject {
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
                         self.notifyCompletion("Audio-Only Clip Export Failed", message: self.exportStatusText)
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     } else {
                         self.outputURL = destination
                         self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
@@ -1677,6 +2142,7 @@ final class WorkspaceViewModel: ObservableObject {
                         }
                         self.lastActivityState = .success
                         self.notifyCompletion("Audio-Only Clip Export Complete", message: self.uiMessage)
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.exportStatusText, outputURL: destination)
                     }
                 }
             }
@@ -1685,20 +2151,24 @@ final class WorkspaceViewModel: ObservableObject {
 
         if clipEncodingMode == .fast {
             guard selectedClipFormat.supportsPassthrough else {
+                activeClipExportRunToken = nil
                 isExporting = false
                 exportStatusText = "Fast mode supports only MP4 and MOV."
                 uiMessage = exportStatusText
                 lastActivityState = .failed
+                finalizeQueued(.failed, exportStatusText)
                 return
             }
             let asset = AVURLAsset(url: sourceURL)
             let preset = AVAssetExportPresetPassthrough
 
             guard let session = AVAssetExportSession(asset: asset, presetName: preset) else {
+                activeClipExportRunToken = nil
                 isExporting = false
                 exportStatusText = "Clip export failed: Unable to create passthrough export session"
                 uiMessage = exportStatusText
                 lastActivityState = .failed
+                finalizeQueued(.failed, exportStatusText)
                 return
             }
             activeExportSession = session
@@ -1732,6 +2202,8 @@ final class WorkspaceViewModel: ObservableObject {
                 monitor.cancel()
 
                 await MainActor.run {
+                    guard self.activeClipExportRunToken == exportRunToken else { return }
+                    self.activeClipExportRunToken = nil
                     self.exportTask = nil
                     self.activeExportSession = nil
                     self.isExporting = false
@@ -1740,6 +2212,7 @@ final class WorkspaceViewModel: ObservableObject {
                         self.exportStatusText = "Clip export cancelled"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                         return
                     }
                     switch session.status {
@@ -1748,18 +2221,22 @@ final class WorkspaceViewModel: ObservableObject {
                         self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .success
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.exportStatusText, outputURL: destination)
                     case .failed:
                         self.exportStatusText = "Clip export failed: \(session.error?.localizedDescription ?? "Unknown error")"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     case .cancelled:
                         self.exportStatusText = "Clip export cancelled"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                     default:
                         self.exportStatusText = "Clip export ended with status: \(session.status.rawValue)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     }
                 }
             }
@@ -1775,12 +2252,15 @@ final class WorkspaceViewModel: ObservableObject {
 
             guard let ffmpegURL = self.findFFmpegExecutable() else {
                 await MainActor.run {
+                    guard self.activeClipExportRunToken == exportRunToken else { return }
+                    self.activeClipExportRunToken = nil
                     self.exportTask = nil
                     self.isExporting = false
                     self.exportProgress = 0
                     self.exportStatusText = "Clip export failed: No ffmpeg executable found."
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                 }
                 return
             }
@@ -1926,6 +2406,8 @@ final class WorkspaceViewModel: ObservableObject {
             }
 
             await MainActor.run {
+                guard self.activeClipExportRunToken == exportRunToken else { return }
+                self.activeClipExportRunToken = nil
                 self.exportTask = nil
                 self.isExporting = false
                 self.exportProgress = 0
@@ -1934,6 +2416,7 @@ final class WorkspaceViewModel: ObservableObject {
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .cancelled
                     self.notifyCompletion("Compatible Clip Export Stopped", message: self.exportStatusText)
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                     return
                 }
                 if let encodeError {
@@ -1941,6 +2424,7 @@ final class WorkspaceViewModel: ObservableObject {
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
                     self.notifyCompletion("Compatible Clip Export Failed", message: self.exportStatusText)
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                 } else {
                     self.outputURL = destination
                     self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
@@ -1951,6 +2435,7 @@ final class WorkspaceViewModel: ObservableObject {
                     }
                     self.lastActivityState = .success
                     self.notifyCompletion("Compatible Clip Export Complete", message: self.uiMessage)
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.exportStatusText, outputURL: destination)
                 }
             }
         }

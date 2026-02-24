@@ -130,7 +130,7 @@ struct CheckBlackFramesApp: App {
                     Label("Export Audio…", systemImage: "arrow.down.doc")
                 }
                 .keyboardShortcut("e", modifiers: [.command, .option])
-                .disabled(!(focusedModel?.canExport ?? false))
+                .disabled(!(focusedModel?.canRequestAudioExport ?? false))
 
                 Button {
                     focusedModel?.startClipExport()
@@ -138,7 +138,7 @@ struct CheckBlackFramesApp: App {
                     Label("Export Clip…", systemImage: "film.stack")
                 }
                 .keyboardShortcut("e", modifiers: [.command])
-                .disabled(!(focusedModel?.canExportClip ?? false))
+                .disabled(!(focusedModel?.canRequestClipExport ?? false))
 
                 Button {
                     focusedModel?.startClipExport(skipSaveDialog: true)
@@ -146,7 +146,7 @@ struct CheckBlackFramesApp: App {
                     Label("Quick Export Clip", systemImage: "film.stack.fill")
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(!(focusedModel?.canExportClip ?? false))
+                .disabled(!(focusedModel?.canRequestClipExport ?? false))
 
                 Divider()
 
@@ -181,7 +181,7 @@ struct CheckBlackFramesApp: App {
                     Label("Run Analysis", systemImage: "waveform.path.ecg")
                 }
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(!(focusedModel?.canAnalyze ?? false))
+                .disabled(!(focusedModel?.canRequestAnalyze ?? false))
 
                 Button {
                     focusedModel?.stopCurrentActivity()

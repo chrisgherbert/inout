@@ -1881,6 +1881,11 @@ struct ToolContentView: View {
                     hasAudioTrack: model.hasAudioTrack,
                     generateTranscript: { model.generateTranscriptFromInspect() },
                     exportTranscriptTXT: { model.exportTranscriptTXTFromInspect() },
+                    showActivityConsole: model.showActivityConsole,
+                    activityConsoleText: model.activityConsoleText,
+                    toggleActivityConsole: { model.showActivityConsole.toggle() },
+                    copyActivityConsole: { model.copyActivityConsole() },
+                    clearActivityConsole: { model.clearActivityConsole() },
                     isCompactLayout: isCompactLayout
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1928,7 +1933,7 @@ struct AnalyzeToolView: View {
                         Label(model.isAnalyzing ? "Analyzing…" : "Run Analysis", systemImage: "waveform.path.ecg")
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!model.canAnalyze)
+                    .disabled(!model.canRequestAnalyze)
 
                     if model.isAnalyzing {
                         Button {
@@ -2043,7 +2048,7 @@ struct ConvertToolView: View {
                                     Label(model.isExporting ? "Exporting…" : "Export Audio", systemImage: "arrow.down.doc")
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(!model.canExport)
+                                .disabled(!model.canRequestAudioExport)
                             }
                         }
                         .padding(10)
@@ -3070,12 +3075,18 @@ struct ClipToolView: View {
             reduceTransparency: reduceTransparency,
             isOptionKeyPressed: isOptionKeyPressed,
             fastClipFormats: fastClipFormats,
-            advancedClipFormats: advancedClipFormats
-        ) { quickExport in
-            model.commitClipStartText(undoManager: undoManager)
-            model.commitClipEndText(undoManager: undoManager)
-            model.startClipExport(skipSaveDialog: quickExport)
-        }
+            advancedClipFormats: advancedClipFormats,
+            onStartExport: { quickExport in
+                model.commitClipStartText(undoManager: undoManager)
+                model.commitClipEndText(undoManager: undoManager)
+                model.startClipExport(skipSaveDialog: quickExport)
+            },
+            onEnqueueExport: { quickExport in
+                model.commitClipStartText(undoManager: undoManager)
+                model.commitClipEndText(undoManager: undoManager)
+                model.enqueueCurrentClipExport(skipSaveDialog: quickExport)
+            }
+        )
     }
 
     private var clipBaseContent: some View {
@@ -4832,6 +4843,11 @@ struct InspectToolView: View {
     let hasAudioTrack: Bool
     let generateTranscript: () -> Void
     let exportTranscriptTXT: () -> Void
+    let showActivityConsole: Bool
+    let activityConsoleText: String
+    let toggleActivityConsole: () -> Void
+    let copyActivityConsole: () -> Void
+    let clearActivityConsole: () -> Void
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var transcriptSearchText = ""
@@ -5049,6 +5065,67 @@ struct InspectToolView: View {
                         in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     )
                 }
+
+                GroupBox("Console") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Button(showActivityConsole ? "Hide Console" : "Show Console") {
+                                toggleActivityConsole()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button("Copy") {
+                                copyActivityConsole()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(activityConsoleText.isEmpty)
+
+                            Button("Clear") {
+                                clearActivityConsole()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(activityConsoleText.isEmpty)
+                            Spacer(minLength: 0)
+                        }
+
+                        if showActivityConsole {
+                            ScrollViewReader { proxy in
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        Text(activityConsoleText.isEmpty ? "Console output will appear here while tools run." : activityConsoleText)
+                                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        Color.clear
+                                            .frame(height: 1)
+                                            .id("inspect-console-end")
+                                    }
+                                }
+                                .frame(minHeight: 110, maxHeight: 180)
+                                .onChange(of: activityConsoleText) { _ in
+                                    proxy.scrollTo("inspect-console-end", anchor: .bottom)
+                                }
+                                .onAppear {
+                                    proxy.scrollTo("inspect-console-end", anchor: .bottom)
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        ),
+                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    )
+                }
             } else {
                 EmptyToolView(title: "Inspect", subtitle: "Choose source media to inspect metadata and results.")
             }
@@ -5064,6 +5141,7 @@ struct StatusFooterStripView: View {
     @ObservedObject var model: WorkspaceViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var showJobsList = true
 
     private var stateColor: Color {
         switch model.lastActivityState {
@@ -5077,6 +5155,36 @@ struct StatusFooterStripView: View {
             return .red
         case .cancelled:
             return .orange
+        }
+    }
+
+    private func queueStatusIconName(_ status: ClipExportQueueStatus) -> String {
+        switch status {
+        case .queued: return "clock"
+        case .running: return "arrow.triangle.2.circlepath"
+        case .completed: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        case .cancelled: return "stop.circle.fill"
+        }
+    }
+
+    private func queueStatusColor(_ status: ClipExportQueueStatus) -> Color {
+        switch status {
+        case .queued: return .secondary
+        case .running: return .accentColor
+        case .completed: return .green
+        case .failed: return .red
+        case .cancelled: return .orange
+        }
+    }
+
+    private func queueStatusLabel(_ status: ClipExportQueueStatus) -> String {
+        switch status {
+        case .queued: return "Queued"
+        case .running: return "Running"
+        case .completed: return "Completed"
+        case .failed: return "Failed"
+        case .cancelled: return "Cancelled"
         }
     }
 
@@ -5133,70 +5241,111 @@ struct StatusFooterStripView: View {
                         }
                     }
                     .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
-
-                    Button(model.showActivityConsole ? "Hide Console" : "Console") {
-                        model.showActivityConsole.toggle()
-                    }
-                    .buttonStyle(.bordered)
-
-                    if model.showActivityConsole {
-                        Button("Copy") {
-                            model.copyActivityConsole()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(model.activityConsoleText.isEmpty)
-
-                        Button("Clear") {
-                            model.clearActivityConsole()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(model.activityConsoleText.isEmpty)
-                    }
                 }
             }
 
-            if model.showActivityConsole {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(model.activityConsoleText.isEmpty ? "Console output will appear here while tools run." : model.activityConsoleText)
-                                .font(.system(size: 12, weight: .regular, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Color.clear
-                                .frame(height: 1)
-                                .id("console-end")
+            if model.hasQueuedJobs {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text("Jobs")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(showJobsList ? "Hide" : "Show") {
+                            showJobsList.toggle()
                         }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        Button("Clear Completed") {
+                            model.clearCompletedQueuedJobs()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
                     }
-                    .frame(minHeight: 90, maxHeight: 150)
-                    .padding(8)
-                    .background(
-                        adaptiveContainerFill(
-                            material: .thinMaterial,
-                            fallback: Color(nsColor: .controlBackgroundColor),
-                            reduceTransparency: reduceTransparency
-                        ),
-                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                            .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-                    )
-                    .onChange(of: model.activityConsoleText) { _ in
-                        guard model.showActivityConsole else { return }
-                        if reduceMotion {
-                            proxy.scrollTo("console-end", anchor: .bottom)
-                        } else {
-                            withAnimation(.linear(duration: 0.1)) {
-                                proxy.scrollTo("console-end", anchor: .bottom)
+
+                    if showJobsList {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(model.queuedJobs.sorted(by: { $0.createdAt > $1.createdAt })) { item in
+                                    HStack(alignment: .center, spacing: 8) {
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            HStack(spacing: 8) {
+                                                Image(systemName: queueStatusIconName(item.status))
+                                                    .foregroundStyle(queueStatusColor(item.status))
+                                                    .frame(width: 12)
+                                                Text(item.fileName)
+                                                    .font(.caption.weight(.medium))
+                                                    .lineLimit(1)
+                                            }
+
+                                            let detail = [item.summary, item.message].compactMap { value -> String? in
+                                                guard let value, !value.isEmpty else { return nil }
+                                                return value
+                                            }.joined(separator: " • ")
+                                            if !detail.isEmpty {
+                                                Text(detail)
+                                                    .font(.system(size: 10))
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                            }
+                                        }
+
+                                        Spacer(minLength: 8)
+
+                                        HStack(spacing: 6) {
+                                            Text(queueStatusLabel(item.status))
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundStyle(queueStatusColor(item.status))
+
+                                            if item.status == .queued {
+                                                Button("Remove") {
+                                                    model.removeQueuedJob(item.id)
+                                                }
+                                                .buttonStyle(.bordered)
+                                                .controlSize(.mini)
+                                            } else if item.status == .failed || item.status == .cancelled {
+                                                Button("Retry") {
+                                                    model.retryQueuedJob(item.id)
+                                                }
+                                                .buttonStyle(.bordered)
+                                                .controlSize(.mini)
+                                            } else if item.status == .completed, let outputURL = item.outputURL {
+                                                Button {
+                                                    NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+                                                } label: {
+                                                    Image(systemName: "folder")
+                                                }
+                                                .help("Show in Finder")
+                                                .buttonStyle(.bordered)
+                                                .controlSize(.mini)
+                                            }
+                                        }
+                                    }
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                            .fill(Color.primary.opacity(0.045))
+                                    )
+                                }
                             }
                         }
-                    }
-                    .onAppear {
-                        proxy.scrollTo("console-end", anchor: .bottom)
+                        .frame(maxHeight: 140)
                     }
                 }
+                .padding(8)
+                .background(
+                    adaptiveContainerFill(
+                        material: .thinMaterial,
+                        fallback: Color(nsColor: .controlBackgroundColor),
+                        reduceTransparency: reduceTransparency
+                    ),
+                    in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
