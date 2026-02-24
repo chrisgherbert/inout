@@ -2113,6 +2113,7 @@ struct ClipToolView: View {
     @State private var playheadDragLocationX: CGFloat?
     @State private var playheadDragWidth: CGFloat = 0
     @State private var playheadDragAutoPanTask: Task<Void, Never>?
+    @State private var keyboardPanTask: Task<Void, Never>?
     @State private var playheadCopyFlash = false
     @State private var timelinePointerSeconds: Double?
     @State private var clipWindow: NSWindow?
@@ -2598,6 +2599,33 @@ struct ClipToolView: View {
         setTimelineZoomIndex(0)
     }
 
+    private func panViewportByKeyboard(towardLaterTime: Bool) {
+        guard timelineZoom > 1 else { return }
+        let step = max(0.05, zoomedWindowDuration * 0.10)
+        let delta = towardLaterTime ? step : -step
+        let nextStart = clampedViewportStart(viewportStartSeconds + delta)
+        guard abs(nextStart - viewportStartSeconds) > 0.000001 else { return }
+
+        keyboardPanTask?.cancel()
+        let fromStart = viewportStartSeconds
+        let toStart = nextStart
+        keyboardPanTask = Task { @MainActor in
+            let animationDuration = 0.16
+            let startTime = CACurrentMediaTime()
+            while !Task.isCancelled {
+                let elapsed = CACurrentMediaTime() - startTime
+                let t = min(1.0, max(0.0, elapsed / animationDuration))
+                let eased = 1.0 - pow(1.0 - t, 3.0) // cubic ease-out
+                viewportStartSeconds = fromStart + ((toStart - fromStart) * eased)
+                if t >= 1.0 { break }
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+            viewportStartSeconds = toStart
+            keyboardPanTask = nil
+        }
+        isViewportManuallyControlled = true
+    }
+
     private func copyPlayheadTimecode() {
         let timecode = formatSeconds(playheadSeconds)
         NSPasteboard.general.clearContents()
@@ -2657,6 +2685,14 @@ struct ClipToolView: View {
             }
 
             if flags.contains(.command) && !flags.contains(.option) && !flags.contains(.control) {
+                if event.specialKey == .leftArrow {
+                    seekPlayer(to: 0)
+                    return nil
+                }
+                if event.specialKey == .rightArrow {
+                    seekPlayer(to: totalDurationSeconds)
+                    return nil
+                }
                 if chars == "=" || chars == "+" {
                     adjustTimelineZoom(by: 1)
                     return nil
@@ -2671,6 +2707,17 @@ struct ClipToolView: View {
                 }
             }
 
+            if flags.contains(.option) && !flags.contains(.command) && !flags.contains(.control) && !flags.contains(.shift) {
+                if event.specialKey == .leftArrow {
+                    panViewportByKeyboard(towardLaterTime: false)
+                    return nil
+                }
+                if event.specialKey == .rightArrow {
+                    panViewportByKeyboard(towardLaterTime: true)
+                    return nil
+                }
+            }
+
             if !hasDisallowedModifier && !flags.contains(.shift) {
                 if event.specialKey == .home {
                     seekPlayer(to: 0)
@@ -2678,6 +2725,16 @@ struct ClipToolView: View {
                 }
                 if event.specialKey == .end {
                     seekPlayer(to: totalDurationSeconds)
+                    return nil
+                }
+                let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+                let oneFrame = 1.0 / fps
+                if event.specialKey == .leftArrow {
+                    seekPlayer(to: playheadSeconds - oneFrame)
+                    return nil
+                }
+                if event.specialKey == .rightArrow {
+                    seekPlayer(to: playheadSeconds + oneFrame)
                     return nil
                 }
                 if event.specialKey == .upArrow {
@@ -3099,6 +3156,8 @@ struct ClipToolView: View {
 
         return step6.onDisappear {
             waveformTask?.cancel()
+            keyboardPanTask?.cancel()
+            keyboardPanTask = nil
             removeKeyMonitor()
             isOptionKeyPressed = false
             isMiddleMousePanning = false
@@ -5727,8 +5786,6 @@ struct ContentView: View {
 
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: isCompactLayout ? 8 : 10) {
-                    SourceHeaderView(model: model)
-
                     ToolContentView(model: model, isCompactLayout: isCompactLayout)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
