@@ -86,9 +86,7 @@ struct ClipTimelineControlsPanel<Content: View>: View {
                     onViewportStartChange: onViewportStartChange
                 )
                 .frame(height: 18)
-
-                TimelineMiniMapRulerView(totalDurationSeconds: totalDurationSeconds)
-                    .frame(height: 14)
+                .padding(.top, 7)
 
                 content
             }
@@ -105,56 +103,6 @@ struct ClipTimelineControlsPanel<Content: View>: View {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
             )
-        }
-    }
-}
-
-private struct TimelineMiniMapRulerView: View {
-    let totalDurationSeconds: Double
-
-    private func label(for seconds: Double) -> String {
-        let clamped = max(0, Int(seconds.rounded()))
-        let h = clamped / 3600
-        let m = (clamped % 3600) / 60
-        let s = clamped % 60
-        if h > 0 {
-            return String(format: "%d:%02d:%02d", h, m, s)
-        }
-        return String(format: "%02d:%02d", m, s)
-    }
-
-    private func x(for seconds: Double, width: CGFloat) -> CGFloat {
-        let duration = max(0.001, totalDurationSeconds)
-        return CGFloat(min(max(0, seconds / duration), 1.0)) * width
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            let width = max(1, proxy.size.width)
-            // Keep this intentionally sparse and stable.
-            let divisions = totalDurationSeconds >= 3600 ? 4 : 3
-            let step = max(0.001, totalDurationSeconds / Double(divisions))
-            let ticks = (0...divisions).map { Double($0) * step }
-
-            ZStack(alignment: .topLeading) {
-                Rectangle()
-                    .fill(Color.primary.opacity(0.10))
-                    .frame(height: 0.6)
-                    .offset(y: 2)
-
-                ForEach(Array(ticks.enumerated()), id: \.offset) { _, seconds in
-                    let tickX = x(for: seconds, width: width)
-                    VStack(spacing: 2) {
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.22))
-                            .frame(width: 1, height: 4)
-                        Text(label(for: seconds))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    .offset(x: tickX, y: 0)
-                }
-            }
         }
     }
 }
@@ -201,10 +149,23 @@ private struct TimelineMiniMapView: View {
         return min(max(0, start), maxStart)
     }
 
+    private func label(for seconds: Double) -> String {
+        let clamped = max(0, Int(seconds.rounded()))
+        let h = clamped / 3600
+        let m = (clamped % 3600) / 60
+        let s = clamped % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%02d:%02d", m, s)
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let width = max(1, proxy.size.width)
             let height = proxy.size.height
+            let trackTop: CGFloat = 1
+            let trackHeight = max(8, height - 2)
             let startX = x(for: min(clipStartSeconds, clipEndSeconds), width: width)
             let endX = x(for: max(clipStartSeconds, clipEndSeconds), width: width)
             let clipWidth = max(1.5, endX - startX)
@@ -212,45 +173,75 @@ private struct TimelineMiniMapView: View {
             let viewStartX = x(for: visibleStartSeconds, width: width)
             let viewEndX = x(for: visibleEndSeconds, width: width)
             let viewWidth = max(1.5, viewEndX - viewStartX)
+            let divisions = totalDurationSeconds >= 3600 ? 4 : 3
+            let step = max(0.001, totalDurationSeconds / Double(divisions))
+            let ticks = (0...divisions).map { Double($0) * step }
             let canPan = totalDurationSeconds > (visibleEndSeconds - visibleStartSeconds + 0.0001)
             let markerColor = Color(nsColor: .systemOrange)
             let playheadColor = Color(nsColor: .systemRed)
             let clipColor = Color(nsColor: .controlAccentColor)
+            let tickLabelWidth: CGFloat = 58
 
             ZStack(alignment: .leading) {
+                ForEach(Array(ticks.enumerated()), id: \.offset) { index, seconds in
+                    let tickX = x(for: seconds, width: width)
+                    let isFirstTick = index == 0
+                    let isLastTick = index == ticks.count - 1
+                    let tickAlignment: Alignment = isFirstTick ? .leading : (isLastTick ? .trailing : .center)
+                    let tickAnchorOffset: CGFloat = isFirstTick ? 0 : (isLastTick ? tickLabelWidth : tickLabelWidth / 2)
+
+                    VStack(spacing: 1) {
+                        Text(label(for: seconds))
+                            .font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .frame(width: tickLabelWidth, alignment: tickAlignment)
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.22))
+                            .frame(width: 1, height: 3)
+                            .frame(width: tickLabelWidth, alignment: tickAlignment)
+                    }
+                    .offset(x: tickX - tickAnchorOffset, y: -6)
+                    .allowsHitTesting(false)
+                }
+
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(0.08))
+                    .frame(height: trackHeight)
+                    .offset(y: trackTop)
 
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(Color.primary.opacity(0.12), lineWidth: 0.6)
+                    .frame(height: trackHeight)
+                    .offset(y: trackTop)
 
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(Color.primary.opacity(0.12))
-                    .frame(width: viewWidth, height: max(8, height - 2))
-                    .offset(x: viewStartX, y: 1)
+                    .frame(width: viewWidth, height: max(8, trackHeight - 2))
+                    .offset(x: viewStartX, y: trackTop + 1)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .stroke(Color.primary.opacity(0.28), lineWidth: 0.8)
-                            .frame(width: viewWidth, height: max(8, height - 2))
-                            .offset(x: viewStartX, y: 1)
+                            .frame(width: viewWidth, height: max(8, trackHeight - 2))
+                            .offset(x: viewStartX, y: trackTop + 1)
                     )
 
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(clipColor.opacity(0.95))
                     .frame(width: clipWidth, height: 2.5)
-                    .offset(x: startX, y: (height / 2) - 1.25)
+                    .offset(x: startX, y: trackTop + (trackHeight / 2) - 1.25)
 
                 ForEach(captureMarkers) { marker in
                     Circle()
                         .fill(markerColor)
                         .frame(width: 5, height: 5)
-                        .offset(x: x(for: marker.seconds, width: width) - 2.5, y: (height / 2) - 2.5)
+                        .offset(x: x(for: marker.seconds, width: width) - 2.5, y: trackTop + (trackHeight / 2) - 2.5)
                 }
 
                 RoundedRectangle(cornerRadius: 1.2, style: .continuous)
                     .fill(playheadColor)
-                    .frame(width: 2.2, height: max(10, height - 3))
-                    .offset(x: playheadX - 1.1, y: 1.5)
+                    .frame(width: 2.2, height: max(10, trackHeight - 1))
+                    .offset(x: playheadX - 1.1, y: trackTop + 0.5)
             }
             .contentShape(Rectangle())
             .gesture(
