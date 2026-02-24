@@ -5142,6 +5142,7 @@ struct StatusFooterStripView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var showJobsList = true
+    @State private var hoveredJobID: UUID?
 
     private var stateColor: Color {
         switch model.lastActivityState {
@@ -5188,6 +5189,16 @@ struct StatusFooterStripView: View {
         }
     }
 
+    private var sortedQueuedJobs: [QueuedClipExport] {
+        model.queuedJobs.sorted(by: { $0.createdAt > $1.createdAt })
+    }
+
+    private var hasCompletedJobs: Bool {
+        model.queuedJobs.contains(where: {
+            $0.status == .completed || $0.status == .failed || $0.status == .cancelled
+        })
+    }
+
     @ViewBuilder
     private var stateIconView: some View {
         if #available(macOS 14.0, *), !reduceMotion {
@@ -5219,10 +5230,13 @@ struct StatusFooterStripView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
 
-                    ProgressView(value: model.activityProgress ?? 0)
-                        .progressViewStyle(.linear)
-                        .opacity(model.activityProgress == nil ? 0.35 : 1.0)
+                    if let progress = model.activityProgress {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .controlSize(.small)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 8) {
                     Group {
@@ -5233,119 +5247,125 @@ struct StatusFooterStripView: View {
                                 Label("Stop", systemImage: "stop.fill")
                             }
                             .buttonStyle(.bordered)
+                            .controlSize(.small)
                         } else if model.outputURL != nil {
                             Button("Show in Finder") {
                                 model.revealOutput()
                             }
                             .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
                     }
                     .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
-                }
-            }
 
-            if model.hasQueuedJobs {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Text("Jobs")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button(showJobsList ? "Hide" : "Show") {
+                    if model.hasQueuedJobs {
+                        Button(showJobsList ? "Hide Jobs" : "Show Jobs") {
                             showJobsList.toggle()
                         }
                         .buttonStyle(.bordered)
-                        .controlSize(.mini)
+                        .controlSize(.small)
+                    }
+                }
+            }
+
+            if model.hasQueuedJobs && showJobsList {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
                         Button("Clear Completed") {
                             model.clearCompletedQueuedJobs()
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
+                        .disabled(!hasCompletedJobs)
+
+                        Text("Jobs")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
                     }
 
-                    if showJobsList {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(model.queuedJobs.sorted(by: { $0.createdAt > $1.createdAt })) { item in
-                                    HStack(alignment: .center, spacing: 8) {
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            HStack(spacing: 8) {
-                                                Image(systemName: queueStatusIconName(item.status))
-                                                    .foregroundStyle(queueStatusColor(item.status))
-                                                    .frame(width: 12)
-                                                Text(item.fileName)
-                                                    .font(.caption.weight(.medium))
-                                                    .lineLimit(1)
-                                            }
-
-                                            let detail = [item.summary, item.message].compactMap { value -> String? in
-                                                guard let value, !value.isEmpty else { return nil }
-                                                return value
-                                            }.joined(separator: " • ")
-                                            if !detail.isEmpty {
-                                                Text(detail)
-                                                    .font(.system(size: 10))
-                                                    .foregroundStyle(.secondary)
-                                                    .lineLimit(1)
-                                            }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(sortedQueuedJobs.enumerated()), id: \.element.id) { index, item in
+                                HStack(alignment: .center, spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: queueStatusIconName(item.status))
+                                                .foregroundStyle(queueStatusColor(item.status))
+                                                .frame(width: 12)
+                                            Text(item.summary)
+                                                .font(.caption.weight(.medium))
+                                                .lineLimit(1)
                                         }
 
-                                        Spacer(minLength: 8)
-
-                                        HStack(spacing: 6) {
-                                            Text(queueStatusLabel(item.status))
-                                                .font(.caption2.weight(.semibold))
-                                                .foregroundStyle(queueStatusColor(item.status))
-
-                                            if item.status == .queued {
-                                                Button("Remove") {
-                                                    model.removeQueuedJob(item.id)
-                                                }
-                                                .buttonStyle(.bordered)
-                                                .controlSize(.mini)
-                                            } else if item.status == .failed || item.status == .cancelled {
-                                                Button("Retry") {
-                                                    model.retryQueuedJob(item.id)
-                                                }
-                                                .buttonStyle(.bordered)
-                                                .controlSize(.mini)
-                                            } else if item.status == .completed, let outputURL = item.outputURL {
-                                                Button {
-                                                    NSWorkspace.shared.activateFileViewerSelecting([outputURL])
-                                                } label: {
-                                                    Image(systemName: "folder")
-                                                }
-                                                .help("Show in Finder")
-                                                .buttonStyle(.bordered)
-                                                .controlSize(.mini)
-                                            }
+                                        let detail = [item.subtitle, item.message].compactMap { value -> String? in
+                                            guard let value, !value.isEmpty else { return nil }
+                                            return value
+                                        }.joined(separator: " • ")
+                                        if !detail.isEmpty {
+                                            Text(detail)
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
                                         }
                                     }
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                            .fill(Color.primary.opacity(0.045))
-                                    )
+
+                                    Spacer(minLength: 8)
+
+                                    HStack(spacing: 6) {
+                                        Text(queueStatusLabel(item.status))
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+
+                                        if item.status == .queued {
+                                            Button("Remove") {
+                                                model.removeQueuedJob(item.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.mini)
+                                        } else if item.status == .failed || item.status == .cancelled {
+                                            Button("Retry") {
+                                                model.retryQueuedJob(item.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.mini)
+                                        } else if item.status == .completed, let outputURL = item.outputURL {
+                                            Button {
+                                                NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+                                            } label: {
+                                                Image(systemName: "folder")
+                                            }
+                                            .help("Show in Finder")
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.mini)
+                                        }
+                                    }
+                                    .frame(width: 180, alignment: .trailing)
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 5)
+                                .frame(minHeight: 34)
+                                .background(
+                                    Color.accentColor.opacity(hoveredJobID == item.id ? 0.08 : 0.0)
+                                )
+                                .contentShape(Rectangle())
+                                .onHover { hovering in
+                                    if hovering {
+                                        hoveredJobID = item.id
+                                    } else if hoveredJobID == item.id {
+                                        hoveredJobID = nil
+                                    }
+                                }
+
+                                if index < sortedQueuedJobs.count - 1 {
+                                    Divider()
+                                        .opacity(0.5)
                                 }
                             }
                         }
-                        .frame(maxHeight: 140)
                     }
+                    .frame(maxHeight: 140)
                 }
-                .padding(8)
-                .background(
-                    adaptiveContainerFill(
-                        material: .thinMaterial,
-                        fallback: Color(nsColor: .controlBackgroundColor),
-                        reduceTransparency: reduceTransparency
-                    ),
-                    in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5356,13 +5376,13 @@ struct StatusFooterStripView: View {
                 material: .regularMaterial,
                 fallback: Color(nsColor: .windowBackgroundColor),
                 reduceTransparency: reduceTransparency
-            ),
-            in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+            )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
-                .stroke(Color.primary.opacity(0.05), lineWidth: 0.5)
-        )
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.14))
+                .frame(height: 0.5)
+        }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.lastActivityState)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isActivityRunning)
     }

@@ -18,6 +18,7 @@ struct QueuedClipExport: Identifiable, Equatable {
     let createdAt: Date
     let fileName: String
     let summary: String
+    let subtitle: String?
     var status: ClipExportQueueStatus
     var message: String?
     var outputURL: URL? = nil
@@ -617,19 +618,69 @@ final class WorkspaceViewModel: ObservableObject {
         !queuedJobs.isEmpty
     }
 
-    private func beginDirectJobTracking(fileName: String, summary: String) -> UUID {
+    private func beginDirectJobTracking(fileName: String, summary: String, subtitle: String? = nil) -> UUID {
         let id = UUID()
         let item = QueuedClipExport(
             id: id,
             createdAt: Date(),
             fileName: fileName,
             summary: summary,
+            subtitle: subtitle,
             status: .running,
             message: nil
         )
         queuedJobs.append(item)
         activeQueuedJobID = id
         return id
+    }
+
+    private func clipJobTitle(skipSaveDialog: Bool, mode: ClipEncodingMode) -> String {
+        let prefix = skipSaveDialog ? "Quick " : ""
+        switch mode {
+        case .fast:
+            return "\(prefix)Clip Export - Fast Copy"
+        case .compressed:
+            return "\(prefix)Clip Export - Advanced Encode"
+        case .audioOnly:
+            return "\(prefix)Clip Export - Audio Only"
+        }
+    }
+
+    private func clipJobSubtitle(
+        mode: ClipEncodingMode,
+        format: String,
+        startSeconds: Double,
+        endSeconds: Double
+    ) -> String {
+        "\(mode.rawValue) • \(format) • \(formatSeconds(startSeconds)) → \(formatSeconds(endSeconds))"
+    }
+
+    private func audioExportJobTitle(format: AudioFormat) -> String {
+        "Audio Export - \(format.rawValue)"
+    }
+
+    private func audioExportJobSubtitle(bitrateKbps: Int) -> String {
+        "\(bitrateKbps) kbps"
+    }
+
+    private func analysisJobSubtitle(black: Bool, silence: Bool, profanity: Bool) -> String {
+        var detectors: [String] = []
+        if black { detectors.append("Black Frames") }
+        if silence { detectors.append("Silence") }
+        if profanity { detectors.append("Profanity") }
+        if detectors.isEmpty { return "No detectors selected" }
+        return detectors.joined(separator: " + ")
+    }
+
+    private func analysisJobTitle(black: Bool, silence: Bool, profanity: Bool) -> String {
+        let enabledCount = [black, silence, profanity].filter { $0 }.count
+        if enabledCount <= 1 {
+            if black { return "Analyze - Black Frames" }
+            if silence { return "Analyze - Silence Gaps" }
+            if profanity { return "Analyze - Profanity" }
+            return "Analyze Media"
+        }
+        return "Analyze Media"
     }
 
     private func defaultAudioExportFileName(for sourceURL: URL) -> String {
@@ -700,14 +751,20 @@ final class WorkspaceViewModel: ObservableObject {
             destinationURL = chosenURL
         }
         let config = queuedClipExportConfigSnapshot(destinationURL: destinationURL)
-        let modeLabel = config.clipEncodingMode.rawValue
         let formatLabel = config.clipEncodingMode == .audioOnly ? config.clipAudioOnlyFormat.rawValue : config.selectedClipFormat.rawValue
-        let summary = "\(skipSaveDialog ? "Quick " : "")\(modeLabel) • \(formatLabel) • \(formatSeconds(config.clipStartSeconds)) → \(formatSeconds(config.clipEndSeconds))"
+        let summary = clipJobTitle(skipSaveDialog: skipSaveDialog, mode: config.clipEncodingMode)
+        let subtitle = clipJobSubtitle(
+            mode: config.clipEncodingMode,
+            format: formatLabel,
+            startSeconds: config.clipStartSeconds,
+            endSeconds: config.clipEndSeconds
+        )
         let item = QueuedClipExport(
             id: UUID(),
             createdAt: Date(),
             fileName: sourceURL.lastPathComponent,
             summary: summary,
+            subtitle: subtitle,
             status: .queued,
             message: nil
         )
@@ -728,7 +785,8 @@ final class WorkspaceViewModel: ObservableObject {
             id: UUID(),
             createdAt: Date(),
             fileName: sourceURL.lastPathComponent,
-            summary: "Audio Export • \(selectedAudioFormat.rawValue) • \(exportAudioBitrateKbps) kbps",
+            summary: audioExportJobTitle(format: selectedAudioFormat),
+            subtitle: audioExportJobSubtitle(bitrateKbps: exportAudioBitrateKbps),
             status: .queued,
             message: nil
         )
@@ -749,7 +807,16 @@ final class WorkspaceViewModel: ObservableObject {
             id: UUID(),
             createdAt: Date(),
             fileName: sourceURL.lastPathComponent,
-            summary: "Analysis",
+            summary: analysisJobTitle(
+                black: analyzeBlackFrames,
+                silence: analyzeAudioSilence,
+                profanity: analyzeProfanity
+            ),
+            subtitle: analysisJobSubtitle(
+                black: analyzeBlackFrames,
+                silence: analyzeAudioSilence,
+                profanity: analyzeProfanity
+            ),
             status: .queued,
             message: nil
         )
@@ -1057,7 +1124,8 @@ final class WorkspaceViewModel: ObservableObject {
 
         _ = beginDirectJobTracking(
             fileName: url.lastPathComponent,
-            summary: "Transcript"
+            summary: "Generate Transcript",
+            subtitle: "Whisper"
         )
 
         isGeneratingTranscript = true
@@ -1420,7 +1488,16 @@ final class WorkspaceViewModel: ObservableObject {
         if queueJobID == nil {
             _ = beginDirectJobTracking(
                 fileName: url.lastPathComponent,
-                summary: "Analysis"
+                summary: analysisJobTitle(
+                    black: requestedBlack,
+                    silence: requestedSilence,
+                    profanity: requestedProfanity
+                ),
+                subtitle: analysisJobSubtitle(
+                    black: requestedBlack,
+                    silence: requestedSilence,
+                    profanity: requestedProfanity
+                )
             )
         }
 
@@ -1788,7 +1865,8 @@ final class WorkspaceViewModel: ObservableObject {
         if queueJobID == nil {
             _ = beginDirectJobTracking(
                 fileName: sourceURL.lastPathComponent,
-                summary: "Audio Export • \(selectedAudioFormat.rawValue) • \(exportAudioBitrateKbps) kbps"
+                summary: audioExportJobTitle(format: selectedAudioFormat),
+                subtitle: audioExportJobSubtitle(bitrateKbps: exportAudioBitrateKbps)
             )
         }
 
@@ -1985,12 +2063,18 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         if queueJobID == nil {
-            let modeLabel = clipEncodingMode.rawValue
             let formatLabel = clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.rawValue : selectedClipFormat.rawValue
-            let summary = "\(skipSaveDialog ? "Quick " : "")\(modeLabel) • \(formatLabel) • \(formatSeconds(clipStartSeconds)) → \(formatSeconds(clipEndSeconds))"
+            let summary = clipJobTitle(skipSaveDialog: skipSaveDialog, mode: clipEncodingMode)
+            let subtitle = clipJobSubtitle(
+                mode: clipEncodingMode,
+                format: formatLabel,
+                startSeconds: clipStartSeconds,
+                endSeconds: clipEndSeconds
+            )
             _ = beginDirectJobTracking(
                 fileName: sourceURL.lastPathComponent,
-                summary: summary
+                summary: summary,
+                subtitle: subtitle
             )
         }
 
