@@ -5277,14 +5277,17 @@ struct StatusFooterStripView: View {
                         }
                         .buttonStyle(.plain)
 
-                        Spacer()
-
-                        Button("Clear Completed") {
+                        Button(role: .destructive) {
                             model.clearCompletedQueuedJobs()
+                        } label: {
+                            Label("Clear Completed", systemImage: "trash")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
+                        .buttonStyle(.plain)
                         .disabled(!hasCompletedJobs)
+
+                        Spacer()
                     }
 
                     if showJobsList {
