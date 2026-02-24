@@ -35,18 +35,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct CheckBlackFramesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.openWindow) private var openWindow
-    @StateObject private var model = WorkspaceViewModel()
+    @FocusedValue(\.workspaceModel) private var focusedModel
+    @StateObject private var settingsModel = WorkspaceViewModel()
 
     var body: some Scene {
-        Window("Bulwark Video Tools", id: "main") {
-            ContentView(model: model)
-                .preferredColorScheme(model.appearance.colorScheme)
+        WindowGroup("Bulwark Video Tools", id: "main", for: UUID.self) { _ in
+            ContentView()
         }
         .windowResizability(.contentMinSize)
 
         Window("Bulwark Video Tools Help", id: "help") {
             HelpDocumentationView()
-                .preferredColorScheme(model.appearance.colorScheme)
+                .preferredColorScheme(settingsModel.appearance.colorScheme)
         }
         .defaultSize(width: 760, height: 680)
         .windowResizability(.contentSize)
@@ -56,149 +56,160 @@ struct CheckBlackFramesApp: App {
                 Divider()
 
                 Button("Set Clip Start at Playhead") {
-                    NotificationCenter.default.post(name: .clipSetStartAtPlayhead, object: nil)
+                    NotificationCenter.default.post(name: .clipSetStartAtPlayhead, object: focusedModel)
                 }
                 .keyboardShortcut("i", modifiers: [])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button("Set Clip End at Playhead") {
-                    NotificationCenter.default.post(name: .clipSetEndAtPlayhead, object: nil)
+                    NotificationCenter.default.post(name: .clipSetEndAtPlayhead, object: focusedModel)
                 }
                 .keyboardShortcut("o", modifiers: [])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button("Clear Clip In/Out") {
-                    NotificationCenter.default.post(name: .clipClearRange, object: nil)
+                    NotificationCenter.default.post(name: .clipClearRange, object: focusedModel)
                 }
                 .keyboardShortcut("x", modifiers: [])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button {
-                    NotificationCenter.default.post(name: .clipAddMarkerAtPlayhead, object: nil)
+                    NotificationCenter.default.post(name: .clipAddMarkerAtPlayhead, object: focusedModel)
                 } label: {
                     Label("Add Marker at Playhead", systemImage: "mappin.and.ellipse")
                 }
                 .keyboardShortcut("m", modifiers: [])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button {
-                    NotificationCenter.default.post(name: .clipJumpToStart, object: nil)
+                    NotificationCenter.default.post(name: .clipJumpToStart, object: focusedModel)
                 } label: {
                     Label("Previous Marker (or In/Out)", systemImage: "chevron.up.circle")
                 }
                 .keyboardShortcut(.upArrow, modifiers: [])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button {
-                    NotificationCenter.default.post(name: .clipJumpToEnd, object: nil)
+                    NotificationCenter.default.post(name: .clipJumpToEnd, object: focusedModel)
                 } label: {
                     Label("Next Marker (or In/Out)", systemImage: "chevron.down.circle")
                 }
                 .keyboardShortcut(.downArrow, modifiers: [])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
             }
 
             CommandGroup(replacing: .newItem) {
+                Button("New Window") {
+                    openWindow(value: UUID())
+                }
+                .keyboardShortcut("n", modifiers: [.command])
+
+                Divider()
+
                 Button {
-                    model.chooseSource()
+                    focusedModel?.chooseSource()
                 } label: {
                     Label("Choose Media…", systemImage: "video.badge.plus")
                 }
                 .keyboardShortcut("o", modifiers: [.command])
 
                 Button {
-                    model.clearSource()
+                    focusedModel?.clearSource()
                 } label: {
                     Label("Close Media", systemImage: "xmark.circle")
                 }
-                .disabled(model.sourceURL == nil || model.isAnalyzing || model.isExporting)
+                .disabled(focusedModel?.sourceURL == nil || focusedModel?.isAnalyzing == true || focusedModel?.isExporting == true)
             }
 
             CommandGroup(after: .saveItem) {
                 Divider()
 
                 Button {
-                    model.startExport()
+                    focusedModel?.startExport()
                 } label: {
                     Label("Export Audio…", systemImage: "arrow.down.doc")
                 }
                 .keyboardShortcut("e", modifiers: [.command, .option])
-                .disabled(!model.canExport)
+                .disabled(!(focusedModel?.canExport ?? false))
 
                 Button {
-                    model.startClipExport()
+                    focusedModel?.startClipExport()
                 } label: {
                     Label("Export Clip…", systemImage: "film.stack")
                 }
                 .keyboardShortcut("e", modifiers: [.command])
-                .disabled(!model.canExportClip)
+                .disabled(!(focusedModel?.canExportClip ?? false))
 
                 Button {
-                    model.startClipExport(skipSaveDialog: true)
+                    focusedModel?.startClipExport(skipSaveDialog: true)
                 } label: {
                     Label("Quick Export Clip", systemImage: "film.stack.fill")
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(!model.canExportClip)
+                .disabled(!(focusedModel?.canExportClip ?? false))
 
                 Divider()
 
                 Button {
-                    NotificationCenter.default.post(name: .clipCaptureFrame, object: nil)
+                    NotificationCenter.default.post(name: .clipCaptureFrame, object: focusedModel)
                 } label: {
                     Label("Capture Frame…", systemImage: "camera")
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil || !model.hasVideoTrack || model.isAnalyzing || model.isExporting)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil || focusedModel?.hasVideoTrack != true || focusedModel?.isAnalyzing == true || focusedModel?.isExporting == true)
             }
 
             CommandMenu("Tool") {
-                Button("Clip") { model.selectedTool = .clip }
+                Button("Clip") { focusedModel?.selectedTool = .clip }
                     .keyboardShortcut("1", modifiers: [.command])
-                Button("Analyze") { model.selectedTool = .analyze }
+                .disabled(focusedModel == nil)
+                Button("Analyze") { focusedModel?.selectedTool = .analyze }
                     .keyboardShortcut("2", modifiers: [.command])
-                Button("Convert") { model.selectedTool = .convert }
+                .disabled(focusedModel == nil)
+                Button("Convert") { focusedModel?.selectedTool = .convert }
                     .keyboardShortcut("3", modifiers: [.command])
-                Button("Inspect") { model.selectedTool = .inspect }
+                .disabled(focusedModel == nil)
+                Button("Inspect") { focusedModel?.selectedTool = .inspect }
                     .keyboardShortcut("4", modifiers: [.command])
+                .disabled(focusedModel == nil)
             }
 
             CommandMenu("Analyze") {
                 Button {
-                    model.startAnalysis()
+                    focusedModel?.startAnalysis()
                 } label: {
                     Label("Run Analysis", systemImage: "waveform.path.ecg")
                 }
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(!model.canAnalyze)
+                .disabled(!(focusedModel?.canAnalyze ?? false))
 
                 Button {
-                    model.stopCurrentActivity()
+                    focusedModel?.stopCurrentActivity()
                 } label: {
                     Label("Stop Analysis", systemImage: "stop.fill")
                 }
                 .keyboardShortcut(".", modifiers: [.command])
-                .disabled(!model.isAnalyzing && !model.isExporting)
+                .disabled(!((focusedModel?.isAnalyzing ?? false) || (focusedModel?.isExporting ?? false)))
             }
 
             CommandMenu("View") {
                 Button("Zoom In Timeline") {
-                    NotificationCenter.default.post(name: .clipTimelineZoomIn, object: nil)
+                    NotificationCenter.default.post(name: .clipTimelineZoomIn, object: focusedModel)
                 }
                 .keyboardShortcut("=", modifiers: [.command])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button("Zoom Out Timeline") {
-                    NotificationCenter.default.post(name: .clipTimelineZoomOut, object: nil)
+                    NotificationCenter.default.post(name: .clipTimelineZoomOut, object: focusedModel)
                 }
                 .keyboardShortcut("-", modifiers: [.command])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button("Actual Timeline Size") {
-                    NotificationCenter.default.post(name: .clipTimelineZoomReset, object: nil)
+                    NotificationCenter.default.post(name: .clipTimelineZoomReset, object: focusedModel)
                 }
                 .keyboardShortcut("0", modifiers: [.command])
-                .disabled(model.selectedTool != .clip || model.sourceURL == nil)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
             }
 
             CommandGroup(replacing: .help) {
@@ -210,7 +221,7 @@ struct CheckBlackFramesApp: App {
         }
 
         Settings {
-            PreferencesView(model: model)
+            PreferencesView(model: settingsModel)
         }
     }
 }

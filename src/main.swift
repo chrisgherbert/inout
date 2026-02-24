@@ -22,6 +22,17 @@ extension Notification.Name {
     static let clipTimelineZoomReset = Notification.Name("clipTimelineZoomReset")
 }
 
+private struct WorkspaceModelFocusedValueKey: FocusedValueKey {
+    typealias Value = WorkspaceViewModel
+}
+
+extension FocusedValues {
+    var workspaceModel: WorkspaceViewModel? {
+        get { self[WorkspaceModelFocusedValueKey.self] }
+        set { self[WorkspaceModelFocusedValueKey.self] = newValue }
+    }
+}
+
 private let minDurationSeconds = 0.001
 let defaultMinSilenceDurationSeconds = 1.0
 private let silenceAmplitudeThreshold = 0.01
@@ -2104,6 +2115,7 @@ struct ClipToolView: View {
     @State private var playheadDragAutoPanTask: Task<Void, Never>?
     @State private var playheadCopyFlash = false
     @State private var timelinePointerSeconds: Double?
+    @State private var clipWindow: NSWindow?
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
         if duration <= 300 {
@@ -2615,6 +2627,7 @@ struct ClipToolView: View {
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            guard clipWindow?.isKeyWindow == true else { return event }
             if NSApp.keyWindow?.firstResponder is NSTextView {
                 return event
             }
@@ -2726,6 +2739,7 @@ struct ClipToolView: View {
     private func installScrollMonitor() {
         guard scrollMonitor == nil else { return }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { event in
+            guard clipWindow?.isKeyWindow == true else { return event }
             guard isTimelineHovered, timelineZoom > 1 else { return event }
 
             let dx = event.scrollingDeltaX
@@ -2752,6 +2766,7 @@ struct ClipToolView: View {
     private func installFlagsMonitor() {
         guard flagsMonitor == nil else { return }
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { event in
+            guard clipWindow?.isKeyWindow == true else { return event }
             isOptionKeyPressed = event.modifierFlags.contains(.option)
             return event
         }
@@ -2760,6 +2775,7 @@ struct ClipToolView: View {
     private func installMouseDownMonitor() {
         guard mouseDownMonitor == nil else { return }
         mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
+            guard clipWindow?.isKeyWindow == true else { return event }
             guard let window = NSApp.keyWindow else { return event }
             guard window.firstResponder is NSTextView else { return event }
 
@@ -2785,6 +2801,7 @@ struct ClipToolView: View {
     private func installMiddleMousePanMonitor() {
         guard middleMousePanMonitor == nil else { return }
         middleMousePanMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .otherMouseDragged, .otherMouseUp]) { event in
+            guard clipWindow?.isKeyWindow == true else { return event }
             guard event.buttonNumber == 2 else { return event }
 
             switch event.type {
@@ -3047,35 +3064,35 @@ struct ClipToolView: View {
         }
 
         let step6 = step5
-            .onReceive(NotificationCenter.default.publisher(for: .clipSetStartAtPlayhead)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipSetStartAtPlayhead, object: model)) { _ in
                 model.setClipStart(playheadSeconds, undoManager: undoManager)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipSetEndAtPlayhead)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipSetEndAtPlayhead, object: model)) { _ in
                 model.setClipEnd(playheadSeconds, undoManager: undoManager)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipClearRange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipClearRange, object: model)) { _ in
                 model.resetClipRange(undoManager: undoManager)
                 seekPlayer(to: model.clipStartSeconds)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipAddMarkerAtPlayhead)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipAddMarkerAtPlayhead, object: model)) { _ in
                 model.addTimelineMarker(at: playheadSeconds, undoManager: undoManager)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart, object: model)) { _ in
                 navigateToMarker(previous: true)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipJumpToEnd)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipJumpToEnd, object: model)) { _ in
                 navigateToMarker(previous: false)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipCaptureFrame)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipCaptureFrame, object: model)) { _ in
                 model.captureFrame(at: playheadSeconds)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomIn)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomIn, object: model)) { _ in
                 adjustTimelineZoom(by: 1)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomOut)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomOut, object: model)) { _ in
                 adjustTimelineZoom(by: -1)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomReset)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomReset, object: model)) { _ in
                 resetTimelineZoom()
             }
 
@@ -3094,6 +3111,11 @@ struct ClipToolView: View {
 
     var body: some View {
         withLifecycleHandlers(clipBaseContent)
+            .background(
+                WindowAccessor { window in
+                    clipWindow = window
+                }
+            )
     }
 }
 
@@ -5679,10 +5701,14 @@ struct WindowAccessor: NSViewRepresentable {
 }
 
 struct ContentView: View {
-    @ObservedObject var model: WorkspaceViewModel
-    @StateObject private var externalOpenBridge = ExternalFileOpenBridge.shared
+    @StateObject private var model: WorkspaceViewModel
+    @ObservedObject private var externalOpenBridge = ExternalFileOpenBridge.shared
     @State private var isDropTargeted = false
     @State private var appWindow: NSWindow?
+
+    @MainActor init() {
+        _model = StateObject(wrappedValue: WorkspaceViewModel())
+    }
 
     private func syncWindowMetadata() {
         guard let appWindow else { return }
@@ -5725,11 +5751,13 @@ struct ContentView: View {
             }
             .onReceive(externalOpenBridge.$incomingURL) { url in
                 guard let url else { return }
+                guard appWindow?.isKeyWindow == true else { return }
                 model.setSource(url)
                 NSApp.activate(ignoringOtherApps: true)
                 externalOpenBridge.incomingURL = nil
             }
         }
+        .preferredColorScheme(model.appearance.colorScheme)
         .frame(minWidth: 980, minHeight: 640)
         .background(
             WindowAccessor { window in
@@ -5740,6 +5768,7 @@ struct ContentView: View {
         .onChange(of: model.sourceURL?.path) { _ in
             syncWindowMetadata()
         }
+        .focusedSceneValue(\.workspaceModel, model)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
