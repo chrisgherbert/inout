@@ -2122,6 +2122,8 @@ struct ClipToolView: View {
     @State private var playheadCopyFlash = false
     @State private var timelinePointerSeconds: Double?
     @State private var clipWindow: NSWindow?
+    @SceneStorage("clip.playerHeight") private var storedPlayerHeight: Double = 0
+    @State private var playerResizeStartHeight: CGFloat?
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
         if duration <= 300 {
@@ -2969,16 +2971,84 @@ struct ClipToolView: View {
         NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
+    private var playerMinHeight: CGFloat {
+        isCompactLayout ? 150 : 240
+    }
+
+    private var playerMaxHeight: CGFloat {
+        isCompactLayout ? 320 : 560
+    }
+
+    private var playerDefaultHeight: CGFloat {
+        isCompactLayout ? 210 : 330
+    }
+
+    private func clampedPlayerHeight(_ value: CGFloat) -> CGFloat {
+        min(max(value, playerMinHeight), playerMaxHeight)
+    }
+
+    private var currentPlayerHeight: CGFloat {
+        let raw = storedPlayerHeight > 0 ? CGFloat(storedPlayerHeight) : playerDefaultHeight
+        return clampedPlayerHeight(raw)
+    }
+
     private var clipPlayerSection: some View {
-        InlinePlayerView(player: player)
-            .frame(
-                minHeight: isCompactLayout ? 170 : 290,
-                maxHeight: isCompactLayout ? 230 : 350
-            )
-            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-            .onTapGesture {
-                dismissTimecodeFieldFocus()
+        VStack(alignment: .leading, spacing: 6) {
+            InlinePlayerView(player: player)
+                .frame(height: currentPlayerHeight)
+                .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+                .onTapGesture {
+                    dismissTimecodeFieldFocus()
+                }
+
+            HStack {
+                Spacer()
+                Capsule()
+                    .fill(Color.secondary.opacity(0.45))
+                    .frame(width: 36, height: 4)
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                    )
+                    .padding(.vertical, 2)
+                Spacer()
             }
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.resizeUpDown.set()
+                } else if !isMiddleMousePanning {
+                    NSCursor.arrow.set()
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if playerResizeStartHeight == nil {
+                            playerResizeStartHeight = currentPlayerHeight
+                        }
+                        let base = playerResizeStartHeight ?? currentPlayerHeight
+                        let nextHeight = clampedPlayerHeight(base + value.translation.height)
+                        storedPlayerHeight = Double(nextHeight)
+                    }
+                    .onEnded { _ in
+                        playerResizeStartHeight = nil
+                    }
+            )
+            .accessibilityLabel("Resize player height")
+            .help("Drag to resize player height")
+        }
+        .onChange(of: isCompactLayout) { _ in
+            storedPlayerHeight = Double(clampedPlayerHeight(currentPlayerHeight))
+        }
+    }
+
+    private func resetPlayerHeightToDefaultIfNeeded() {
+        if storedPlayerHeight <= 0 {
+            storedPlayerHeight = Double(playerDefaultHeight)
+            return
+        }
+        storedPlayerHeight = Double(clampedPlayerHeight(CGFloat(storedPlayerHeight)))
     }
 
     private var timelineControlsSection: some View {
@@ -3109,6 +3179,7 @@ struct ClipToolView: View {
 
     private func withLifecycleHandlers<V: View>(_ view: V) -> some View {
         let step1 = view.onAppear {
+            resetPlayerHeightToDefaultIfNeeded()
             loadPlayerItem()
             installKeyMonitor()
             installFlagsMonitor()
