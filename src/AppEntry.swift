@@ -156,7 +156,7 @@ struct CheckBlackFramesApp: App {
                     Label("Capture Frame…", systemImage: "camera")
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
-                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil || focusedModel?.hasVideoTrack != true || focusedModel?.isAnalyzing == true || focusedModel?.isExporting == true)
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil || focusedModel?.hasVideoTrack != true)
             }
 
             CommandMenu("Tool") {

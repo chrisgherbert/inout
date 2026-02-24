@@ -2683,9 +2683,7 @@ struct ClipToolView: View {
             if flags.contains(.command) && flags.contains(.option) && !flags.contains(.control) && !flags.contains(.shift) {
                 if chars == "s",
                    model.sourceURL != nil,
-                   model.hasVideoTrack,
-                   !model.isAnalyzing,
-                   !model.isExporting {
+                   model.hasVideoTrack {
                     model.captureFrame(at: playheadSeconds)
                     return nil
                 }
@@ -5429,7 +5427,7 @@ struct JobsPopoverView: View {
                                         .foregroundStyle(.secondary)
 
                                     if item.status == .queued {
-                                        Button("Remove") {
+                                        Button("Cancel") {
                                             model.removeQueuedJob(item.id)
                                         }
                                         .buttonStyle(.bordered)
