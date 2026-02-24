@@ -206,8 +206,8 @@ enum AdvancedBoostAmount: Int, CaseIterable, Identifiable {
 enum BurnInCaptionStyle: String, CaseIterable, Identifiable {
     case youtube = "YouTube"
     case netflix = "Netflix"
-    case vintageYellow = "Vintage Yellow"
     case crunchyroll = "Crunchyroll"
+    case vintageYellow = "Vintage Yellow"
 
     var id: String { rawValue }
 
