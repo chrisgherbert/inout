@@ -289,6 +289,17 @@ struct PreferencesView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Divider()
+
+            settingsSection("Advanced Audio Boost") {
+                settingsRow("Default boost amount") {
+                    valueMenuPicker("Default Boost Amount", selection: $model.clipAdvancedBoostAmount) {
+                        ForEach(AdvancedBoostAmount.allCases) { amount in
+                            Text(amount.label).tag(amount)
+                        }
+                    }
+                }
+            }
         }
     }
 

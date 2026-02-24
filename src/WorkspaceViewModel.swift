@@ -20,6 +20,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let frameSaveLocationMode = "prefs.frameSaveLocationMode"
         static let customFrameSaveDirectoryPath = "prefs.customFrameSaveDirectoryPath"
         static let burnInCaptionStyle = "prefs.burnInCaptionStyle"
+        static let advancedBoostAmount = "prefs.advancedBoostAmount"
         static let estimatedSizeWarningThresholdGB = "prefs.estimatedSizeWarningThresholdGB"
         static let estimatedSizeDangerThresholdGB = "prefs.estimatedSizeDangerThresholdGB"
     }
@@ -96,6 +97,11 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipAudioBitrateKbps: Int = 128
     @Published var clipAdvancedVideoCodec: AdvancedVideoCodec = .h264
     @Published var clipAdvancedBoostAudio = false
+    @Published var clipAdvancedBoostAmount: AdvancedBoostAmount = .db10 {
+        didSet {
+            UserDefaults.standard.set(clipAdvancedBoostAmount.rawValue, forKey: DefaultsKey.advancedBoostAmount)
+        }
+    }
     @Published var clipAdvancedAddFadeInOut = false
     @Published var clipAdvancedBurnInCaptions = false
     @Published var clipAdvancedCaptionStyle: BurnInCaptionStyle = .youtube {
@@ -328,6 +334,11 @@ final class WorkspaceViewModel: ObservableObject {
         if let rawCaptionStyle = defaults.string(forKey: DefaultsKey.burnInCaptionStyle),
            let style = BurnInCaptionStyle(rawValue: rawCaptionStyle) {
             clipAdvancedCaptionStyle = style
+        }
+
+        let savedBoostAmount = defaults.integer(forKey: DefaultsKey.advancedBoostAmount)
+        if let boostAmount = AdvancedBoostAmount(rawValue: savedBoostAmount) {
+            clipAdvancedBoostAmount = boostAmount
         }
     }
 
@@ -1829,7 +1840,7 @@ final class WorkspaceViewModel: ObservableObject {
             }
 
             if self.clipAdvancedBoostAudio && hasSourceAudio {
-                audioFilters.append("volume=10dB")
+                audioFilters.append("volume=\(self.clipAdvancedBoostAmount.rawValue)dB")
                 audioFilters.append("alimiter=limit=0.988553")
             }
 

@@ -179,6 +179,19 @@ enum AdvancedVideoCodec: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum AdvancedBoostAmount: Int, CaseIterable, Identifiable {
+    case db5 = 5
+    case db10 = 10
+    case db15 = 15
+    case db20 = 20
+    case db25 = 25
+    case db30 = 30
+
+    var id: Int { rawValue }
+
+    var label: String { "\(rawValue)dB" }
+}
+
 enum BurnInCaptionStyle: String, CaseIterable, Identifiable {
     case youtube = "YouTube"
     case netflix = "Netflix"
