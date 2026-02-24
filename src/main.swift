@@ -5119,6 +5119,7 @@ struct InspectToolView: View {
                                         }
                                     }
                                 }
+                                .textSelection(.enabled)
                             }
                             .frame(minHeight: 120, maxHeight: 220)
                         }
