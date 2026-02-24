@@ -5263,7 +5263,7 @@ struct StatusFooterStripView: View {
 
             if model.hasQueuedJobs {
                 VStack(alignment: .leading, spacing: 5) {
-                    HStack {
+                    HStack(spacing: 10) {
                         Button {
                             showJobsList.toggle()
                         } label: {
@@ -5277,12 +5277,15 @@ struct StatusFooterStripView: View {
                         }
                         .buttonStyle(.plain)
 
+                        Divider()
+                            .frame(height: 12)
+
                         Button(role: .destructive) {
                             model.clearCompletedQueuedJobs()
                         } label: {
                             Label("Clear Completed", systemImage: "trash")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(hasCompletedJobs ? .red : .secondary)
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasCompletedJobs)
