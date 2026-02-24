@@ -599,9 +599,29 @@ struct ClipOutputPanel: View {
                                 .frame(width: 90, alignment: .trailing)
                         }
 
-                        Toggle("Boost audio (+10 dB, limit -0.1 dBFS)", isOn: $model.clipAudioOnlyBoostAudio)
+                        HStack(spacing: 10) {
+                            Toggle(
+                                "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
+                                isOn: $model.clipAudioOnlyBoostAudio
+                            )
                             .toggleStyle(.switch)
                             .controlSize(.mini)
+
+                            if model.clipAudioOnlyBoostAudio {
+                                Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
+                                    ForEach(AdvancedBoostAmount.allCases) { amount in
+                                        Text(amount.label).tag(amount)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .controlSize(.mini)
+                                .frame(width: 88, alignment: .leading)
+                                .help("Input gain before limiter.")
+                            }
+
+                            Spacer(minLength: 0)
+                        }
 
                         Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAudioOnlyAddFadeInOut)
                             .toggleStyle(.switch)

@@ -1613,7 +1613,7 @@ final class WorkspaceViewModel: ObservableObject {
                     audioFilters.append("afade=t=out:st=\(String(format: "%.3f", fadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
                 }
                 if self.clipAudioOnlyBoostAudio {
-                    audioFilters.append("volume=10dB")
+                    audioFilters.append("volume=\(self.clipAdvancedBoostAmount.rawValue)dB")
                     audioFilters.append("alimiter=limit=0.988553")
                 }
 
