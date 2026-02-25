@@ -2120,10 +2120,16 @@ struct ClipToolView: View {
     @State private var playheadDragAutoPanTask: Task<Void, Never>?
     @State private var keyboardPanTask: Task<Void, Never>?
     @State private var playheadCopyFlash = false
+    @State private var lastSharedPlayheadSyncTimestamp: CFTimeInterval = 0
     @State private var timelinePointerSeconds: Double?
     @State private var clipWindow: NSWindow?
+    @State private var playerTimeObserverToken: Any?
+    @State private var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
+    @State private var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
     @SceneStorage("clip.playerHeight") private var storedPlayerHeight: Double = 0
     @State private var playerResizeStartHeight: CGFloat?
+    @State private var playerResizeStartGlobalY: CGFloat?
+    @State private var livePlayerHeight: CGFloat?
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
         if duration <= 300 {
@@ -2138,7 +2144,6 @@ struct ClipToolView: View {
         return [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128]
     }
 
-    private let timer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
     @State private var lastInteractiveSeekSeconds: Double = -1
 
     private func syncVisualPlayheadImmediately(_ value: Double) {
@@ -2234,8 +2239,69 @@ struct ClipToolView: View {
     private var fastClipFormats: [ClipFormat] { [.mp4, .mov] }
     private var advancedClipFormats: [ClipFormat] { ClipFormat.allCases }
 
+    private func installPlayerTimeObserverIfNeeded() {
+        guard playerTimeObserverToken == nil else { return }
+        let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+        playerTimeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            let current = CMTimeGetSeconds(time)
+            if current.isFinite {
+                let newPlayhead = max(0, current)
+                let didMove = abs(newPlayhead - playheadSeconds) > (1.0 / 240.0)
+
+                if didMove {
+                    let now = CACurrentMediaTime()
+                    let isPlaying = player.rate != 0
+                    let uiUpdateInterval = isPlaying ? (1.0 / 18.0) : (1.0 / 30.0)
+                    if !isPlaying || (now - lastPlaybackUIUpdateTimestamp) >= uiUpdateInterval {
+                        playheadSeconds = newPlayhead
+                        if Date() >= suppressVisualPlayheadSyncUntil {
+                            playheadVisualSeconds = newPlayhead
+                        }
+                        lastPlaybackUIUpdateTimestamp = now
+                    }
+                    // Avoid high-frequency @Published writes while playback is active.
+                    // Persist shared playhead state only while paused or on explicit actions.
+                    if !isPlaying {
+                        syncSharedPlayheadStateIfNeeded(newPlayhead, force: false, updateAlignment: true)
+                    }
+                }
+
+                if player.rate != 0 {
+                    // While playing, do not forcibly override manual viewport panning.
+                    // Follow only when viewport is not currently under manual control,
+                    // and throttle follow updates to avoid layout churn.
+                    let shouldFollow = !isViewportManuallyControlled
+                    if shouldFollow {
+                        let now = CACurrentMediaTime()
+                        if (now - lastPlaybackFollowUpdateTimestamp) >= (1.0 / 20.0) {
+                            updateViewportForPlayhead(shouldFollow: true)
+                            lastPlaybackFollowUpdateTimestamp = now
+                        }
+                    }
+                } else if didMove {
+                    updateViewportForPlayhead(shouldFollow: false)
+                }
+            }
+
+            let currentDuration = CMTimeGetSeconds(player.currentItem?.duration ?? .invalid)
+            if currentDuration.isFinite && currentDuration > 0,
+               abs(currentDuration - playerDurationSeconds) > (1.0 / 120.0) {
+                playerDurationSeconds = currentDuration
+            }
+        }
+    }
+
+    private func removePlayerTimeObserver() {
+        guard let token = playerTimeObserverToken else { return }
+        player.removeTimeObserver(token)
+        playerTimeObserverToken = nil
+        lastPlaybackUIUpdateTimestamp = 0
+        lastPlaybackFollowUpdateTimestamp = 0
+    }
+
     private func loadPlayerItem() {
         guard let sourceURL = model.sourceURL else {
+            removePlayerTimeObserver()
             player.replaceCurrentItem(with: nil)
             playheadSeconds = 0
             playheadVisualSeconds = 0
@@ -2261,6 +2327,7 @@ struct ClipToolView: View {
         loadedSourcePath = sourceURL.path
         let item = AVPlayerItem(url: sourceURL)
         player.replaceCurrentItem(with: item)
+        installPlayerTimeObserverIfNeeded()
         let duration = CMTimeGetSeconds(item.asset.duration)
         playerDurationSeconds = duration.isFinite && duration > 0 ? duration : model.sourceDurationSeconds
         let restored = max(0, min(model.clipPlayheadSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
@@ -2302,8 +2369,7 @@ struct ClipToolView: View {
         lastInteractiveSeekSeconds = -1
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
-        model.clipPlayheadSeconds = clamped
-        model.selectTimelineMarkerIfAligned(near: clamped)
+        syncSharedPlayheadStateIfNeeded(clamped, force: true)
         syncVisualPlayheadImmediately(clamped)
         updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
     }
@@ -2324,8 +2390,7 @@ struct ClipToolView: View {
             toleranceAfter: tolerance
         )
         playheadSeconds = clamped
-        model.clipPlayheadSeconds = clamped
-        model.selectTimelineMarkerIfAligned(near: clamped)
+        syncSharedPlayheadStateIfNeeded(clamped, force: true)
         syncVisualPlayheadImmediately(clamped)
         updateViewportForPlayhead(shouldFollow: false)
     }
@@ -2345,8 +2410,7 @@ struct ClipToolView: View {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
-        model.clipPlayheadSeconds = clamped
-        model.selectTimelineMarkerIfAligned(near: clamped)
+        syncSharedPlayheadStateIfNeeded(clamped, force: true)
 
         guard focusViewport else { return }
 
@@ -2371,6 +2435,7 @@ struct ClipToolView: View {
     private func togglePlayback() {
         if player.rate != 0 {
             player.pause()
+            syncSharedPlayheadStateIfNeeded(playheadSeconds, force: true, updateAlignment: true)
         } else {
             player.playImmediately(atRate: 1.0)
         }
@@ -2499,22 +2564,28 @@ struct ClipToolView: View {
 
     private func updateViewportForPlayhead(shouldFollow: Bool) {
         if timelineZoom <= 1 {
-            viewportStartSeconds = 0
-            isViewportManuallyControlled = false
+            if abs(viewportStartSeconds) > 0.000_001 {
+                viewportStartSeconds = 0
+            }
+            if isViewportManuallyControlled {
+                isViewportManuallyControlled = false
+            }
             return
         }
 
         let window = zoomedWindowDuration
         var start = clampedViewportStart(viewportStartSeconds)
-        let end = start + window
-        // Always keep the playhead visible, even when follow mode is otherwise disabled.
-        if playheadSeconds < start || playheadSeconds > end {
-            animateViewportRecenter(to: playheadSeconds - (window / 2))
+        guard shouldFollow else {
+            if abs(viewportStartSeconds - start) > 0.000_001 {
+                viewportStartSeconds = start
+            }
             return
         }
 
-        guard shouldFollow else {
-            viewportStartSeconds = start
+        let end = start + window
+        // Follow mode: keep playhead visible and recenter if it leaves the viewport.
+        if playheadSeconds < start || playheadSeconds > end {
+            animateViewportRecenter(to: playheadSeconds - (window / 2))
             return
         }
 
@@ -2525,7 +2596,10 @@ struct ClipToolView: View {
         } else if playheadSeconds > deadEnd {
             start = playheadSeconds - (window - deadZonePaddingSeconds)
         }
-        viewportStartSeconds = clampedViewportStart(start)
+        let clamped = clampedViewportStart(start)
+        if abs(viewportStartSeconds - clamped) > 0.000_001 {
+            viewportStartSeconds = clamped
+        }
     }
 
     private func panViewport(byPoints points: CGFloat) {
@@ -2657,6 +2731,19 @@ struct ClipToolView: View {
             }
         }
         model.uiMessage = "Copied playhead timecode: \(timecode)"
+    }
+
+    private func syncSharedPlayheadStateIfNeeded(_ seconds: Double, force: Bool, updateAlignment: Bool = true) {
+        let now = CACurrentMediaTime()
+        let syncInterval = 1.0 / 8.0
+        guard force || (now - lastSharedPlayheadSyncTimestamp) >= syncInterval else { return }
+        if abs(model.clipPlayheadSeconds - seconds) > (1.0 / 240.0) {
+            model.clipPlayheadSeconds = seconds
+        }
+        if updateAlignment {
+            model.selectTimelineMarkerIfAligned(near: seconds)
+        }
+        lastSharedPlayheadSyncTimestamp = now
     }
 
     private var visibleStartSeconds: Double {
@@ -2986,6 +3073,9 @@ struct ClipToolView: View {
     }
 
     private var currentPlayerHeight: CGFloat {
+        if let livePlayerHeight {
+            return clampedPlayerHeight(livePlayerHeight)
+        }
         let raw = storedPlayerHeight > 0 ? CGFloat(storedPlayerHeight) : playerDefaultHeight
         return clampedPlayerHeight(raw)
     }
@@ -2994,6 +3084,9 @@ struct ClipToolView: View {
         VStack(alignment: .leading, spacing: 6) {
             InlinePlayerView(player: player)
                 .frame(height: currentPlayerHeight)
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
                 .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
                 .onTapGesture {
                     dismissTimecodeFieldFocus()
@@ -3020,21 +3113,40 @@ struct ClipToolView: View {
                 }
             }
             .gesture(
-                DragGesture(minimumDistance: 1)
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
                         if playerResizeStartHeight == nil {
-                            playerResizeStartHeight = currentPlayerHeight
+                            let base = storedPlayerHeight > 0 ? CGFloat(storedPlayerHeight) : playerDefaultHeight
+                            playerResizeStartHeight = clampedPlayerHeight(base)
+                            playerResizeStartGlobalY = value.startLocation.y
                         }
                         let base = playerResizeStartHeight ?? currentPlayerHeight
-                        let nextHeight = clampedPlayerHeight(base + value.translation.height)
-                        storedPlayerHeight = Double(nextHeight)
+                        let startY = playerResizeStartGlobalY ?? value.startLocation.y
+                        let deltaY = value.location.y - startY
+                        livePlayerHeight = clampedPlayerHeight(base + deltaY)
                     }
                     .onEnded { _ in
+                        if let livePlayerHeight {
+                            storedPlayerHeight = Double(clampedPlayerHeight(livePlayerHeight))
+                        }
+                        livePlayerHeight = nil
                         playerResizeStartHeight = nil
+                        playerResizeStartGlobalY = nil
                     }
             )
+            .onTapGesture(count: 2) {
+                let current = currentPlayerHeight
+                let defaultHeight = playerDefaultHeight
+                let maxHeight = playerMaxHeight
+                let tolerance: CGFloat = 2.0
+                let target = abs(current - defaultHeight) <= tolerance ? maxHeight : defaultHeight
+                livePlayerHeight = nil
+                withAnimation(.easeOut(duration: 0.18)) {
+                    storedPlayerHeight = Double(target)
+                }
+            }
             .accessibilityLabel("Resize player height")
-            .help("Drag to resize player height")
+            .help("Drag to resize player height. Double-click to toggle default/max height.")
         }
         .onChange(of: isCompactLayout) { _ in
             storedPlayerHeight = Double(clampedPlayerHeight(currentPlayerHeight))
@@ -3179,6 +3291,7 @@ struct ClipToolView: View {
         let step1 = view.onAppear {
             resetPlayerHeightToDefaultIfNeeded()
             loadPlayerItem()
+            installPlayerTimeObserverIfNeeded()
             installKeyMonitor()
             installFlagsMonitor()
             installScrollMonitor()
@@ -3207,37 +3320,7 @@ struct ClipToolView: View {
                 }
             }
 
-        let step5 = step4.onReceive(timer) { _ in
-            let current = CMTimeGetSeconds(player.currentTime())
-            if current.isFinite {
-                let newPlayhead = max(0, current)
-                let didMove = abs(newPlayhead - playheadSeconds) > (1.0 / 240.0)
-
-                if didMove {
-                    playheadSeconds = newPlayhead
-                    model.clipPlayheadSeconds = newPlayhead
-                    model.selectTimelineMarkerIfAligned(near: newPlayhead)
-                    if Date() >= suppressVisualPlayheadSyncUntil {
-                        playheadVisualSeconds = newPlayhead
-                    }
-                }
-
-                if player.rate != 0 {
-                    isViewportManuallyControlled = false
-                    updateViewportForPlayhead(shouldFollow: true)
-                } else if didMove {
-                    updateViewportForPlayhead(shouldFollow: false)
-                }
-            }
-            let currentDuration = CMTimeGetSeconds(player.currentItem?.duration ?? .invalid)
-            if currentDuration.isFinite && currentDuration > 0 {
-                if abs(currentDuration - playerDurationSeconds) > (1.0 / 120.0) {
-                    playerDurationSeconds = currentDuration
-                }
-            }
-        }
-
-        let step6 = step5
+        let step5 = step4
             .onReceive(NotificationCenter.default.publisher(for: .clipSetStartAtPlayhead, object: model)) { _ in
                 model.setClipStart(playheadSeconds, undoManager: undoManager)
             }
@@ -3270,11 +3353,13 @@ struct ClipToolView: View {
                 resetTimelineZoom()
             }
 
-        return step6.onDisappear {
+        return step5.onDisappear {
             waveformTask?.cancel()
             keyboardPanTask?.cancel()
             keyboardPanTask = nil
+            syncSharedPlayheadStateIfNeeded(playheadSeconds, force: true, updateAlignment: true)
             removeKeyMonitor()
+            removePlayerTimeObserver()
             isOptionKeyPressed = false
             isMiddleMousePanning = false
             middleMousePanLastWindowX = nil
@@ -4133,6 +4218,7 @@ private final class WaveformRasterCoordinator {
     var lastPlayheadJumpAnimationToken: Int = -1
     var lastPlayheadCaptureFlashing: Bool = false
     var lastHighlightedMarkerID: UUID?
+    var lastMarkerLayoutSignature: Int?
 
     func setZoomRenderBuckets(_ buckets: [Double]) {
         let normalized = Array(Set(buckets.map { max(1, $0) })).sorted()
@@ -4161,6 +4247,7 @@ private final class WaveformRasterCoordinator {
         lastContentsRectUpdateTime = 0
         lastAppliedBounds = .zero
         lastAppliedZoomBucket = -1
+        lastMarkerLayoutSignature = nil
         return true
     }
 
@@ -4483,39 +4570,53 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         let visibleMarkers = captureMarkers.enumerated().filter { _, marker in
             marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
         }
-        var markerHotspots: [WaveformRasterHostView.MarkerHotspot] = []
-        var markerLayersByID: [UUID: CALayer] = [:]
-        markerContainer.sublayers = visibleMarkers.map { _, marker in
-            let markerX = snapToPixel(xPosition(for: marker.seconds))
-            markerHotspots.append(.init(id: marker.id, seconds: marker.seconds, x: markerX))
-            let isHighlighted = marker.id == highlightedMarkerID
-            let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
-
-            let pin = CALayer()
-            // Keep pinhead visually above timeline while leaving most of it inside hit-testable bounds.
-            pin.frame = CGRect(x: markerX - (isHighlighted ? 4.5 : 4.0), y: -2, width: isHighlighted ? 9 : 8, height: nsView.bounds.height + 6)
-            pin.setValue(isHighlighted, forKey: "isHighlighted")
-
-            let head = CALayer()
-            head.backgroundColor = pinColor.cgColor
-            head.frame = CGRect(x: 0, y: 0, width: isHighlighted ? 9 : 8, height: isHighlighted ? 9 : 8)
-            head.cornerRadius = head.bounds.width / 2
-            pin.addSublayer(head)
-
-            let stem = CALayer()
-            stem.backgroundColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 0.96 : 0.8).cgColor
-            let stemWidth: CGFloat = isHighlighted ? 2.6 : 2.0
-            stem.frame = CGRect(x: (head.bounds.width - stemWidth) / 2.0, y: head.frame.maxY, width: stemWidth, height: nsView.bounds.height + 4)
-            pin.addSublayer(stem)
-
-            pin.shadowColor = NSColor.systemOrange.cgColor
-            pin.shadowOpacity = isHighlighted ? 0.6 : 0
-            pin.shadowRadius = isHighlighted ? 4 : 0
-            markerLayersByID[marker.id] = pin
-            return pin
+        var markerLayoutHasher = Hasher()
+        markerLayoutHasher.combine(visibleMarkers.count)
+        markerLayoutHasher.combine(highlightedMarkerID)
+        markerLayoutHasher.combine(Int((nsView.bounds.width * backingScale).rounded()))
+        markerLayoutHasher.combine(Int((nsView.bounds.height * backingScale).rounded()))
+        for (_, marker) in visibleMarkers {
+            markerLayoutHasher.combine(marker.id)
+            markerLayoutHasher.combine(Int((snapToPixel(xPosition(for: marker.seconds)) * backingScale).rounded()))
         }
-        nsView.markerHotspots = markerHotspots
-        nsView.markerLayersByID = markerLayersByID
+        let markerLayoutSignature = markerLayoutHasher.finalize()
+
+        if context.coordinator.lastMarkerLayoutSignature != markerLayoutSignature {
+            var markerHotspots: [WaveformRasterHostView.MarkerHotspot] = []
+            var markerLayersByID: [UUID: CALayer] = [:]
+            markerContainer.sublayers = visibleMarkers.map { _, marker in
+                let markerX = snapToPixel(xPosition(for: marker.seconds))
+                markerHotspots.append(.init(id: marker.id, seconds: marker.seconds, x: markerX))
+                let isHighlighted = marker.id == highlightedMarkerID
+                let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
+
+                let pin = CALayer()
+                // Keep pinhead visually above timeline while leaving most of it inside hit-testable bounds.
+                pin.frame = CGRect(x: markerX - (isHighlighted ? 4.5 : 4.0), y: -2, width: isHighlighted ? 9 : 8, height: nsView.bounds.height + 6)
+                pin.setValue(isHighlighted, forKey: "isHighlighted")
+
+                let head = CALayer()
+                head.backgroundColor = pinColor.cgColor
+                head.frame = CGRect(x: 0, y: 0, width: isHighlighted ? 9 : 8, height: isHighlighted ? 9 : 8)
+                head.cornerRadius = head.bounds.width / 2
+                pin.addSublayer(head)
+
+                let stem = CALayer()
+                stem.backgroundColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 0.96 : 0.8).cgColor
+                let stemWidth: CGFloat = isHighlighted ? 2.6 : 2.0
+                stem.frame = CGRect(x: (head.bounds.width - stemWidth) / 2.0, y: head.frame.maxY, width: stemWidth, height: nsView.bounds.height + 4)
+                pin.addSublayer(stem)
+
+                pin.shadowColor = NSColor.systemOrange.cgColor
+                pin.shadowOpacity = isHighlighted ? 0.6 : 0
+                pin.shadowRadius = isHighlighted ? 4 : 0
+                markerLayersByID[marker.id] = pin
+                return pin
+            }
+            nsView.markerHotspots = markerHotspots
+            nsView.markerLayersByID = markerLayersByID
+            context.coordinator.lastMarkerLayoutSignature = markerLayoutSignature
+        }
         nsView.applyMarkerHoverState(animated: false)
 
         if highlightedMarkerID != context.coordinator.lastHighlightedMarkerID,
@@ -6067,6 +6168,7 @@ struct ContentView: View {
     @State private var appWindow: NSWindow?
     @State private var showJobsPopover = false
     @State private var lastQueuedCount = 0
+    @State private var lastPendingQueuedCount = 0
 
     @MainActor init() {
         _model = StateObject(wrappedValue: WorkspaceViewModel())
@@ -6129,16 +6231,19 @@ struct ContentView: View {
             syncWindowMetadata()
         }
         .onChange(of: model.queuedJobs.count) { newCount in
-            if newCount > lastQueuedCount && lastQueuedCount == 0 {
+            let pendingQueuedCount = model.queuedJobs.filter { $0.status == .queued }.count
+            if pendingQueuedCount > lastPendingQueuedCount && model.isActivityRunning {
                 showJobsPopover = true
             }
             if newCount == 0 {
                 showJobsPopover = false
             }
             lastQueuedCount = newCount
+            lastPendingQueuedCount = pendingQueuedCount
         }
         .onAppear {
             lastQueuedCount = model.queuedJobs.count
+            lastPendingQueuedCount = model.queuedJobs.filter { $0.status == .queued }.count
         }
         .focusedSceneValue(\.workspaceModel, model)
         .toolbar {

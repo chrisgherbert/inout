@@ -3276,7 +3276,10 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func selectTimelineMarkerIfAligned(near seconds: Double, tolerance: Double = 1.0 / 30.0) {
-        highlightedCaptureTimelineMarkerID = nearestTimelineMarker(to: seconds, tolerance: tolerance)?.id
+        let next = nearestTimelineMarker(to: seconds, tolerance: tolerance)?.id
+        if highlightedCaptureTimelineMarkerID != next {
+            highlightedCaptureTimelineMarkerID = next
+        }
     }
 
     func removeHighlightedTimelineMarker(undoManager: UndoManager? = nil) -> Bool {
