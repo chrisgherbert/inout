@@ -2239,6 +2239,14 @@ struct ClipToolView: View {
     private var fastClipFormats: [ClipFormat] { [.mp4, .mov] }
     private var advancedClipFormats: [ClipFormat] { ClipFormat.allCases }
 
+    private func effectivePlayheadSeconds() -> Double {
+        let current = CMTimeGetSeconds(player.currentTime())
+        if current.isFinite {
+            return max(0, min(current, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        }
+        return playheadSeconds
+    }
+
     private func installPlayerTimeObserverIfNeeded() {
         guard playerTimeObserverToken == nil else { return }
         let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
@@ -2251,7 +2259,7 @@ struct ClipToolView: View {
                 if didMove {
                     let now = CACurrentMediaTime()
                     let isPlaying = player.rate != 0
-                    let uiUpdateInterval = isPlaying ? (1.0 / 18.0) : (1.0 / 30.0)
+                    let uiUpdateInterval = isPlaying ? (1.0 / 8.0) : (1.0 / 30.0)
                     if !isPlaying || (now - lastPlaybackUIUpdateTimestamp) >= uiUpdateInterval {
                         playheadSeconds = newPlayhead
                         if Date() >= suppressVisualPlayheadSyncUntil {
@@ -2273,7 +2281,7 @@ struct ClipToolView: View {
                     let shouldFollow = !isViewportManuallyControlled
                     if shouldFollow {
                         let now = CACurrentMediaTime()
-                        if (now - lastPlaybackFollowUpdateTimestamp) >= (1.0 / 20.0) {
+                        if (now - lastPlaybackFollowUpdateTimestamp) >= (1.0 / 10.0) {
                             updateViewportForPlayhead(shouldFollow: true)
                             lastPlaybackFollowUpdateTimestamp = now
                         }
@@ -2771,7 +2779,7 @@ struct ClipToolView: View {
                 if chars == "s",
                    model.sourceURL != nil,
                    model.hasVideoTrack {
-                    model.captureFrame(at: playheadSeconds)
+                    model.captureFrame(at: effectivePlayheadSeconds())
                     return nil
                 }
             }
@@ -2883,11 +2891,11 @@ struct ClipToolView: View {
 
             if flags.isDisjoint(with: [.command, .option, .control]) && !flags.contains(.shift) {
                 if chars == "i" {
-                    model.setClipStart(playheadSeconds, undoManager: undoManager)
+                    model.setClipStart(effectivePlayheadSeconds(), undoManager: undoManager)
                     return nil
                 }
                 if chars == "o" {
-                    model.setClipEnd(playheadSeconds, undoManager: undoManager)
+                    model.setClipEnd(effectivePlayheadSeconds(), undoManager: undoManager)
                     return nil
                 }
                 if chars == "x" {
@@ -2896,7 +2904,7 @@ struct ClipToolView: View {
                     return nil
                 }
                 if chars == "m" {
-                    model.addTimelineMarker(at: playheadSeconds, undoManager: undoManager)
+                    model.addTimelineMarker(at: effectivePlayheadSeconds(), undoManager: undoManager)
                     return nil
                 }
             }
@@ -3322,17 +3330,17 @@ struct ClipToolView: View {
 
         let step5 = step4
             .onReceive(NotificationCenter.default.publisher(for: .clipSetStartAtPlayhead, object: model)) { _ in
-                model.setClipStart(playheadSeconds, undoManager: undoManager)
+                model.setClipStart(effectivePlayheadSeconds(), undoManager: undoManager)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipSetEndAtPlayhead, object: model)) { _ in
-                model.setClipEnd(playheadSeconds, undoManager: undoManager)
+                model.setClipEnd(effectivePlayheadSeconds(), undoManager: undoManager)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipClearRange, object: model)) { _ in
                 model.resetClipRange(undoManager: undoManager)
                 seekPlayer(to: model.clipStartSeconds)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipAddMarkerAtPlayhead, object: model)) { _ in
-                model.addTimelineMarker(at: playheadSeconds, undoManager: undoManager)
+                model.addTimelineMarker(at: effectivePlayheadSeconds(), undoManager: undoManager)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart, object: model)) { _ in
                 navigateToMarker(previous: true)
@@ -3341,7 +3349,7 @@ struct ClipToolView: View {
                 navigateToMarker(previous: false)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipCaptureFrame, object: model)) { _ in
-                model.captureFrame(at: playheadSeconds)
+                model.captureFrame(at: effectivePlayheadSeconds())
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomIn, object: model)) { _ in
                 adjustTimelineZoom(by: 1)
