@@ -3194,6 +3194,7 @@ struct ClipToolView: View {
     private var selectionSection: some View {
         ClipSelectionPanel(
             model: model,
+            player: player,
             isCompactLayout: isCompactLayout,
             reduceTransparency: reduceTransparency,
             isWaveformLoading: isWaveformLoading,
@@ -3389,6 +3390,7 @@ struct ClipToolView: View {
 }
 
 struct WaveformView: View {
+    let player: AVPlayer
     @Environment(\.colorScheme) private var colorScheme
     let sourceSessionID: UUID
     let samples: [Double]
@@ -3763,6 +3765,7 @@ struct WaveformView: View {
                 }
 
                 WaveformRasterLayerView(
+                    player: player,
                     sourceSessionID: sourceSessionID,
                     samples: samples,
                     zoomLevel: zoomLevel,
@@ -4041,6 +4044,12 @@ private final class WaveformRasterHostView: NSView {
     let waveformLayer = CALayer()
     let markerContainerLayer = CALayer()
     let playheadLayer = CALayer()
+    weak var player: AVPlayer?
+    var totalDurationSeconds: Double = 0
+    var visibleStartSeconds: Double = 0
+    var visibleEndSeconds: Double = 1
+    var playheadDisplayWidth: CGFloat = 2
+    private var livePlaybackTimer: Timer?
     var onMarkerSeek: ((Double) -> Void)?
     var markerHotspots: [MarkerHotspot] = []
     var markerLayersByID: [UUID: CALayer] = [:]
@@ -4089,6 +4098,10 @@ private final class WaveformRasterHostView: NSView {
         layer?.addSublayer(waveformClipLayer)
         layer?.addSublayer(markerContainerLayer)
         layer?.addSublayer(playheadLayer)
+    }
+
+    deinit {
+        stopLivePlaybackTimer()
     }
 
     required init?(coder: NSCoder) {
@@ -4210,6 +4223,57 @@ private final class WaveformRasterHostView: NSView {
         waveformClipLayer.frame = bounds
         waveformLayer.frame = waveformClipLayer.bounds
         markerContainerLayer.frame = bounds
+    }
+
+    private func startLivePlaybackTimerIfNeeded() {
+        guard livePlaybackTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.tickLivePlayhead()
+        }
+        livePlaybackTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopLivePlaybackTimer() {
+        livePlaybackTimer?.invalidate()
+        livePlaybackTimer = nil
+    }
+
+    func updateLivePlaybackTimerState() {
+        guard let player else {
+            stopLivePlaybackTimer()
+            return
+        }
+        if player.rate != 0 {
+            startLivePlaybackTimerIfNeeded()
+        } else {
+            stopLivePlaybackTimer()
+        }
+    }
+
+    private func tickLivePlayhead() {
+        guard let player, player.rate != 0 else {
+            stopLivePlaybackTimer()
+            return
+        }
+        let current = CMTimeGetSeconds(player.currentTime())
+        guard current.isFinite else { return }
+        let duration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
+        let local = (current - visibleStartSeconds) / duration
+        let x = CGFloat(local) * bounds.width
+        let snappedX = x.rounded()
+        let targetFrame = CGRect(
+            x: snappedX - (playheadDisplayWidth / 2.0),
+            y: -4,
+            width: playheadDisplayWidth,
+            height: bounds.height + 8
+        )
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playheadLayer.frame = targetFrame
+        let visible = snappedX >= -6 && snappedX <= (bounds.width + 6)
+        playheadLayer.opacity = visible ? 1.0 : 0.0
+        CATransaction.commit()
     }
 }
 
@@ -4377,6 +4441,7 @@ private final class WaveformRasterCoordinator {
 }
 
 private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
+    let player: AVPlayer
     let sourceSessionID: UUID
     let samples: [Double]
     let zoomLevel: Double
@@ -4395,6 +4460,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
     static func == (lhs: WaveformRasterLayerView, rhs: WaveformRasterLayerView) -> Bool {
         lhs.sourceSessionID == rhs.sourceSessionID &&
+        ObjectIdentifier(lhs.player) == ObjectIdentifier(rhs.player) &&
         lhs.samples.count == rhs.samples.count &&
         abs(lhs.zoomLevel - rhs.zoomLevel) < 0.0001 &&
         lhs.renderBuckets == rhs.renderBuckets &&
@@ -4422,6 +4488,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
     func updateNSView(_ nsView: WaveformRasterHostView, context: Context) {
         nsView.onMarkerSeek = onMarkerSeek
+        nsView.player = player
         context.coordinator.setZoomRenderBuckets(renderBuckets)
 
         let didRebuildImage = context.coordinator.rebuildImageIfNeeded(
@@ -4526,6 +4593,11 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
         let playheadX = snapToPixel(xPosition(for: playheadSeconds))
         let playheadWidth: CGFloat = isPlayheadCaptureFlashing ? 3.6 : 2.0
+        nsView.totalDurationSeconds = totalDurationSeconds
+        nsView.visibleStartSeconds = visibleStartSeconds
+        nsView.visibleEndSeconds = visibleEndSeconds
+        nsView.playheadDisplayWidth = playheadWidth
+        nsView.updateLivePlaybackTimerState()
         let targetPlayheadFrame = CGRect(
             x: playheadX - (playheadWidth / 2.0),
             y: -4,

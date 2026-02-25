@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 
 struct ClipTimelineControlsPanel<Content: View>: View {
     let reduceTransparency: Bool
@@ -279,6 +280,7 @@ struct ClipSelectionPanel: View {
     @ObservedObject var model: WorkspaceViewModel
     @Environment(\.undoManager) private var undoManager
     @State private var isTimecodeRowHovered = false
+    let player: AVPlayer
     let isCompactLayout: Bool
     let reduceTransparency: Bool
     let isWaveformLoading: Bool
@@ -319,6 +321,7 @@ struct ClipSelectionPanel: View {
                     }
                 } else if !isCompactLayout && !waveformSamples.isEmpty {
                     WaveformView(
+                        player: player,
                         sourceSessionID: model.sourceSessionID,
                         samples: waveformSamples,
                         zoomLevel: timelineZoom,
