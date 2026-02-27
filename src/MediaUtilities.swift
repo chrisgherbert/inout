@@ -243,23 +243,13 @@ func loadSourceMediaInfo(for url: URL) -> SourceMediaInfo {
     return info
 }
 
-func generateWaveformSamples(for url: URL, sampleCount: Int) -> [Double] {
-    guard sampleCount > 0 else { return [] }
-
-    let asset = AVURLAsset(url: url)
-    guard let audioTrack = asset.tracks(withMediaType: .audio).first else { return [] }
-
-    let durationSeconds = CMTimeGetSeconds(asset.duration)
-    guard durationSeconds.isFinite && durationSeconds > 0 else { return [] }
-
-    let outputSettings: [String: Any] = [
-        AVFormatIDKey: kAudioFormatLinearPCM,
-        AVLinearPCMBitDepthKey: 16,
-        AVLinearPCMIsFloatKey: false,
-        AVLinearPCMIsBigEndianKey: false,
-        AVLinearPCMIsNonInterleaved: false
-    ]
-
+private func waveformSamples(
+    for asset: AVURLAsset,
+    audioTrack: AVAssetTrack,
+    durationSeconds: Double,
+    sampleCount: Int,
+    outputSettings: [String: Any]
+) -> [Double]? {
     let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
     output.alwaysCopiesSampleData = false
 
@@ -267,13 +257,14 @@ func generateWaveformSamples(for url: URL, sampleCount: Int) -> [Double] {
     do {
         reader = try AVAssetReader(asset: asset)
     } catch {
-        return []
+        return nil
     }
-    guard reader.canAdd(output) else { return [] }
+    guard reader.canAdd(output) else { return nil }
     reader.add(output)
-    guard reader.startReading() else { return [] }
+    guard reader.startReading() else { return nil }
 
     var peaks = Array(repeating: 0.0, count: sampleCount)
+    let bucketScale = Double(sampleCount - 1) / durationSeconds
 
     while let sampleBuffer = output.copyNextSampleBuffer() {
         guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
@@ -304,10 +295,11 @@ func generateWaveformSamples(for url: URL, sampleCount: Int) -> [Double] {
         if frameCount <= 0 { continue }
 
         let int16Pointer = UnsafeRawPointer(dataPointer).assumingMemoryBound(to: Int16.self)
+        let frameStep = 1.0 / asbd.mSampleRate
 
         for frame in 0..<frameCount {
-            let sampleTime = startTime + (Double(frame) / asbd.mSampleRate)
-            let bucketFloat = (sampleTime / durationSeconds) * Double(sampleCount - 1)
+            let sampleTime = startTime + (Double(frame) * frameStep)
+            let bucketFloat = sampleTime * bucketScale
             let bucket = min(sampleCount - 1, max(0, Int(bucketFloat)))
 
             var framePeak = 0.0
@@ -320,11 +312,60 @@ func generateWaveformSamples(for url: URL, sampleCount: Int) -> [Double] {
         }
     }
 
+    guard reader.status != .failed else { return nil }
+
     let maxPeak = peaks.max() ?? 0
     if maxPeak > 0 {
         return peaks.map { $0 / maxPeak }
     }
     return peaks
+}
+
+func generateWaveformSamples(for url: URL, sampleCount: Int) -> [Double] {
+    guard sampleCount > 0 else { return [] }
+
+    let asset = AVURLAsset(url: url)
+    guard let audioTrack = asset.tracks(withMediaType: .audio).first else { return [] }
+
+    let durationSeconds = CMTimeGetSeconds(asset.duration)
+    guard durationSeconds.isFinite && durationSeconds > 0 else { return [] }
+
+    let fullRateOutputSettings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false
+    ]
+    // Fast path: request downmixed mono at lower sample-rate to reduce decode/processing load.
+    let reducedRateOutputSettings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+        AVSampleRateKey: 12_000,
+        AVNumberOfChannelsKey: 1
+    ]
+
+    if let fast = waveformSamples(
+        for: asset,
+        audioTrack: audioTrack,
+        durationSeconds: durationSeconds,
+        sampleCount: sampleCount,
+        outputSettings: reducedRateOutputSettings
+    ) {
+        return fast
+    }
+
+    // Fallback: keep prior full-rate behavior for assets that reject conversion settings.
+    return waveformSamples(
+        for: asset,
+        audioTrack: audioTrack,
+        durationSeconds: durationSeconds,
+        sampleCount: sampleCount,
+        outputSettings: fullRateOutputSettings
+    ) ?? []
 }
 
 func isFrameMostlyBlack(_ sampleBuffer: CMSampleBuffer) -> Bool {
