@@ -5,16 +5,24 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SRC_DIR="$ROOT_DIR/src"
 DIST="$ROOT_DIR/dist"
 MODULE_CACHE="$ROOT_DIR/.build/module-cache"
+SWIFTC_TMP_DIR="$ROOT_DIR/.build/tmp"
 SWIFTC_BUILD_DIR="$ROOT_DIR/.build/swiftc"
 SWIFTC_OBJECTS_DIR="$SWIFTC_BUILD_DIR/objects"
 SWIFTC_DEPS_DIR="$SWIFTC_BUILD_DIR/deps"
 SWIFTC_DIAGNOSTICS_DIR="$SWIFTC_BUILD_DIR/diagnostics"
 SWIFTC_MODULE_DIR="$SWIFTC_BUILD_DIR/module"
 SWIFTC_OUTPUT_FILE_MAP="$SWIFTC_BUILD_DIR/output-file-map.json"
-APP_NAME="Bulwark Video Tools"
+APP_NAME="In & Out"
 APP_EXECUTABLE="BulwarkVideoTools"
 BUNDLE_ID="com.bulwark.BulwarkVideoTools"
+APP_NAME_XML="$(python3 - <<'PY'
+from xml.sax.saxutils import escape
+print(escape("In & Out"))
+PY
+)"
 APP="$DIST/$APP_NAME.app"
+LEGACY_APP_1="$DIST/Bulwark Video Tools.app"
+LEGACY_APP_2="$DIST/CheckBlackFrames.app"
 BIN="$APP/Contents/MacOS/$APP_EXECUTABLE"
 PLIST="$APP/Contents/Info.plist"
 APP_RESOURCES="$APP/Contents/Resources"
@@ -50,7 +58,11 @@ esac
 
 mkdir -p "$DIST"
 mkdir -p "$MODULE_CACHE"
+mkdir -p "$SWIFTC_TMP_DIR"
 mkdir -p "$SWIFTC_OBJECTS_DIR" "$SWIFTC_DEPS_DIR" "$SWIFTC_DIAGNOSTICS_DIR" "$SWIFTC_MODULE_DIR"
+export TMPDIR="$SWIFTC_TMP_DIR/"
+# Remove legacy app bundle names to avoid launching stale builds by accident.
+rm -rf "$LEGACY_APP_1" "$LEGACY_APP_2"
 if [[ "$QUICK_BUILD" -eq 0 ]]; then
   rm -rf "$APP"
 fi
@@ -58,6 +70,22 @@ mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES"
 mkdir -p "$ROOT_DIR/assets"
 
 SWIFT_SOURCES=("$SRC_DIR"/*.swift)
+
+# Clean stale module outputs that can trigger swiftc temp-path resolution errors.
+find "$SWIFTC_MODULE_DIR" -maxdepth 1 -type f \
+  \( -name "$APP_EXECUTABLE.swiftmodule" \
+     -o -name "$APP_EXECUTABLE.swiftdoc" \
+     -o -name "$APP_EXECUTABLE.swiftsourceinfo" \
+     -o -name "$APP_EXECUTABLE.swiftdeps" \
+     -o -name "$APP_EXECUTABLE.d" \
+     -o -name "$APP_EXECUTABLE-master.dia" \
+     -o -name "$APP_EXECUTABLE-*.swiftmodule" \
+     -o -name "$APP_EXECUTABLE-*.swiftdoc" \
+     -o -name "$APP_EXECUTABLE-*.swiftsourceinfo" \
+     -o -name "$APP_EXECUTABLE-*.swiftdeps" \
+     -o -name "$APP_EXECUTABLE-*.d" \
+     -o -name "$APP_EXECUTABLE-*.dia" \) \
+  -delete
 
 python3 - "$SWIFTC_OUTPUT_FILE_MAP" "$SWIFTC_OBJECTS_DIR" "$SWIFTC_DEPS_DIR" "$SWIFTC_DIAGNOSTICS_DIR" "$SWIFTC_MODULE_DIR" "$APP_EXECUTABLE" "${SWIFT_SOURCES[@]}" <<'PY'
 import hashlib
@@ -134,9 +162,9 @@ cat > "$PLIST" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>$APP_NAME</string>
+  <string>$APP_NAME_XML</string>
   <key>CFBundleDisplayName</key>
-  <string>$APP_NAME</string>
+  <string>$APP_NAME_XML</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

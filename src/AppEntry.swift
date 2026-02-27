@@ -39,12 +39,12 @@ struct CheckBlackFramesApp: App {
     @StateObject private var settingsModel = WorkspaceViewModel()
 
     var body: some Scene {
-        WindowGroup("Bulwark Video Tools", id: "main", for: UUID.self) { _ in
+        WindowGroup("In & Out", id: "main", for: UUID.self) { _ in
             ContentView()
         }
         .windowResizability(.contentMinSize)
 
-        Window("Bulwark Video Tools Help", id: "help") {
+        Window("In & Out Help", id: "help") {
             HelpDocumentationView()
                 .preferredColorScheme(settingsModel.appearance.colorScheme)
         }
@@ -213,7 +213,7 @@ struct CheckBlackFramesApp: App {
             }
 
             CommandGroup(replacing: .help) {
-                Button("Bulwark Video Tools Help") {
+                Button("In & Out Help") {
                     openWindow(id: "help")
                 }
                 .keyboardShortcut("/", modifiers: [.command, .shift])

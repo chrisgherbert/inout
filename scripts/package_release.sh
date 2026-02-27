@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-APP_NAME="Bulwark Video Tools.app"
+APP_NAME="In & Out.app"
 APP_PATH="$DIST_DIR/$APP_NAME"
-ZIP_NAME="Bulwark-Video-Tools-macOS.zip"
+ZIP_NAME="In-Out-macOS.zip"
 ZIP_PATH="$DIST_DIR/$ZIP_NAME"
 
 cd "$ROOT_DIR"
