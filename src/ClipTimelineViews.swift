@@ -2467,12 +2467,13 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             let isContinuousViewportInteraction = lastUpdate > 0 && (now - lastUpdate) < 0.08
             if oldRect != .null {
                 let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
-                // Smooth large viewport jumps (keyboard marker nav / fast thumb pan).
-                if deltaX > 0.03 && !isContinuousViewportInteraction {
+                let deltaWidth = abs(newContentsRect.width - oldRect.width)
+                // Smooth both viewport pans and zoom resizes for discrete jumps.
+                if (deltaX > 0.01 || deltaWidth > 0.01) && !isContinuousViewportInteraction {
                     let anim = CABasicAnimation(keyPath: "contentsRect")
                     anim.fromValue = oldRect
                     anim.toValue = newContentsRect
-                    anim.duration = 0.22
+                    anim.duration = 0.20
                     anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     anim.isRemovedOnCompletion = true
                     nsView.waveformLayer.add(anim, forKey: "viewportRecenter")
@@ -2483,7 +2484,7 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
             if oldRect != .null {
                 let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
-                if deltaX > 0.03 && !isContinuousViewportInteraction {
+                if deltaX > 0.01 && !isContinuousViewportInteraction {
                     let normWidth = max(0.000001, newContentsRect.width)
                     let markerScrollShiftX = CGFloat((newContentsRect.origin.x - oldRect.origin.x) / normWidth) * nsView.bounds.width
                     if markerScrollShiftX != 0 {
