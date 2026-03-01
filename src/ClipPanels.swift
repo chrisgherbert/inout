@@ -87,6 +87,7 @@ struct ClipTimelineControlsPanel<Content: View>: View {
                     onViewportStartChange: onViewportStartChange
                 )
                 .frame(height: 18)
+                .padding(.horizontal, 6)
                 .padding(.top, 7)
 
                 content
