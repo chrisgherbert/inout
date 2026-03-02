@@ -85,7 +85,15 @@ struct ContentView: View {
             }
             .onReceive(externalOpenBridge.$incomingURL) { url in
                 guard let url else { return }
-                guard appWindow?.isKeyWindow == true else { return }
+
+                let visibleDocumentWindows = NSApp.windows.filter { window in
+                    window.isVisible && !window.isMiniaturized && window.canBecomeMain
+                }
+                let canReuseSingleEmptyWindow =
+                    visibleDocumentWindows.count == 1 &&
+                    model.sourceURL == nil
+
+                guard appWindow?.isKeyWindow == true || canReuseSingleEmptyWindow else { return }
                 model.setSource(url)
                 NSApp.activate(ignoringOtherApps: true)
                 externalOpenBridge.incomingURL = nil
