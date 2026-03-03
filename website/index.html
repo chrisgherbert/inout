@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>In &amp; Out - Simple Clipping, Converting, and QA Testing of Videos</title>
+  <meta name="description" content="In & Out is a focused macOS tool for clipping, converting, and QA testing media with fast keyboard-friendly workflows." />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="page-bg"></div>
+
+  <header class="site-header">
+    <div class="brand">
+      <img src="./assets/icon.png" alt="In & Out icon" class="brand-icon" />
+      <span class="brand-name">In &amp; Out</span>
+    </div>
+    <nav class="header-nav">
+      <a href="#features">Features</a>
+      <a href="#screenshot">Screenshot</a>
+      <a href="#requirements">Requirements</a>
+      <a href="#download">Download</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="eyebrow">macOS Media Utility</p>
+      <h1>Simple Clipping, Converting, and QA Testing of Videos</h1>
+      <p class="hero-copy">
+        In &amp; Out is built for fast editorial utility work: set accurate in/out points,
+        export clips and audio, inspect technical metadata, and run QA checks for black frames,
+        silence gaps, and transcript-level review without leaving a single app window.
+      </p>
+      <div class="hero-actions">
+        <a id="download-btn" class="btn-primary" href="#" target="_blank" rel="noopener noreferrer">Download for macOS</a>
+      </div>
+      <p id="release-meta" class="release-meta">Resolving latest release...</p>
+    </section>
+
+    <section id="screenshot" class="screenshot-section panel">
+      <h2>In &amp; Out Interface</h2>
+      <p class="section-copy">
+        A dark, timeline-first workspace designed for precise media edits, quick exports, and technical checks.
+      </p>
+      <div class="screenshot-frame">
+        <img src="./assets/screenshot.png" alt="In & Out screenshot" />
+      </div>
+    </section>
+
+    <section id="features" class="features panel">
+      <h2>Key Features</h2>
+      <ul>
+        <li>Fast clip workflow with timeline zoom, marker navigation, in/out shortcuts, and quick export.</li>
+        <li>Multiple output paths: fast passthrough, advanced transcode controls, and audio-only exports.</li>
+        <li>Built-in QA detection for black segments and silent gaps, with timeline visualization and segment lists.</li>
+        <li>Inspect panel with codec/bitrate/frame rate/resolution metadata and transcript tools.</li>
+        <li>Burned caption workflow powered by local Whisper integration for advanced clip exports.</li>
+      </ul>
+      <p class="section-copy">
+        It is intentionally focused on practical post-production utility tasks rather than full nonlinear editing.
+      </p>
+    </section>
+
+    <section id="requirements" class="requirements panel">
+      <h2>System Requirements</h2>
+      <ul>
+        <li>macOS 12 Monterey or later</li>
+        <li>Apple Silicon Mac</li>
+      </ul>
+      <div class="danger-callout" role="alert" aria-live="polite">
+        <span class="danger-icon" aria-hidden="true">!</span>
+        <div>
+          <p class="danger-title">Early Development Warning</p>
+          <p class="danger-copy">In &amp; Out is in very early and has not been extensively tested. Use at your own risk.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="download" class="download panel">
+      <h2>Download</h2>
+      <p class="section-copy">
+        Downloads are served from GitHub Releases. The button above automatically targets the latest
+        zip asset for In &amp; Out.
+      </p>
+      <a id="download-btn-secondary" class="btn-primary bottom-download-btn" href="#" target="_blank" rel="noopener noreferrer">Download for macOS</a>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>In &amp; Out</p>
+    <p class="footer-links">
+      <a id="releases-link" href="#" target="_blank" rel="noopener noreferrer">GitHub Releases</a>
+      <a id="repo-link" href="#" target="_blank" rel="noopener noreferrer" aria-label="GitHub Repository">
+        <svg class="github-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.63 2.29 6.71 5.47 7.8.4.08.55-.18.55-.39 0-.19-.01-.82-.01-1.48-2.01.45-2.53-.51-2.69-.98-.09-.25-.48-1.03-.82-1.24-.28-.16-.68-.57-.01-.58.63-.01 1.08.59 1.23.84.72 1.24 1.87.89 2.33.68.07-.54.28-.89.5-1.09-1.78-.21-3.64-.92-3.64-4.08 0-.9.31-1.64.82-2.22-.08-.21-.36-1.06.08-2.2 0 0 .67-.22 2.2.85.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.07 2.2-.85 2.2-.85.44 1.14.16 1.99.08 2.2.51.58.82 1.31.82 2.22 0 3.17-1.87 3.87-3.65 4.08.29.26.54.76.54 1.54 0 1.11-.01 2-.01 2.28 0 .21.15.47.55.39A8.2 8.2 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z"></path>
+        </svg>
+        <span>GitHub Repo</span>
+      </a>
+    </p>
+  </footer>
+
+  <script src="./site.js"></script>
+</body>
+</html>

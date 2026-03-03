@@ -1,0 +1,18 @@
+<svg width="1600" height="920" viewBox="0 0 1600 920" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="In & Out screenshot placeholder">
+  <rect width="1600" height="920" rx="16" fill="#0D1116"/>
+  <rect x="28" y="28" width="1544" height="70" rx="12" fill="#151B23"/>
+  <circle cx="56" cy="63" r="8" fill="#FF5F57"/>
+  <circle cx="80" cy="63" r="8" fill="#FEBB2E"/>
+  <circle cx="104" cy="63" r="8" fill="#28C840"/>
+  <rect x="28" y="118" width="1544" height="132" rx="12" fill="#121922"/>
+  <rect x="28" y="270" width="1544" height="320" rx="12" fill="#0F1722"/>
+  <rect x="28" y="610" width="1544" height="282" rx="12" fill="#121922"/>
+  <rect x="78" y="157" width="220" height="30" rx="10" fill="#0973EE" fill-opacity="0.22"/>
+  <rect x="314" y="157" width="140" height="30" rx="10" fill="#1E2733"/>
+  <rect x="78" y="353" width="1444" height="20" rx="10" fill="#0973EE" fill-opacity="0.4"/>
+  <rect x="78" y="403" width="1444" height="120" rx="8" fill="#0A5CBD" fill-opacity="0.22" stroke="#0973EE" stroke-width="2"/>
+  <rect x="78" y="675" width="600" height="120" rx="12" fill="#0E1620" stroke="#22303D"/>
+  <rect x="706" y="675" width="380" height="120" rx="12" fill="#0E1620" stroke="#22303D"/>
+  <rect x="1114" y="675" width="408" height="120" rx="12" fill="#0E1620" stroke="#22303D"/>
+  <text x="800" y="835" text-anchor="middle" fill="#A6ADB7" font-family="SF Pro Display, -apple-system, Helvetica, Arial, sans-serif" font-size="32">Replace with real In &amp; Out screenshot</text>
+</svg>
