@@ -49,6 +49,7 @@ struct ClipToolView: View {
     @State private var lastSharedPlayheadSyncTimestamp: CFTimeInterval = 0
     @State private var timelinePointerSeconds: Double?
     @State private var clipWindow: NSWindow?
+    @State private var clipContentHeight: CGFloat = 0
     @State private var playerTimeObserverToken: Any?
     @State private var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
     @State private var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
@@ -991,15 +992,34 @@ struct ClipToolView: View {
     }
 
     private var playerMinHeight: CGFloat {
-        isCompactLayout ? 150 : 240
+        isCompactLayout ? 140 : 220
+    }
+
+    private var playerHardMaxHeight: CGFloat {
+        isCompactLayout ? 340 : 720
     }
 
     private var playerMaxHeight: CGFloat {
-        isCompactLayout ? 320 : 560
+        guard clipContentHeight > 0 else {
+            return playerHardMaxHeight
+        }
+        let ratioCap = clipContentHeight * (isCompactLayout ? 0.52 : 0.62)
+        return min(playerHardMaxHeight, max(playerMinHeight + 20, ratioCap))
     }
 
     private var playerDefaultHeight: CGFloat {
-        isCompactLayout ? 210 : 330
+        let fallback: CGFloat = isCompactLayout ? 185 : 300
+        guard clipContentHeight > 0 else {
+            return fallback
+        }
+
+        // Keep timeline/waveform visible at default sizes while still allowing
+        // a larger player in taller windows.
+        let reserveForControls = isCompactLayout ? CGFloat(320) : CGFloat(390)
+        let byReserve = clipContentHeight - reserveForControls
+        let byRatio = clipContentHeight * (isCompactLayout ? 0.30 : 0.40)
+        let preferred = min(byReserve, byRatio)
+        return clampedPlayerHeight(max(fallback, preferred))
     }
 
     private func clampedPlayerHeight(_ value: CGFloat) -> CGFloat {
@@ -1010,6 +1030,7 @@ struct ClipToolView: View {
         if let livePlayerHeight {
             return clampedPlayerHeight(livePlayerHeight)
         }
+        // `storedPlayerHeight == 0` is auto-height mode.
         let raw = storedPlayerHeight > 0 ? CGFloat(storedPlayerHeight) : playerDefaultHeight
         return clampedPlayerHeight(raw)
     }
@@ -1088,11 +1109,9 @@ struct ClipToolView: View {
     }
 
     private func resetPlayerHeightToDefaultIfNeeded() {
-        if storedPlayerHeight <= 0 {
-            storedPlayerHeight = Double(playerDefaultHeight)
-            return
+        if storedPlayerHeight > 0 {
+            storedPlayerHeight = Double(clampedPlayerHeight(CGFloat(storedPlayerHeight)))
         }
-        storedPlayerHeight = Double(clampedPlayerHeight(CGFloat(storedPlayerHeight)))
     }
 
     private var timelineControlsSection: some View {
@@ -1220,6 +1239,17 @@ struct ClipToolView: View {
                     dismissTimecodeFieldFocus()
                 }
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear {
+                        clipContentHeight = geo.size.height
+                    }
+                    .onChange(of: geo.size.height) { newHeight in
+                        clipContentHeight = newHeight
+                    }
+            }
+        )
     }
 
     private func withLifecycleHandlers<V: View>(_ view: V) -> some View {

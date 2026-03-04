@@ -313,14 +313,14 @@ struct ClipSelectionPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-                if !isCompactLayout && isWaveformLoading {
+                if isWaveformLoading {
                     HStack {
                         ProgressView()
                         Text("Generating waveform…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                } else if !isCompactLayout && !waveformSamples.isEmpty {
+                } else if !waveformSamples.isEmpty {
                     WaveformView(
                         player: player,
                         sourceSessionID: model.sourceSessionID,
@@ -348,7 +348,7 @@ struct ClipSelectionPanel: View {
                         onHoverChanged: onWaveformHoverChanged,
                         onPointerTimeChanged: onWaveformPointerTimeChanged
                     )
-                    .frame(height: 74)
+                    .frame(height: isCompactLayout ? 64 : 74)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
                     .padding(.bottom, -6)
