@@ -94,6 +94,8 @@ if [[ ! -d "$APP_PATH" ]]; then
 fi
 
 if [[ "$SKIP_SMOKE" -eq 0 ]]; then
+  "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$APP_PATH/Contents/Resources/ffmpeg"
+  "$ROOT_DIR/scripts/whisper_dependency_audit.sh" "$APP_PATH"
   echo "Running bundled ffmpeg smoke tests..."
   "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
 fi
@@ -109,7 +111,7 @@ if ! security find-identity -v -p codesigning | grep -F "$DEV_ID_APP" >/dev/null
 fi
 
 echo "Signing nested binaries..."
-for binary in "$APP_PATH/Contents/Resources/ffmpeg" "$APP_PATH/Contents/Resources/whisper-cli"; do
+for binary in "$APP_PATH/Contents/Resources/ffmpeg" "$APP_PATH/Contents/Resources/whisper-cli" "$APP_PATH"/Contents/Resources/libwhisper*.dylib "$APP_PATH"/Contents/Resources/libggml*.dylib; do
   if [[ -f "$binary" ]]; then
     codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$binary"
   else

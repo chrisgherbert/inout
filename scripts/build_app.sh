@@ -41,8 +41,94 @@ QUICK_EXPORT_SOUND_DEST="$APP_RESOURCES/QuickExportSnip.aiff"
 PINNED_FFMPEG_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg"
 PINNED_FFMPEG_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg.sha256"
 
+copy_whisper_runtime_libs() {
+  local whisper_cli_path="$1"
+  local whisper_root
+  whisper_root="$(cd "$(dirname "$whisper_cli_path")/.." && pwd)"
+  local -a search_dirs=(
+    "$whisper_root/src"
+    "$whisper_root/ggml/src"
+    "$whisper_root/ggml/src/ggml-blas"
+    "$whisper_root/ggml/src/ggml-metal"
+  )
+
+  local deps
+  deps="$(
+    otool -L "$whisper_cli_path" \
+      | awk '/@rpath\/.*\.dylib/ { print $1 }' \
+      | sed 's#^@rpath/##'
+  )"
+
+  if [[ -z "$deps" ]]; then
+    echo "No @rpath whisper runtime dependencies found."
+    return 0
+  fi
+
+  while IFS= read -r dep; do
+    [[ -z "$dep" ]] && continue
+    local src_path=""
+    local dir
+    for dir in "${search_dirs[@]}"; do
+      if [[ -e "$dir/$dep" ]]; then
+        src_path="$dir/$dep"
+        break
+      fi
+    done
+
+    if [[ -z "$src_path" ]]; then
+      echo "ERROR: could not locate whisper runtime dependency: $dep"
+      exit 1
+    fi
+
+    local src_real
+    src_real="$(python3 - "$src_path" <<'PY'
+import os,sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+    local real_base
+    real_base="$(basename "$src_real")"
+
+    cp "$src_real" "$APP_RESOURCES/$real_base"
+    chmod +x "$APP_RESOURCES/$real_base"
+
+    if [[ "$dep" != "$real_base" ]]; then
+      ln -sf "$real_base" "$APP_RESOURCES/$dep"
+    fi
+  done <<< "$deps"
+
+  # Ensure whisper-cli resolves @rpath from app resources, not build-machine paths.
+  if ! otool -l "$APP_RESOURCES/whisper-cli" | grep -q "path @executable_path "; then
+    install_name_tool -add_rpath "@executable_path" "$APP_RESOURCES/whisper-cli" || true
+  fi
+
+  # Remove absolute build-dir rpaths from whisper-cli.
+  local rpaths
+  rpaths="$(otool -l "$APP_RESOURCES/whisper-cli" | awk '/path / { print $2 }' | grep '^/' || true)"
+  while IFS= read -r rp; do
+    [[ -z "$rp" ]] && continue
+    install_name_tool -delete_rpath "$rp" "$APP_RESOURCES/whisper-cli" || true
+  done <<< "$rpaths"
+
+  # For each bundled whisper dylib, ensure @rpath is resolvable locally and strip absolute rpaths.
+  local lib
+  for lib in "$APP_RESOURCES"/libwhisper*.dylib "$APP_RESOURCES"/libggml*.dylib; do
+    [[ -e "$lib" ]] || continue
+    if ! otool -l "$lib" | grep -q "path @loader_path "; then
+      install_name_tool -add_rpath "@loader_path" "$lib" || true
+    fi
+    local lib_rpaths
+    lib_rpaths="$(otool -l "$lib" | awk '/path / { print $2 }' | grep '^/' || true)"
+    while IFS= read -r rp; do
+      [[ -z "$rp" ]] && continue
+      install_name_tool -delete_rpath "$rp" "$lib" || true
+    done <<< "$lib_rpaths"
+  done
+}
+
 BUILD_MODE="${1:-dev}"
 QUICK_BUILD=0
+REFRESH_BUNDLED_TOOLS="${REFRESH_BUNDLED_TOOLS:-0}"
 case "$BUILD_MODE" in
   dev)
     SWIFTC_OPT_FLAGS=(-Onone -g)
@@ -280,6 +366,8 @@ if [[ "$BUILD_MODE" == "release" ]]; then
     echo "Binary:   $FFMPEG_SOURCE"
     exit 1
   fi
+
+  "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$FFMPEG_SOURCE"
 else
   if [[ -z "$FFMPEG_SOURCE" && -x "$PINNED_FFMPEG_DEFAULT" ]]; then
     FFMPEG_SOURCE="$PINNED_FFMPEG_DEFAULT"
@@ -295,7 +383,7 @@ else
 fi
 
 if [[ -n "$FFMPEG_SOURCE" && -x "$FFMPEG_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/ffmpeg" && "$BUILD_MODE" != "release" ]]; then
+  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/ffmpeg" && "$BUILD_MODE" != "release" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
     echo "Quick mode: keeping existing bundled ffmpeg."
   else
     cp "$FFMPEG_SOURCE" "$APP_RESOURCES/ffmpeg"
@@ -340,11 +428,12 @@ if [[ -z "$WHISPER_SOURCE" ]]; then
 fi
 
 if [[ -n "$WHISPER_SOURCE" && -x "$WHISPER_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/whisper-cli" ]]; then
-    echo "Quick mode: keeping existing bundled whisper-cli."
+  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/whisper-cli" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
+    echo "Quick mode: keeping existing bundled whisper-cli/runtime libs."
   else
     cp "$WHISPER_SOURCE" "$APP_RESOURCES/whisper-cli"
     chmod +x "$APP_RESOURCES/whisper-cli"
+    copy_whisper_runtime_libs "$WHISPER_SOURCE"
     echo "Bundled whisper-cli: $WHISPER_SOURCE"
   fi
 else
@@ -353,7 +442,7 @@ fi
 
 WHISPER_MODEL_SOURCE="${BUNDLED_WHISPER_MODEL_PATH:-}"
 if [[ -n "$WHISPER_MODEL_SOURCE" && -f "$WHISPER_MODEL_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -f "$APP_RESOURCES/profanity-model.bin" ]]; then
+  if [[ "$QUICK_BUILD" -eq 1 && -f "$APP_RESOURCES/profanity-model.bin" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
     echo "Quick mode: keeping existing bundled Whisper model."
   else
     cp "$WHISPER_MODEL_SOURCE" "$APP_RESOURCES/profanity-model.bin"
@@ -368,7 +457,7 @@ else
   fi
 
   if [[ -n "$local_vendor_model" && -f "$local_vendor_model" ]]; then
-    if [[ "$QUICK_BUILD" -eq 1 && -f "$APP_RESOURCES/profanity-model.bin" ]]; then
+    if [[ "$QUICK_BUILD" -eq 1 && -f "$APP_RESOURCES/profanity-model.bin" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
       echo "Quick mode: keeping existing bundled Whisper model."
     else
       cp "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"

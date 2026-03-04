@@ -21,6 +21,12 @@ chmod +x "$DEST_BIN"
 SHA="$(shasum -a 256 "$DEST_BIN" | awk '{print $1}')"
 echo "$SHA  ffmpeg" > "$DEST_SHA"
 
+if ! "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$DEST_BIN"; then
+  echo ""
+  echo "WARNING: pinned ffmpeg is not portable across machines."
+  echo "It may work locally but fail on other Macs."
+fi
+
 echo "Pinned ffmpeg:"
 echo "  Binary:   $DEST_BIN"
 echo "  Checksum: $DEST_SHA"
