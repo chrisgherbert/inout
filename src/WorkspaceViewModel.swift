@@ -2988,6 +2988,7 @@ final class WorkspaceViewModel: ObservableObject {
             let safeDuration = max(0.001, durationSeconds)
             var stdoutBuffer = Data()
             var stderrBuffer = Data()
+            var stderrLines: [String] = []
 
             Task { @MainActor [weak self] in
                 self?.appendActivityConsole("$ \(commandLine)", source: "ffmpeg")
@@ -3060,7 +3061,9 @@ final class WorkspaceViewModel: ObservableObject {
                 let chunk = handle.availableData
                 guard !chunk.isEmpty else { return }
                 stderrBuffer.append(chunk)
-                consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { _ in }
+                consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { rawLine in
+                    stderrLines.append(rawLine)
+                }
             }
 
             do {
@@ -3116,17 +3119,22 @@ final class WorkspaceViewModel: ObservableObject {
                         emitProgress(seconds / safeDuration)
                     }
                 }
-                consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { _ in }
+                consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { rawLine in
+                    stderrLines.append(rawLine)
+                }
 
                 let stderrText = String(decoding: stderrData, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let stdoutText = String(decoding: stdoutBuffer, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                let stderrFromLines = stderrLines.suffix(8).joined(separator: "\n")
 
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: nil)
                 } else if !stderrText.isEmpty {
                     continuation.resume(returning: stderrText)
+                } else if !stderrFromLines.isEmpty {
+                    continuation.resume(returning: stderrFromLines)
                 } else if !stdoutText.isEmpty {
                     continuation.resume(returning: stdoutText)
                 } else {

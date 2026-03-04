@@ -38,6 +38,8 @@ FRAME_SOUND_SOURCE="$ROOT_DIR/assets/FrameShutter.aiff"
 FRAME_SOUND_DEST="$APP_RESOURCES/FrameShutter.aiff"
 QUICK_EXPORT_SOUND_SOURCE="$ROOT_DIR/assets/QuickExportSnip.aiff"
 QUICK_EXPORT_SOUND_DEST="$APP_RESOURCES/QuickExportSnip.aiff"
+PINNED_FFMPEG_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg"
+PINNED_FFMPEG_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg.sha256"
 
 BUILD_MODE="${1:-dev}"
 QUICK_BUILD=0
@@ -246,22 +248,63 @@ else
 fi
 
 FFMPEG_SOURCE="${BUNDLED_FFMPEG_PATH:-}"
-if [[ -z "$FFMPEG_SOURCE" ]]; then
-  for candidate in /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg /usr/bin/ffmpeg; do
-    if [[ -x "$candidate" ]]; then
-      FFMPEG_SOURCE="$candidate"
-      break
-    fi
-  done
+PINNED_FFMPEG_SHA_FILE="${BUNDLED_FFMPEG_SHA_FILE:-$PINNED_FFMPEG_SHA_FILE_DEFAULT}"
+EXPECTED_FFMPEG_SHA="${BUNDLED_FFMPEG_SHA256:-}"
+
+if [[ "$BUILD_MODE" == "release" ]]; then
+  if [[ -z "$FFMPEG_SOURCE" ]]; then
+    FFMPEG_SOURCE="$PINNED_FFMPEG_DEFAULT"
+  fi
+
+  if [[ ! -x "$FFMPEG_SOURCE" ]]; then
+    echo "ERROR: release build requires a pinned ffmpeg binary."
+    echo "Missing executable: $FFMPEG_SOURCE"
+    echo "Use scripts/pin_ffmpeg.sh or set BUNDLED_FFMPEG_PATH."
+    exit 1
+  fi
+
+  if [[ -z "$EXPECTED_FFMPEG_SHA" && -f "$PINNED_FFMPEG_SHA_FILE" ]]; then
+    EXPECTED_FFMPEG_SHA="$(awk '{print $1}' "$PINNED_FFMPEG_SHA_FILE" | head -n 1)"
+  fi
+  if [[ -z "$EXPECTED_FFMPEG_SHA" ]]; then
+    echo "ERROR: release build requires ffmpeg checksum pinning."
+    echo "Set BUNDLED_FFMPEG_SHA256 or provide: $PINNED_FFMPEG_SHA_FILE"
+    exit 1
+  fi
+
+  ACTUAL_FFMPEG_SHA="$(shasum -a 256 "$FFMPEG_SOURCE" | awk '{print $1}')"
+  if [[ "$ACTUAL_FFMPEG_SHA" != "$EXPECTED_FFMPEG_SHA" ]]; then
+    echo "ERROR: ffmpeg checksum mismatch."
+    echo "Expected: $EXPECTED_FFMPEG_SHA"
+    echo "Actual:   $ACTUAL_FFMPEG_SHA"
+    echo "Binary:   $FFMPEG_SOURCE"
+    exit 1
+  fi
+else
+  if [[ -z "$FFMPEG_SOURCE" && -x "$PINNED_FFMPEG_DEFAULT" ]]; then
+    FFMPEG_SOURCE="$PINNED_FFMPEG_DEFAULT"
+  fi
+  if [[ -z "$FFMPEG_SOURCE" ]]; then
+    for candidate in /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg /usr/bin/ffmpeg; do
+      if [[ -x "$candidate" ]]; then
+        FFMPEG_SOURCE="$candidate"
+        break
+      fi
+    done
+  fi
 fi
 
 if [[ -n "$FFMPEG_SOURCE" && -x "$FFMPEG_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/ffmpeg" ]]; then
+  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/ffmpeg" && "$BUILD_MODE" != "release" ]]; then
     echo "Quick mode: keeping existing bundled ffmpeg."
   else
     cp "$FFMPEG_SOURCE" "$APP_RESOURCES/ffmpeg"
     chmod +x "$APP_RESOURCES/ffmpeg"
-    echo "Bundled ffmpeg: $FFMPEG_SOURCE"
+    if [[ -n "${ACTUAL_FFMPEG_SHA:-}" ]]; then
+      echo "Bundled ffmpeg: $FFMPEG_SOURCE (sha256: $ACTUAL_FFMPEG_SHA)"
+    else
+      echo "Bundled ffmpeg: $FFMPEG_SOURCE"
+    fi
   fi
 else
   echo "ffmpeg not bundled (set BUNDLED_FFMPEG_PATH to include one)."

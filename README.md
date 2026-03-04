@@ -62,3 +62,15 @@ BUNDLED_FFMPEG_PATH=/path/to/ffmpeg ./scripts/build_app.sh
   - `M4A` export via AVFoundation
   - `MP3` export via `ffmpeg` (bundled `Contents/Resources/ffmpeg` preferred)
 - Default MP3 bitrate is `128 kbps`
+
+## Release Workflow (Pinned ffmpeg)
+
+- Pin a deterministic ffmpeg binary (one-time or when upgrading ffmpeg):
+  - `./scripts/pin_ffmpeg.sh /opt/homebrew/bin/ffmpeg`
+- Release builds require pinned ffmpeg checksum verification:
+  - `vendor/ffmpeg/macos-arm64/ffmpeg`
+  - `vendor/ffmpeg/macos-arm64/ffmpeg.sha256`
+- Notarization runs a bundled ffmpeg smoke test before signing/submission:
+  - `./scripts/notarize_release.sh`
+- Publish GitHub release artifact:
+  - `./scripts/github_release.sh --version X.Y.Z`

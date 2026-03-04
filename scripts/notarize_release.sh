@@ -16,7 +16,7 @@ RELEASE_ENV="$ROOT_DIR/scripts/release.env"
 
 usage() {
   cat <<USAGE
-Usage: $(basename "$0") [--skip-build] [--skip-staple]
+Usage: $(basename "$0") [--skip-build] [--skip-staple] [--skip-smoke]
 
 Required config: scripts/release.env
   export DEV_ID_APP="Developer ID Application: Your Name (TEAMID)"
@@ -36,10 +36,12 @@ USAGE
 
 SKIP_BUILD=0
 SKIP_STAPLE=0
+SKIP_SMOKE=0
 for arg in "$@"; do
   case "$arg" in
     --skip-build) SKIP_BUILD=1 ;;
     --skip-staple) SKIP_STAPLE=1 ;;
+    --skip-smoke) SKIP_SMOKE=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Unknown argument: $arg"
@@ -89,6 +91,11 @@ fi
 if [[ ! -d "$APP_PATH" ]]; then
   echo "App bundle not found: $APP_PATH"
   exit 1
+fi
+
+if [[ "$SKIP_SMOKE" -eq 0 ]]; then
+  echo "Running bundled ffmpeg smoke tests..."
+  "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
 fi
 
 echo "Checking signing identity availability..."
