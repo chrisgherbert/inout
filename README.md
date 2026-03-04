@@ -1,76 +1,99 @@
 # In/Out (macOS)
 
-Native macOS GUI app that performs black-frame detection with Apple media frameworks and shows results in a desktop interface.
+Simple clipping, converting, and QA testing of video/audio files on macOS.
 
-## Requirements
+## For Users
+
+- Website: [https://chrisgherbert.github.io/inout/](https://chrisgherbert.github.io/inout/)
+- Releases: [GitHub Releases](https://github.com/chrisgherbert/inout/releases)
+
+### What It Does
+
+- Clip media with In/Out points and marker navigation
+- Export clips quickly or with advanced options
+- Export audio-only files
+- Analyze for:
+  - black segments
+  - silent gaps
+  - optional transcript/profanity checks
+- Inspect technical metadata (codec, bitrate, frame rate, resolution, etc.)
+
+### Basic Usage
+
+1. Download and open `In-Out.app`.
+2. Choose a source media file (or drag/drop one into the window).
+3. Pick a tool tab:
+   - `Clip`
+   - `Analyze`
+   - `Convert`
+   - `Inspect`
+4. Export or analyze from that tab.
+
+### Notes
+
+- Early build: validate outputs before production use.
+- Audio export defaults:
+  - `M4A` via AVFoundation
+  - `MP3` via bundled `ffmpeg` (default 128 kbps)
+
+## For Developers
+
+### Dependencies
 
 - macOS
 - Xcode Command Line Tools (`xcode-select --install`)
+- Bundled runtime tools for release:
+  - `ffmpeg`
+  - `whisper-cli` + model
 
-## Build
+### Local Build
 
 ```bash
 ./scripts/build_app.sh
 ```
 
-This creates:
-
+Build output:
 - `dist/In-Out.app`
 
-`build_app.sh` also bundles `ffmpeg` into the app when found at:
-
-- `/opt/homebrew/bin/ffmpeg`
-- `/usr/local/bin/ffmpeg`
-- `/usr/bin/ffmpeg`
-
-To bundle a specific binary:
+### Fast Iteration (No Release Overhead)
 
 ```bash
-BUNDLED_FFMPEG_PATH=/path/to/ffmpeg ./scripts/build_app.sh
+./scripts/dev_iterate.sh
 ```
 
-## Run
+Behavior:
+- quick compile path
+- no signing/notarization/release
+- keeps bundled ffmpeg/whisper/model unchanged by default
 
-- Double-click `dist/In-Out.app`
-- Choose a source video (`Choose Video`)
-- You can also drag and drop a video directly into the app window
-- Use the tool switcher:
-  - `Analyze` for black-frame detection
-  - `Convert` for audio export workflow
-  - `Clip` for exporting a selected time range as a new video clip
-  - `Inspect` for quick source/result snapshot
+Optional:
 
-## Behavior
+```bash
+# re-copy bundled tools into app resources
+./scripts/dev_iterate.sh --refresh-tools
 
-- Uses native frame analysis with thresholds equivalent to:
-  - minimum duration: `0.001s` (single-frame sensitive)
-  - frame dark-area threshold: `pic_th=0.90`
-  - pixel darkness threshold equivalent to ffmpeg default `pix_th=0.10`
-- Emits segments like: `HH:MM:SS.mmm → HH:MM:SS.mmm (0.033s)`
-- UI includes:
-  - Modular tool layout with shared source header
-  - Finder drag-and-drop target in the main window
-  - Analyze tool with inline player and black-segment timeline/list
-  - Convert tool with export controls (M4A and MP3)
-  - Clip tool with draggable range handles and direct timecode input
-  - Inspect tool for source/result snapshot
-  - Unified activity panel with progress and output actions
+# run portability/dependency checks against bundled tools
+./scripts/dev_iterate.sh --verify-tools
 
-## Audio Export
+# build and launch
+./scripts/dev_iterate.sh --run
+```
 
-- `Convert` supports:
-  - `M4A` export via AVFoundation
-  - `MP3` export via `ffmpeg` (bundled `Contents/Resources/ffmpeg` preferred)
-- Default MP3 bitrate is `128 kbps`
+### Bundled ffmpeg Management
 
-## Release Workflow (Pinned ffmpeg)
+- Pin a deterministic ffmpeg binary:
+  - `./scripts/pin_ffmpeg.sh /path/to/ffmpeg`
+- Build ffmpeg from source into pinned vendor path:
+  - `./scripts/build_ffmpeg_from_source.sh`
+  - Optional extra codec/filter flags:
+    - `FFMPEG_EXTRA_CONFIGURE_FLAGS="--enable-libass --enable-libx264 --enable-libmp3lame" ./scripts/build_ffmpeg_from_source.sh`
 
-- Pin a deterministic ffmpeg binary (one-time or when upgrading ffmpeg):
-  - `./scripts/pin_ffmpeg.sh /opt/homebrew/bin/ffmpeg`
-- Release builds require pinned ffmpeg checksum verification:
-  - `vendor/ffmpeg/macos-arm64/ffmpeg`
-  - `vendor/ffmpeg/macos-arm64/ffmpeg.sha256`
-- Notarization runs a bundled ffmpeg smoke test before signing/submission:
-  - `./scripts/notarize_release.sh`
-- Publish GitHub release artifact:
-  - `./scripts/github_release.sh --version X.Y.Z`
+### Release Flow
+
+- Release builds enforce pinned binary checks and portability audits.
+- Notarization flow runs dependency audits + smoke tests before submission.
+
+```bash
+./scripts/notarize_release.sh
+./scripts/github_release.sh --version X.Y.Z
+```
