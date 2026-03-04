@@ -50,7 +50,7 @@ struct ContentView: View {
         guard let appWindow else { return }
         appWindow.titleVisibility = .visible
         appWindow.titlebarAppearsTransparent = false
-        appWindow.title = model.sourceURL?.lastPathComponent ?? "In & Out"
+        appWindow.title = model.sourceURL?.lastPathComponent ?? "In/Out"
         appWindow.subtitle = ""
         appWindow.representedURL = model.sourceURL
     }

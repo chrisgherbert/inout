@@ -1,4 +1,4 @@
-# In & Out (macOS)
+# In/Out (macOS)
 
 Native macOS GUI app that performs black-frame detection with Apple media frameworks and shows results in a desktop interface.
 
@@ -15,7 +15,7 @@ Native macOS GUI app that performs black-frame detection with Apple media framew
 
 This creates:
 
-- `dist/In & Out.app`
+- `dist/In-Out.app`
 
 `build_app.sh` also bundles `ffmpeg` into the app when found at:
 
@@ -31,7 +31,7 @@ BUNDLED_FFMPEG_PATH=/path/to/ffmpeg ./scripts/build_app.sh
 
 ## Run
 
-- Double-click `dist/In & Out.app`
+- Double-click `dist/In-Out.app`
 - Choose a source video (`Choose Video`)
 - You can also drag and drop a video directly into the app window
 - Use the tool switcher:

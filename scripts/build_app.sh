@@ -12,12 +12,14 @@ SWIFTC_DEPS_DIR="$SWIFTC_BUILD_DIR/deps"
 SWIFTC_DIAGNOSTICS_DIR="$SWIFTC_BUILD_DIR/diagnostics"
 SWIFTC_MODULE_DIR="$SWIFTC_BUILD_DIR/module"
 SWIFTC_OUTPUT_FILE_MAP="$SWIFTC_BUILD_DIR/output-file-map.json"
-APP_NAME="In & Out"
+APP_NAME="In-Out"
 APP_EXECUTABLE="BulwarkVideoTools"
 BUNDLE_ID="com.bulwark.BulwarkVideoTools"
+APP_VERSION="${APP_VERSION:-1.0}"
+APP_BUILD_NUMBER="${APP_BUILD_NUMBER:-1}"
 APP_NAME_XML="$(python3 - <<'PY'
 from xml.sax.saxutils import escape
-print(escape("In & Out"))
+print(escape("In/Out"))
 PY
 )"
 APP="$DIST/$APP_NAME.app"
@@ -168,9 +170,9 @@ cat > "$PLIST" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$APP_BUILD_NUMBER</string>
   <key>CFBundleIconFile</key>
   <string>${ICON_BASE_NAME}</string>
   <key>CFBundleDocumentTypes</key>

@@ -73,7 +73,7 @@
     } catch (err) {
       setDownloadLink(fallback, "View Releases");
       setMetaText("Could not resolve latest asset automatically. Using Releases page.");
-      console.warn("In & Out release lookup failed:", err);
+      console.warn("In/Out release lookup failed:", err);
     }
   }
 

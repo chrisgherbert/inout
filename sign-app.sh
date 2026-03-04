@@ -1,4 +1,4 @@
-APP="/Users/herbert/web/bulwark-video-tool/dist/Bulwark Video Tools.app"
+APP="/Users/herbert/web/bulwark-video-tool/dist/In-Out.app"
 IDENTITY="Developer ID Application: Center Enterprises, Inc. (4PRCD73FWP)"
 
 codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp "$APP"

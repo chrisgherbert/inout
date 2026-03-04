@@ -131,7 +131,7 @@ struct HelpDocumentationView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("In & Out Help")
+                Text("In/Out Help")
                     .font(.title2.weight(.semibold))
 
                 Text("Quick guide to core workflows and shortcuts.")
