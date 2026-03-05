@@ -58,6 +58,7 @@ func runDetection(
 
         var inBlack = false
         var currentStart = 0.0
+        var lastReportedProgress = -1.0
 
         var estimatedFrameDuration = CMTimeGetSeconds(track.minFrameDuration)
         if !estimatedFrameDuration.isFinite || estimatedFrameDuration <= 0 {
@@ -81,7 +82,11 @@ func runDetection(
             if let safeDuration {
                 let phaseProgress = min(1.0, max(0, frameEnd / safeDuration))
                 let mappedProgress = detectAudioSilence ? (phaseProgress * 0.7) : phaseProgress
-                progressHandler(min(0.99, mappedProgress))
+                let throttled = min(0.99, mappedProgress)
+                if throttled >= 0.99 || throttled - lastReportedProgress >= 0.005 {
+                    progressHandler(throttled)
+                    lastReportedProgress = throttled
+                }
             }
 
             if isFrameMostlyBlack(sample) {

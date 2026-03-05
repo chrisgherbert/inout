@@ -154,7 +154,15 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 rm -f "$ZIP_PATH"
 echo "Creating release zip: $ZIP_PATH"
-ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+# Important: --norsrc prevents AppleDouble sidecar files (._*) from being written
+# into the archive. Those files break code signature validation on recipient Macs.
+ditto -c -k --keepParent --norsrc "$APP_PATH" "$ZIP_PATH"
+
+if unzip -l "$ZIP_PATH" | rg -q '(__MACOSX|/\._)'; then
+  echo "Archive contains AppleDouble/resource-fork entries (._*/__MACOSX), which can break signatures."
+  echo "Failing packaging step."
+  exit 1
+fi
 
 echo "Submitting for notarization..."
 if ! SUBMISSION_JSON="$(xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$AC_PROFILE" --output-format json 2>&1)"; then
