@@ -114,7 +114,7 @@ struct CheckBlackFramesApp: App {
                 .keyboardShortcut("o", modifiers: [.command])
 
                 Button {
-                    focusedModel?.importSourceFromURL()
+                    focusedModel?.presentURLImportSheet()
                 } label: {
                     Label("Download Media from URL…", systemImage: "link.badge.plus")
                 }

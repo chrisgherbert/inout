@@ -57,6 +57,13 @@ struct ClipToolView: View {
     @State private var playerResizeStartHeight: CGFloat?
     @State private var playerResizeStartGlobalY: CGFloat?
     @State private var livePlayerHeight: CGFloat?
+    @State private var importURLText: String = ""
+    @State private var importURLPreset: URLDownloadPreset = .compatibleBest
+    @State private var importURLSaveMode: URLDownloadSaveLocationMode = .askEachTime
+    @State private var importCustomFolderPath: String = ""
+    @State private var showURLImportAdvancedOptions = false
+    @State private var urlImportAdvancedRevealProgress: CGFloat = 0
+    @FocusState private var isImportURLFieldFocused: Bool
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
         if duration <= 300 {
@@ -1230,34 +1237,7 @@ struct ClipToolView: View {
                 timelineControlsSection
                 outputSection
             } else {
-                VStack(spacing: 12) {
-                    EmptyToolView(title: "Clip", subtitle: "Choose source media to create a new clip from a selected range.")
-                        .frame(maxHeight: 220)
-
-                    HStack(spacing: 10) {
-                        Button {
-                            model.chooseSource()
-                        } label: {
-                            Label("Choose Media…", systemImage: "video.badge.plus")
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button {
-                            model.importSourceFromURL()
-                        } label: {
-                            Label("Download from URL…", systemImage: "link.badge.plus")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(!model.ytDLPAvailable || !model.canRequestURLDownload)
-                        .help(model.ytDLPAvailable ? "Download source media with yt-dlp" : "Install yt-dlp to enable URL downloads")
-                    }
-
-                    if !model.ytDLPAvailable {
-                        Text("Install yt-dlp to enable URL downloads.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                emptySourceImportView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -1278,6 +1258,275 @@ struct ClipToolView: View {
                     }
             }
         )
+        .sheet(isPresented: $model.isURLImportSheetPresented) {
+            urlImportSheetView
+        }
+    }
+
+    private var emptySourceImportView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox("Open Source Media") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Choose one way to start.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("From File")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Button {
+                            model.chooseSource()
+                        } label: {
+                            Label("Choose Media…", systemImage: "video.badge.plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.regular)
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("From URL")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Button {
+                                prepareURLImportSheetDefaults()
+                                model.presentURLImportSheet()
+                            } label: {
+                                Label("Download from URL…", systemImage: "link.badge.plus")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!model.ytDLPAvailable || !model.canRequestURLDownload)
+
+                            if !model.ytDLPAvailable {
+                                Text("Install yt-dlp first")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+            }
+            .frame(maxWidth: 520, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private var clipboardURLString: String? {
+        guard let value = NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+        if let url = URL(string: value), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) {
+            return value
+        }
+        return nil
+    }
+
+    private func prepareURLImportSheetDefaults() {
+        importURLText = ""
+        importURLPreset = model.urlDownloadPreset
+        importURLSaveMode = model.urlDownloadSaveLocationMode
+        importCustomFolderPath = model.customURLDownloadDirectoryPath
+        showURLImportAdvancedOptions = false
+    }
+
+    private func submitURLImportSheet() {
+        let trimmed = importURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        model.isURLImportSheetPresented = false
+        model.startURLImport(
+            urlText: trimmed,
+            preset: importURLPreset,
+            saveMode: importURLSaveMode,
+            customFolderPath: importCustomFolderPath
+        )
+    }
+
+    private var importPresetHelpText: String? {
+        switch importURLPreset {
+        case .compatibleBest:
+            return "Optimized for immediate playback in In/Out."
+        case .bestAnyToMP4:
+            return "Downloads highest available quality, then transcodes to MP4 for compatibility."
+        case .audioOnly:
+            return "Extracts audio and saves as MP3."
+        case .compatible1080:
+            return "Limits to 1080p-compatible formats."
+        case .compatible720:
+            return "Limits to 720p-compatible formats."
+        }
+    }
+
+    private var urlImportSheetView: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Download from URL")
+                .font(.title3.weight(.semibold))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("URL")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    TextField("https://example.com/video", text: $importURLText)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isImportURLFieldFocused)
+                        .onSubmit {
+                            submitURLImportSheet()
+                        }
+                    if let clipboardURLString {
+                        Button("Paste URL") {
+                            importURLText = clipboardURLString
+                            isImportURLFieldFocused = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    showURLImportAdvancedOptions.toggle()
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                        urlImportAdvancedRevealProgress = showURLImportAdvancedOptions ? 1 : 0
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .rotationEffect(.degrees(showURLImportAdvancedOptions ? 90 : 0))
+                            .foregroundStyle(.secondary)
+                        Text("More Options")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Quality")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(URLDownloadPreset.allCases) { preset in
+                            Button {
+                                importURLPreset = preset
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: importURLPreset == preset ? "largecircle.fill.circle" : "circle")
+                                        .font(.system(size: 13, weight: .regular))
+                                        .foregroundStyle(importURLPreset == preset ? Color.accentColor : .secondary)
+                                    Text(preset.rawValue)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.primary)
+                                    if preset == .compatibleBest {
+                                        Text("Recommended")
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 3)
+                                            .background(Color.accentColor.opacity(0.16), in: Capsule())
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                    if preset == .bestAnyToMP4 {
+                                        Text("Slow")
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 3)
+                                            .background(Color.red.opacity(0.16), in: Capsule())
+                                            .foregroundStyle(.red)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    if let importPresetHelpText {
+                        Text(importPresetHelpText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+                        .frame(height: 8)
+
+                    Text("Save Location")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Picker("Save location", selection: $importURLSaveMode) {
+                        ForEach(URLDownloadSaveLocationMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if importURLSaveMode == .customFolder {
+                        HStack(spacing: 8) {
+                            Text(importCustomFolderPath.isEmpty ? "No custom folder selected" : importCustomFolderPath)
+                                .font(.caption)
+                                .foregroundStyle(importCustomFolderPath.isEmpty ? .secondary : .primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("Choose…") {
+                                model.chooseCustomURLDownloadDirectory()
+                                importCustomFolderPath = model.customURLDownloadDirectoryPath
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                }
+                .padding(.leading, 14)
+                .frame(maxHeight: 560 * urlImportAdvancedRevealProgress, alignment: .top)
+                .opacity(urlImportAdvancedRevealProgress)
+                .offset(y: (1 - urlImportAdvancedRevealProgress) * -8)
+                .clipped()
+                .allowsHitTesting(urlImportAdvancedRevealProgress > 0.01)
+            }
+            .animation(.easeInOut(duration: 0.15), value: importURLPreset)
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    model.isURLImportSheetPresented = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                Button("Download") {
+                    submitURLImportSheet()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(importURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+        .onAppear {
+            if importURLText.isEmpty {
+                prepareURLImportSheetDefaults()
+            }
+            urlImportAdvancedRevealProgress = showURLImportAdvancedOptions ? 1 : 0
+            DispatchQueue.main.async {
+                isImportURLFieldFocused = true
+            }
+        }
     }
 
     private func withLifecycleHandlers<V: View>(_ view: V) -> some View {

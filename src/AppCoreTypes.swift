@@ -311,11 +311,11 @@ enum FrameSaveLocationMode: String, CaseIterable, Identifiable {
 }
 
 enum URLDownloadPreset: String, CaseIterable, Identifiable {
-    case compatibleBest = "Best Compatible (Recommended)"
+    case compatibleBest = "Best Compatible"
     case compatible1080 = "1080p Compatible"
     case compatible720 = "720p Compatible"
-    case bestAnyToMP4 = "Best Available (Transcode to MP4)"
-    case audioOnly = "Audio Only (MP3)"
+    case bestAnyToMP4 = "Best Available"
+    case audioOnly = "Audio Only"
 
     var id: String { rawValue }
 

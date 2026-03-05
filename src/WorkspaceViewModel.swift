@@ -264,6 +264,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var lastActivityState: ActivityState = .idle
     @Published var showActivityConsole = false
     @Published var activityConsoleText = ""
+    @Published var isURLImportSheetPresented = false
 
     private var analyzeTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -1022,13 +1023,12 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func importSourceFromURL() {
+    func presentURLImportSheet() {
         guard canRequestURLDownload else {
             uiMessage = "Finish current task before downloading."
             return
         }
-
-        guard let ytDLPURL = findYTDLPExecutable() else {
+        guard ytDLPAvailable else {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "yt-dlp Not Found"
@@ -1038,18 +1038,49 @@ final class WorkspaceViewModel: ObservableObject {
             uiMessage = "yt-dlp is required to import from URL."
             return
         }
+        isURLImportSheetPresented = true
+    }
 
-        guard let request = promptURLDownloadRequest(),
-              let normalized = normalizedDownloadURL(from: request.urlText) else {
+    // Backwards compatibility for existing call sites.
+    func importSourceFromURL() {
+        presentURLImportSheet()
+    }
+
+    func startURLImport(
+        urlText: String,
+        preset: URLDownloadPreset,
+        saveMode: URLDownloadSaveLocationMode,
+        customFolderPath: String?
+    ) {
+        guard canRequestURLDownload else {
+            uiMessage = "Finish current task before downloading."
+            return
+        }
+        guard let ytDLPURL = findYTDLPExecutable() else {
+            uiMessage = "yt-dlp is required to import from URL."
+            return
+        }
+        guard let normalized = normalizedDownloadURL(from: urlText) else {
             return
         }
 
-        if request.preset.requiresTranscodeWarning && !confirmTranscodeDownloadWarning() {
+        urlDownloadPreset = preset
+        urlDownloadSaveLocationMode = saveMode
+        if let customFolderPath {
+            customURLDownloadDirectoryPath = customFolderPath
+        }
+
+        if preset.requiresTranscodeWarning && !confirmTranscodeDownloadWarning() {
             uiMessage = "Download cancelled."
             return
         }
 
-        guard let destinationURL = resolveURLDownloadDestination(for: request.preset, sourceURL: normalized) else {
+        guard let destinationURL = resolveURLDownloadDestination(
+            for: preset,
+            sourceURL: normalized,
+            saveModeOverride: saveMode,
+            customFolderPathOverride: customFolderPath
+        ) else {
             uiMessage = "Unable to resolve download destination."
             return
         }
@@ -1067,7 +1098,7 @@ final class WorkspaceViewModel: ObservableObject {
             guard let self else { return }
             let ffmpegURL = self.findFFmpegExecutable()
             let ffmpegDirectory = ffmpegURL?.deletingLastPathComponent().path
-            let shouldSplitTranscodeStages = request.preset == .bestAnyToMP4
+            let shouldSplitTranscodeStages = preset == .bestAnyToMP4
             var temporaryStageDirectory: URL?
             defer {
                 if let temporaryStageDirectory {
@@ -1091,7 +1122,7 @@ final class WorkspaceViewModel: ObservableObject {
                     "--print", "after_move:%(filepath)s",
                     "-o", downloadTemplateURL.path,
                     normalized.absoluteString
-                ] + self.ytDLPFormatArguments(for: request.preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+                ] + self.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
 
                 let staged = await self.runYTDLPProcessWithProgress(
                     executableURL: ytDLPURL,
@@ -1110,7 +1141,7 @@ final class WorkspaceViewModel: ObservableObject {
                     "--print", "after_move:%(filepath)s",
                     "-o", destinationURL.path,
                     normalized.absoluteString
-                ] + self.ytDLPFormatArguments(for: request.preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+                ] + self.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
 
                 let direct = await self.runYTDLPProcessWithProgress(
                     executableURL: ytDLPURL,
@@ -1307,72 +1338,13 @@ final class WorkspaceViewModel: ObservableObject {
                 }
 
                 self.setSource(finalURL)
+                self.outputURL = finalURL
                 let stageLabel = shouldSplitTranscodeStages ? "Download + transcode complete" : "Download complete"
                 self.exportStatusText = "\(stageLabel): \(finalURL.lastPathComponent)"
                 self.uiMessage = self.exportStatusText
                 self.lastActivityState = .success
             }
         }
-    }
-
-    private struct URLDownloadRequest {
-        let urlText: String
-        let preset: URLDownloadPreset
-    }
-
-    private func promptURLDownloadRequest() -> URLDownloadRequest? {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Download Media URL"
-        alert.informativeText = "Paste a media URL and choose output quality."
-
-        // Use fixed frames inside NSAlert accessory view. Auto Layout stacks can
-        // collapse controls in NSAlert on some macOS versions/themes.
-        let accessoryWidth: CGFloat = 460
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: accessoryWidth, height: 134))
-
-        let urlLabel = NSTextField(labelWithString: "URL")
-        urlLabel.textColor = .secondaryLabelColor
-        urlLabel.frame = NSRect(x: 0, y: 108, width: accessoryWidth, height: 17)
-        accessory.addSubview(urlLabel)
-
-        let input = NSTextField(frame: NSRect(x: 0, y: 82, width: accessoryWidth, height: 24))
-        input.placeholderString = "https://example.com/video"
-        accessory.addSubview(input)
-
-        let presetLabel = NSTextField(labelWithString: "Quality")
-        presetLabel.textColor = .secondaryLabelColor
-        presetLabel.frame = NSRect(x: 0, y: 54, width: accessoryWidth, height: 17)
-        accessory.addSubview(presetLabel)
-
-        let presetPicker = NSPopUpButton(frame: NSRect(x: 0, y: 28, width: accessoryWidth, height: 26), pullsDown: false)
-        for preset in URLDownloadPreset.allCases {
-            presetPicker.addItem(withTitle: preset.rawValue)
-        }
-        if let index = URLDownloadPreset.allCases.firstIndex(of: urlDownloadPreset) {
-            presetPicker.selectItem(at: index)
-        }
-        accessory.addSubview(presetPicker)
-
-        let helper = NSTextField(labelWithString: "Best Compatible is recommended for immediate playback in In/Out.")
-        helper.textColor = .secondaryLabelColor
-        helper.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-        helper.lineBreakMode = .byTruncatingTail
-        helper.frame = NSRect(x: 0, y: 6, width: accessoryWidth, height: 15)
-        accessory.addSubview(helper)
-
-        alert.accessoryView = accessory
-        alert.addButton(withTitle: "Download")
-        alert.addButton(withTitle: "Cancel")
-
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return nil }
-        let value = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return nil }
-        let index = max(0, min(presetPicker.indexOfSelectedItem, URLDownloadPreset.allCases.count - 1))
-        let preset = URLDownloadPreset.allCases[index]
-        urlDownloadPreset = preset
-        return URLDownloadRequest(urlText: value, preset: preset)
     }
 
     private func normalizedDownloadURL(from raw: String) -> URL? {
@@ -1459,7 +1431,21 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func resolveURLDownloadDestination(for preset: URLDownloadPreset, sourceURL: URL) -> URL? {
-        switch urlDownloadSaveLocationMode {
+        resolveURLDownloadDestination(
+            for: preset,
+            sourceURL: sourceURL,
+            saveModeOverride: urlDownloadSaveLocationMode,
+            customFolderPathOverride: customURLDownloadDirectoryPath
+        )
+    }
+
+    private func resolveURLDownloadDestination(
+        for preset: URLDownloadPreset,
+        sourceURL: URL,
+        saveModeOverride: URLDownloadSaveLocationMode,
+        customFolderPathOverride: String?
+    ) -> URL? {
+        switch saveModeOverride {
         case .askEachTime:
             return promptURLDownloadDestination(for: preset, sourceURL: sourceURL)
         case .downloadsFolder:
@@ -1469,8 +1455,8 @@ final class WorkspaceViewModel: ObservableObject {
                 preferredFileName: "\(defaultDownloadBaseName(for: sourceURL)).\(preset.outputExtension)"
             )
         case .customFolder:
-            guard !customURLDownloadDirectoryPath.isEmpty else { return nil }
-            let folder = URL(fileURLWithPath: customURLDownloadDirectoryPath)
+            guard let customFolderPathOverride, !customFolderPathOverride.isEmpty else { return nil }
+            let folder = URL(fileURLWithPath: customFolderPathOverride)
             guard FileManager.default.fileExists(atPath: folder.path) else { return nil }
             return uniqueUnderscoreIndexedURL(
                 in: folder,
