@@ -8,6 +8,8 @@ import SwiftUI
 private let picThreshold = 0.90
 private let pixelBlackThreshold = 0.10
 private let maxSampleDimension = 640
+private let quickSampleDimension = 160
+private let quickDecisionMargin = 0.08
 
 func formatSeconds(_ value: Double) -> String {
     let whole = Int(value)
@@ -368,25 +370,21 @@ func generateWaveformSamples(for url: URL, sampleCount: Int) -> [Double] {
     ) ?? []
 }
 
-func isFrameMostlyBlack(_ sampleBuffer: CMSampleBuffer) -> Bool {
-    guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-        return false
-    }
-
-    CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
-    defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
-
+private func blackPixelRatio(
+    imageBuffer: CVImageBuffer,
+    maxDimension: Int
+) -> Double {
     guard let baseAddress = CVPixelBufferGetBaseAddress(imageBuffer) else {
-        return false
+        return 0
     }
 
     let width = CVPixelBufferGetWidth(imageBuffer)
     let height = CVPixelBufferGetHeight(imageBuffer)
     let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer)
-    if width <= 0 || height <= 0 { return false }
+    if width <= 0 || height <= 0 { return 0 }
 
-    let xStep = max(1, width / maxSampleDimension)
-    let yStep = max(1, height / maxSampleDimension)
+    let xStep = max(1, width / maxDimension)
+    let yStep = max(1, height / maxDimension)
     let threshold = 255.0 * pixelBlackThreshold
 
     let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
@@ -412,8 +410,31 @@ func isFrameMostlyBlack(_ sampleBuffer: CMSampleBuffer) -> Bool {
         y += yStep
     }
 
-    guard sampledPixels > 0 else { return false }
-    return (Double(darkPixels) / Double(sampledPixels)) >= picThreshold
+    guard sampledPixels > 0 else { return 0 }
+    return Double(darkPixels) / Double(sampledPixels)
+}
+
+func isFrameMostlyBlack(_ sampleBuffer: CMSampleBuffer) -> Bool {
+    guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+        return false
+    }
+
+    CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
+
+    // Phase 1 optimization:
+    // 1) cheap coarse scan for obvious black/non-black frames
+    // 2) fall back to dense scan only for borderline frames
+    let quickRatio = blackPixelRatio(imageBuffer: imageBuffer, maxDimension: quickSampleDimension)
+    if quickRatio >= (picThreshold + quickDecisionMargin) {
+        return true
+    }
+    if quickRatio <= (picThreshold - quickDecisionMargin) {
+        return false
+    }
+
+    let ratio = blackPixelRatio(imageBuffer: imageBuffer, maxDimension: maxSampleDimension)
+    return ratio >= picThreshold
 }
 
 func buildSegments(blackIntervals: [(start: Double, end: Double)], minDuration: Double) -> [Segment] {
