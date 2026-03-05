@@ -1230,7 +1230,35 @@ struct ClipToolView: View {
                 timelineControlsSection
                 outputSection
             } else {
-                EmptyToolView(title: "Clip", subtitle: "Choose source media to create a new clip from a selected range.")
+                VStack(spacing: 12) {
+                    EmptyToolView(title: "Clip", subtitle: "Choose source media to create a new clip from a selected range.")
+                        .frame(maxHeight: 220)
+
+                    HStack(spacing: 10) {
+                        Button {
+                            model.chooseSource()
+                        } label: {
+                            Label("Choose Media…", systemImage: "video.badge.plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button {
+                            model.importSourceFromURL()
+                        } label: {
+                            Label("Download from URL…", systemImage: "link.badge.plus")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!model.ytDLPAvailable || !model.canRequestURLDownload)
+                        .help(model.ytDLPAvailable ? "Download source media with yt-dlp" : "Install yt-dlp to enable URL downloads")
+                    }
+
+                    if !model.ytDLPAvailable {
+                        Text("Install yt-dlp to enable URL downloads.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             Spacer()

@@ -248,6 +248,41 @@ struct PreferencesView: View {
             }
             Divider()
 
+            settingsSection("URL Download") {
+                settingsRow("Default quality") {
+                    valueMenuPicker("Default Quality", selection: $model.urlDownloadPreset) {
+                        ForEach(URLDownloadPreset.allCases) { preset in
+                            Text(preset.rawValue).tag(preset)
+                        }
+                    }
+                }
+
+                settingsRow("Save location") {
+                    valueMenuPicker("Save Location", selection: $model.urlDownloadSaveLocationMode) {
+                        ForEach(URLDownloadSaveLocationMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                }
+
+                if model.urlDownloadSaveLocationMode == .customFolder {
+                    settingsRow("Custom folder") {
+                        HStack(spacing: 8) {
+                            Text(model.customURLDownloadDirectoryPath.isEmpty ? "Not set" : model.customURLDownloadDirectoryPath)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .foregroundStyle(model.customURLDownloadDirectoryPath.isEmpty ? .secondary : .primary)
+                            Button("Choose…") {
+                                model.chooseCustomURLDownloadDirectory()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                }
+            }
+            Divider()
+
             settingsSection("Advanced Export Filename") {
                 settingsRow("Preset") {
                     valueMenuPicker("Preset", selection: $model.advancedClipFilenamePreset) {

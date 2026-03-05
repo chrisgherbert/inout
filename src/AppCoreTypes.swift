@@ -310,6 +310,37 @@ enum FrameSaveLocationMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum URLDownloadPreset: String, CaseIterable, Identifiable {
+    case compatibleBest = "Best Compatible (Recommended)"
+    case compatible1080 = "1080p Compatible"
+    case compatible720 = "720p Compatible"
+    case bestAnyToMP4 = "Best Available (Transcode to MP4)"
+    case audioOnly = "Audio Only (MP3)"
+
+    var id: String { rawValue }
+
+    var outputExtension: String {
+        switch self {
+        case .audioOnly:
+            return "mp3"
+        default:
+            return "mp4"
+        }
+    }
+
+    var requiresTranscodeWarning: Bool {
+        self == .bestAnyToMP4
+    }
+}
+
+enum URLDownloadSaveLocationMode: String, CaseIterable, Identifiable {
+    case askEachTime = "Ask Each Time"
+    case downloadsFolder = "Downloads Folder"
+    case customFolder = "Custom Folder"
+
+    var id: String { rawValue }
+}
+
 struct Segment: Identifiable {
     let id = UUID()
     let start: Double

@@ -48,6 +48,9 @@ final class WorkspaceViewModel: ObservableObject {
         static let advancedBoostAmount = "prefs.advancedBoostAmount"
         static let estimatedSizeWarningThresholdGB = "prefs.estimatedSizeWarningThresholdGB"
         static let estimatedSizeDangerThresholdGB = "prefs.estimatedSizeDangerThresholdGB"
+        static let urlDownloadPreset = "prefs.urlDownloadPreset"
+        static let urlDownloadSaveLocationMode = "prefs.urlDownloadSaveLocationMode"
+        static let customURLDownloadDirectoryPath = "prefs.customURLDownloadDirectoryPath"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -213,6 +216,21 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var customFrameSaveDirectoryPath: String = "" {
         didSet {
             UserDefaults.standard.set(customFrameSaveDirectoryPath, forKey: DefaultsKey.customFrameSaveDirectoryPath)
+        }
+    }
+    @Published var urlDownloadPreset: URLDownloadPreset = .compatibleBest {
+        didSet {
+            UserDefaults.standard.set(urlDownloadPreset.rawValue, forKey: DefaultsKey.urlDownloadPreset)
+        }
+    }
+    @Published var urlDownloadSaveLocationMode: URLDownloadSaveLocationMode = .askEachTime {
+        didSet {
+            UserDefaults.standard.set(urlDownloadSaveLocationMode.rawValue, forKey: DefaultsKey.urlDownloadSaveLocationMode)
+        }
+    }
+    @Published var customURLDownloadDirectoryPath: String = "" {
+        didSet {
+            UserDefaults.standard.set(customURLDownloadDirectoryPath, forKey: DefaultsKey.customURLDownloadDirectoryPath)
         }
     }
     @Published var estimatedSizeWarningThresholdGB: Double = 1.0 {
@@ -405,6 +423,16 @@ final class WorkspaceViewModel: ObservableObject {
 
         customFrameSaveDirectoryPath = defaults.string(forKey: DefaultsKey.customFrameSaveDirectoryPath) ?? ""
 
+        if let rawURLPreset = defaults.string(forKey: DefaultsKey.urlDownloadPreset),
+           let preset = URLDownloadPreset(rawValue: rawURLPreset) {
+            urlDownloadPreset = preset
+        }
+        if let rawURLSaveMode = defaults.string(forKey: DefaultsKey.urlDownloadSaveLocationMode),
+           let mode = URLDownloadSaveLocationMode(rawValue: rawURLSaveMode) {
+            urlDownloadSaveLocationMode = mode
+        }
+        customURLDownloadDirectoryPath = defaults.string(forKey: DefaultsKey.customURLDownloadDirectoryPath) ?? ""
+
         if let rawCaptionStyle = defaults.string(forKey: DefaultsKey.burnInCaptionStyle),
            let style = BurnInCaptionStyle(rawValue: rawCaptionStyle) {
             clipAdvancedCaptionStyle = style
@@ -496,6 +524,14 @@ final class WorkspaceViewModel: ObservableObject {
 
     var canExport: Bool {
         sourceURL != nil && !isAnalyzing && !isExporting && !isGeneratingTranscript
+    }
+
+    var ytDLPAvailable: Bool {
+        findYTDLPExecutable() != nil
+    }
+
+    var canRequestURLDownload: Bool {
+        !isAnalyzing && !isExporting && !isGeneratingTranscript
     }
 
     var canRequestAudioExport: Bool {
@@ -983,6 +1019,475 @@ final class WorkspaceViewModel: ObservableObject {
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.urls.first {
             setSource(url)
+        }
+    }
+
+    func importSourceFromURL() {
+        guard canRequestURLDownload else {
+            uiMessage = "Finish current task before downloading."
+            return
+        }
+
+        guard let ytDLPURL = findYTDLPExecutable() else {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "yt-dlp Not Found"
+            alert.informativeText = "Install yt-dlp (for example: brew install yt-dlp), then try again."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            uiMessage = "yt-dlp is required to import from URL."
+            return
+        }
+
+        guard let request = promptURLDownloadRequest(),
+              let normalized = normalizedDownloadURL(from: request.urlText) else {
+            return
+        }
+
+        if request.preset.requiresTranscodeWarning && !confirmTranscodeDownloadWarning() {
+            uiMessage = "Download cancelled."
+            return
+        }
+
+        guard let destinationURL = resolveURLDownloadDestination(for: request.preset, sourceURL: normalized) else {
+            uiMessage = "Unable to resolve download destination."
+            return
+        }
+
+        isExporting = true
+        lastActivityState = .running
+        exportCancellationRequested = false
+        exportProgress = 0
+        clearActivityConsole()
+        appendActivityConsole("URL download started", source: "yt-dlp")
+        exportStatusText = "Preparing download…"
+        uiMessage = "Downloading media from URL…"
+
+        exportTask = Task { [weak self] in
+            guard let self else { return }
+            let ffmpegURL = self.findFFmpegExecutable()
+            let ffmpegDirectory = ffmpegURL?.deletingLastPathComponent().path
+            let shouldSplitTranscodeStages = request.preset == .bestAnyToMP4
+            var temporaryStageDirectory: URL?
+            defer {
+                if let temporaryStageDirectory {
+                    try? FileManager.default.removeItem(at: temporaryStageDirectory)
+                }
+            }
+
+            let (downloadedPath, errorText): (String?, String?)
+            if shouldSplitTranscodeStages {
+                let tempRoot = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("inout-url-download-\(UUID().uuidString)", isDirectory: true)
+                try? FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+                temporaryStageDirectory = tempRoot
+
+                let downloadTemplateURL = tempRoot.appendingPathComponent("downloaded.%(ext)s")
+                let stagedArgs = [
+                    "--no-playlist",
+                    "--newline",
+                    "--progress",
+                    "--progress-template", "download:%(progress._percent_str)s",
+                    "--print", "after_move:%(filepath)s",
+                    "-o", downloadTemplateURL.path,
+                    normalized.absoluteString
+                ] + self.ytDLPFormatArguments(for: request.preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+
+                let staged = await self.runYTDLPProcessWithProgress(
+                    executableURL: ytDLPURL,
+                    arguments: stagedArgs,
+                    statusPrefix: "Downloading source",
+                    progressRange: 0.0...0.6
+                )
+                downloadedPath = staged.downloadedPath
+                errorText = staged.error
+            } else {
+                let args = [
+                    "--no-playlist",
+                    "--newline",
+                    "--progress",
+                    "--progress-template", "download:%(progress._percent_str)s",
+                    "--print", "after_move:%(filepath)s",
+                    "-o", destinationURL.path,
+                    normalized.absoluteString
+                ] + self.ytDLPFormatArguments(for: request.preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+
+                let direct = await self.runYTDLPProcessWithProgress(
+                    executableURL: ytDLPURL,
+                    arguments: args,
+                    statusPrefix: "Downloading media",
+                    progressRange: 0.0...1.0
+                )
+                downloadedPath = direct.downloadedPath
+                errorText = direct.error
+            }
+
+            await MainActor.run {
+                if self.exportCancellationRequested {
+                    self.exportTask = nil
+                    self.activeProcess = nil
+                    self.isExporting = false
+                    self.exportProgress = 0
+                    self.exportStatusText = "Download cancelled"
+                    self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .cancelled
+                    return
+                }
+            }
+
+            if let errorText {
+                await MainActor.run {
+                    self.exportTask = nil
+                    self.activeProcess = nil
+                    self.isExporting = false
+                    self.exportProgress = 0
+                    self.exportStatusText = "Download failed: \(errorText)"
+                    self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .failed
+                }
+                return
+            }
+
+            guard let downloadedPath, FileManager.default.fileExists(atPath: downloadedPath) else {
+                await MainActor.run {
+                    self.exportTask = nil
+                    self.activeProcess = nil
+                    self.isExporting = false
+                    self.exportProgress = 0
+                    self.exportStatusText = "Download failed: yt-dlp did not return an output file path."
+                    self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .failed
+                }
+                return
+            }
+
+            var finalURL = URL(fileURLWithPath: downloadedPath)
+
+            if shouldSplitTranscodeStages {
+                guard let ffmpegURL else {
+                    await MainActor.run {
+                        self.exportTask = nil
+                        self.activeProcess = nil
+                        self.isExporting = false
+                        self.exportProgress = 0
+                        self.exportStatusText = "Download failed: ffmpeg is required for this mode."
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
+                    }
+                    return
+                }
+
+                let stagedAsset = AVURLAsset(url: finalURL)
+                var stagedDurationSeconds: Double = 0
+                if #available(macOS 13.0, *) {
+                    if let loadedDuration = try? await stagedAsset.load(.duration) {
+                        let seconds = CMTimeGetSeconds(loadedDuration)
+                        if seconds.isFinite && seconds > 0.001 {
+                            stagedDurationSeconds = seconds
+                        }
+                    }
+                }
+                if stagedDurationSeconds <= 0.001 {
+                    let fallbackDirect = CMTimeGetSeconds(stagedAsset.duration)
+                    if fallbackDirect.isFinite && fallbackDirect > 0.001 {
+                        stagedDurationSeconds = fallbackDirect
+                    }
+                }
+                if stagedDurationSeconds <= 0.001 {
+                    let probed = loadSourceMediaInfo(for: finalURL).durationSeconds ?? 0
+                    if probed.isFinite && probed > 0.001 {
+                        stagedDurationSeconds = probed
+                    }
+                }
+                let stagedInfo = loadSourceMediaInfo(for: finalURL)
+                if stagedDurationSeconds <= 0.001 {
+                    // Last-resort guard: avoid tiny denominator causing immediate 100%.
+                    stagedDurationSeconds = 600.0
+                }
+                let duration = max(1.0, stagedDurationSeconds)
+                let sourceVideoBps = stagedInfo.videoBitrateBps ?? sourceInfo?.videoBitrateBps ?? 0
+                let targetVideoBps: Int = {
+                    if sourceVideoBps > 0 {
+                        let scaled = Int((sourceVideoBps * 0.80).rounded())
+                        return min(max(2_500_000, scaled), 14_000_000)
+                    }
+                    return 6_000_000
+                }()
+                let targetAudioKbps = 160
+                await MainActor.run {
+                    self.appendActivityConsole("Hardware transcoding for compatibility (VideoToolbox)", source: "ffmpeg")
+                    self.exportStatusText = "Transcoding for compatibility (hardware)…"
+                    self.exportProgress = max(self.exportProgress, 0.61)
+                }
+
+                try? FileManager.default.removeItem(at: destinationURL)
+                let hardwareArgs = [
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-i", finalURL.path,
+                    "-map", "0:v:0?",
+                    "-c:v", "h264_videotoolbox",
+                    "-b:v", "\(targetVideoBps)",
+                    "-maxrate", "\(targetVideoBps)",
+                    "-bufsize", "\(targetVideoBps * 2)",
+                    "-pix_fmt", "yuv420p",
+                    "-profile:v", "high",
+                    "-map", "0:a:0?",
+                    "-c:a", "aac",
+                    "-b:a", "\(targetAudioKbps)k",
+                    "-movflags", "+faststart",
+                    destinationURL.path
+                ]
+                var transcodeError = await self.runFFmpegProcessWithProgress(
+                    executableURL: ffmpegURL,
+                    arguments: hardwareArgs,
+                    durationSeconds: duration,
+                    statusPrefix: "Hardware transcoding",
+                    progressRange: 0.6...1.0
+                )
+
+                if transcodeError != nil {
+                    await MainActor.run {
+                        self.appendActivityConsole("Hardware encoder unavailable; falling back to software x264.", source: "ffmpeg")
+                        self.exportStatusText = "Hardware unavailable, using software fallback…"
+                        self.exportProgress = max(self.exportProgress, 0.65)
+                    }
+                    let softwareArgs = [
+                        "-y",
+                        "-hide_banner",
+                        "-loglevel", "error",
+                        "-i", finalURL.path,
+                        "-map", "0:v:0?",
+                        "-c:v", "libx264",
+                        "-preset", "veryfast",
+                        "-crf", "21",
+                        "-pix_fmt", "yuv420p",
+                        "-map", "0:a:0?",
+                        "-c:a", "aac",
+                        "-b:a", "\(targetAudioKbps)k",
+                        "-movflags", "+faststart",
+                        destinationURL.path
+                    ]
+                    transcodeError = await self.runFFmpegProcessWithProgress(
+                        executableURL: ffmpegURL,
+                        arguments: softwareArgs,
+                        durationSeconds: duration,
+                        statusPrefix: "Software fallback transcoding",
+                        progressRange: 0.6...1.0
+                    )
+                }
+
+                if let transcodeError {
+                    await MainActor.run {
+                        self.exportTask = nil
+                        self.activeProcess = nil
+                        self.isExporting = false
+                        self.exportProgress = 0
+                        self.exportStatusText = "Transcode failed: \(transcodeError)"
+                        self.uiMessage = self.exportStatusText
+                        self.lastActivityState = .failed
+                    }
+                    return
+                }
+                finalURL = destinationURL
+            }
+
+            await MainActor.run {
+                self.exportTask = nil
+                self.activeProcess = nil
+                self.isExporting = false
+                self.exportProgress = 0
+
+                if self.exportCancellationRequested {
+                    self.exportStatusText = "Download cancelled"
+                    self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .cancelled
+                    return
+                }
+
+                self.setSource(finalURL)
+                let stageLabel = shouldSplitTranscodeStages ? "Download + transcode complete" : "Download complete"
+                self.exportStatusText = "\(stageLabel): \(finalURL.lastPathComponent)"
+                self.uiMessage = self.exportStatusText
+                self.lastActivityState = .success
+            }
+        }
+    }
+
+    private struct URLDownloadRequest {
+        let urlText: String
+        let preset: URLDownloadPreset
+    }
+
+    private func promptURLDownloadRequest() -> URLDownloadRequest? {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Download Media URL"
+        alert.informativeText = "Paste a media URL and choose output quality."
+
+        // Use fixed frames inside NSAlert accessory view. Auto Layout stacks can
+        // collapse controls in NSAlert on some macOS versions/themes.
+        let accessoryWidth: CGFloat = 460
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: accessoryWidth, height: 134))
+
+        let urlLabel = NSTextField(labelWithString: "URL")
+        urlLabel.textColor = .secondaryLabelColor
+        urlLabel.frame = NSRect(x: 0, y: 108, width: accessoryWidth, height: 17)
+        accessory.addSubview(urlLabel)
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 82, width: accessoryWidth, height: 24))
+        input.placeholderString = "https://example.com/video"
+        accessory.addSubview(input)
+
+        let presetLabel = NSTextField(labelWithString: "Quality")
+        presetLabel.textColor = .secondaryLabelColor
+        presetLabel.frame = NSRect(x: 0, y: 54, width: accessoryWidth, height: 17)
+        accessory.addSubview(presetLabel)
+
+        let presetPicker = NSPopUpButton(frame: NSRect(x: 0, y: 28, width: accessoryWidth, height: 26), pullsDown: false)
+        for preset in URLDownloadPreset.allCases {
+            presetPicker.addItem(withTitle: preset.rawValue)
+        }
+        if let index = URLDownloadPreset.allCases.firstIndex(of: urlDownloadPreset) {
+            presetPicker.selectItem(at: index)
+        }
+        accessory.addSubview(presetPicker)
+
+        let helper = NSTextField(labelWithString: "Best Compatible is recommended for immediate playback in In/Out.")
+        helper.textColor = .secondaryLabelColor
+        helper.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        helper.lineBreakMode = .byTruncatingTail
+        helper.frame = NSRect(x: 0, y: 6, width: accessoryWidth, height: 15)
+        accessory.addSubview(helper)
+
+        alert.accessoryView = accessory
+        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return nil }
+        let value = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        let index = max(0, min(presetPicker.indexOfSelectedItem, URLDownloadPreset.allCases.count - 1))
+        let preset = URLDownloadPreset.allCases[index]
+        urlDownloadPreset = preset
+        return URLDownloadRequest(urlText: value, preset: preset)
+    }
+
+    private func normalizedDownloadURL(from raw: String) -> URL? {
+        if let parsed = URL(string: raw), let scheme = parsed.scheme?.lowercased(), ["http", "https"].contains(scheme) {
+            return parsed
+        }
+        if let parsed = URL(string: "https://" + raw), let scheme = parsed.scheme?.lowercased(), ["http", "https"].contains(scheme) {
+            return parsed
+        }
+        uiMessage = "Invalid URL. Please use an http(s) link."
+        return nil
+    }
+
+    private func confirmTranscodeDownloadWarning() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "This Download May Require Transcoding"
+        alert.informativeText = "Best Available can require conversion to MP4, which may be slower and use more CPU."
+        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func ytDLPFormatArguments(for preset: URLDownloadPreset) -> [String] {
+        switch preset {
+        case .compatibleBest:
+            return [
+                "-S", "res,codec:h264,aext:m4a",
+                "-f", "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4][vcodec^=avc1]/best[ext=mp4]"
+            ]
+        case .compatible1080:
+            return [
+                "-S", "res,codec:h264,aext:m4a",
+                "-f", "bestvideo[height<=1080][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4][vcodec^=avc1]/best[height<=1080][ext=mp4]"
+            ]
+        case .compatible720:
+            return [
+                "-S", "res,codec:h264,aext:m4a",
+                "-f", "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][vcodec^=avc1]/best[height<=720][ext=mp4]"
+            ]
+        case .bestAnyToMP4:
+            return [
+                "-f", "bestvideo*+bestaudio/best"
+            ]
+        case .audioOnly:
+            return [
+                "-f", "bestaudio",
+                "--extract-audio",
+                "--audio-format", "mp3"
+            ]
+        }
+    }
+
+    private func defaultDownloadDirectoryURL() -> URL? {
+        if let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            return downloads
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    private func defaultDownloadBaseName(for sourceURL: URL) -> String {
+        let host = sourceURL.host?.replacingOccurrences(of: ".", with: "_") ?? "download"
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return "inout_\(host)_\(formatter.string(from: Date()))"
+    }
+
+    private func promptURLDownloadDestination(for preset: URLDownloadPreset, sourceURL: URL) -> URL? {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.allowsOtherFileTypes = false
+        panel.allowedFileTypes = [preset.outputExtension]
+        panel.nameFieldStringValue = "\(defaultDownloadBaseName(for: sourceURL)).\(preset.outputExtension)"
+        panel.title = "Save Downloaded Media"
+        panel.prompt = "Save"
+        if let defaultDirectory = defaultDownloadDirectoryURL() {
+            panel.directoryURL = defaultDirectory
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        if url.pathExtension.isEmpty {
+            return url.appendingPathExtension(preset.outputExtension)
+        }
+        return url
+    }
+
+    private func resolveURLDownloadDestination(for preset: URLDownloadPreset, sourceURL: URL) -> URL? {
+        switch urlDownloadSaveLocationMode {
+        case .askEachTime:
+            return promptURLDownloadDestination(for: preset, sourceURL: sourceURL)
+        case .downloadsFolder:
+            guard let folder = defaultDownloadDirectoryURL() else { return nil }
+            return uniqueUnderscoreIndexedURL(
+                in: folder,
+                preferredFileName: "\(defaultDownloadBaseName(for: sourceURL)).\(preset.outputExtension)"
+            )
+        case .customFolder:
+            guard !customURLDownloadDirectoryPath.isEmpty else { return nil }
+            let folder = URL(fileURLWithPath: customURLDownloadDirectoryPath)
+            guard FileManager.default.fileExists(atPath: folder.path) else { return nil }
+            return uniqueUnderscoreIndexedURL(
+                in: folder,
+                preferredFileName: "\(defaultDownloadBaseName(for: sourceURL)).\(preset.outputExtension)"
+            )
+        }
+    }
+
+    func chooseCustomURLDownloadDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        if panel.runModal() == .OK, let url = panel.urls.first {
+            customURLDownloadDirectoryPath = url.path
         }
     }
 
@@ -2994,18 +3499,19 @@ final class WorkspaceViewModel: ObservableObject {
                 self?.appendActivityConsole("$ \(commandLine)", source: "ffmpeg")
             }
 
-            let emitProgress: (Double) -> Void = { [weak self] progress in
+            let emitProgress: (_ progress: Double, _ allowComplete: Bool) -> Void = { [weak self] progress, allowComplete in
                 Task { @MainActor in
                     guard let self else { return }
                     guard self.isExporting else { return }
                     let clamped = min(max(progress, 0), 1)
+                    let visualProgress = allowComplete ? clamped : min(clamped, 0.99)
                     if let range = progressRange {
-                        let mapped = range.lowerBound + ((range.upperBound - range.lowerBound) * clamped)
+                        let mapped = range.lowerBound + ((range.upperBound - range.lowerBound) * visualProgress)
                         self.exportProgress = min(max(mapped, 0), 1)
                     } else {
-                        self.exportProgress = clamped
+                        self.exportProgress = visualProgress
                     }
-                    self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
+                    self.exportStatusText = "\(statusPrefix)… \(Int((visualProgress * 100).rounded()))%"
                 }
             }
 
@@ -3033,26 +3539,26 @@ final class WorkspaceViewModel: ObservableObject {
                 stdoutBuffer.append(chunk)
                 consumeLines(buffer: &stdoutBuffer, source: "ffmpeg") { rawLine in
                     if rawLine == "progress=end" {
-                        emitProgress(1.0)
+                        emitProgress(1.0, true)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time_us="),
                        let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
-                        emitProgress((microseconds / 1_000_000.0) / safeDuration)
+                        emitProgress((microseconds / 1_000_000.0) / safeDuration, false)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time_ms="),
                        let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
                         // ffmpeg emits this value in microseconds.
-                        emitProgress((value / 1_000_000.0) / safeDuration)
+                        emitProgress((value / 1_000_000.0) / safeDuration, false)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time="),
                        let seconds = parseTimecode(String(rawLine.dropFirst("out_time=".count))) {
-                        emitProgress(seconds / safeDuration)
+                        emitProgress(seconds / safeDuration, false)
                     }
                 }
             }
@@ -3098,25 +3604,25 @@ final class WorkspaceViewModel: ObservableObject {
 
                 consumeLines(buffer: &stdoutBuffer, source: "ffmpeg") { rawLine in
                     if rawLine == "progress=end" {
-                        emitProgress(1.0)
+                        emitProgress(1.0, true)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time_us="),
                        let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
-                        emitProgress((microseconds / 1_000_000.0) / safeDuration)
+                        emitProgress((microseconds / 1_000_000.0) / safeDuration, false)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time_ms="),
                        let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
-                        emitProgress((value / 1_000_000.0) / safeDuration)
+                        emitProgress((value / 1_000_000.0) / safeDuration, false)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time="),
                        let seconds = parseTimecode(String(rawLine.dropFirst("out_time=".count))) {
-                        emitProgress(seconds / safeDuration)
+                        emitProgress(seconds / safeDuration, false)
                     }
                 }
                 consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { rawLine in
@@ -3144,6 +3650,138 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func runYTDLPProcessWithProgress(
+        executableURL: URL,
+        arguments: [String],
+        statusPrefix: String,
+        progressRange: ClosedRange<Double>
+    ) async -> (downloadedPath: String?, error: String?) {
+        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: arguments)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<(downloadedPath: String?, error: String?), Never>) in
+            let process = Process()
+            process.executableURL = executableURL
+            process.arguments = arguments
+
+            let stderr = Pipe()
+            let stdout = Pipe()
+            process.standardError = stderr
+            process.standardOutput = stdout
+
+            var stdoutBuffer = Data()
+            var stderrBuffer = Data()
+            var stderrLines: [String] = []
+            var outputPath: String?
+
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsole("$ \(commandLine)", source: "yt-dlp")
+            }
+
+            let emitProgress: (Double) -> Void = { [weak self] progress in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard self.isExporting else { return }
+                    let clamped = min(max(progress, 0), 1)
+                    let mapped = progressRange.lowerBound + ((progressRange.upperBound - progressRange.lowerBound) * clamped)
+                    self.exportProgress = min(max(mapped, 0), 1)
+                    self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
+                }
+            }
+
+            let emitConsoleLine: (String, String) -> Void = { line, source in
+                Task { @MainActor [weak self] in
+                    self?.appendActivityConsole(line, source: source)
+                }
+            }
+
+            let parseLine: (String) -> Void = { rawLine in
+                if let progress = extractPercentProgress(from: rawLine) {
+                    emitProgress(progress)
+                }
+
+                if rawLine.hasPrefix("after_move:") {
+                    let path = String(rawLine.dropFirst("after_move:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !path.isEmpty {
+                        outputPath = path
+                    }
+                } else if rawLine.hasPrefix("/") {
+                    let path = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if FileManager.default.fileExists(atPath: path) {
+                        outputPath = path
+                    }
+                }
+            }
+
+            func consumeLines(buffer: inout Data, source: String) {
+                while let separatorIndex = buffer.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
+                    let lineData = buffer.subdata(in: 0..<separatorIndex)
+                    buffer.removeSubrange(0...separatorIndex)
+                    guard let line = String(data: lineData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                          !line.isEmpty else { continue }
+                    emitConsoleLine(line, source)
+                    parseLine(line)
+                    if source == "stderr" {
+                        stderrLines.append(line)
+                    }
+                }
+            }
+
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                stdoutBuffer.append(chunk)
+                consumeLines(buffer: &stdoutBuffer, source: "yt-dlp")
+            }
+
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                stderrBuffer.append(chunk)
+                consumeLines(buffer: &stderrBuffer, source: "stderr")
+            }
+
+            do {
+                try process.run()
+                Task { @MainActor in
+                    self.activeProcess = process
+                }
+            } catch {
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                continuation.resume(returning: (nil, error.localizedDescription))
+                return
+            }
+
+            process.terminationHandler = { proc in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                Task { @MainActor in
+                    if self.activeProcess === proc {
+                        self.activeProcess = nil
+                    }
+                }
+
+                let trailingStdout = stdout.fileHandleForReading.readDataToEndOfFile()
+                let trailingStderr = stderr.fileHandleForReading.readDataToEndOfFile()
+                if !trailingStdout.isEmpty { stdoutBuffer.append(trailingStdout) }
+                if !trailingStderr.isEmpty { stderrBuffer.append(trailingStderr) }
+                consumeLines(buffer: &stdoutBuffer, source: "yt-dlp")
+                consumeLines(buffer: &stderrBuffer, source: "stderr")
+
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: (outputPath, nil))
+                } else {
+                    let stderrText = stderrLines.suffix(8).joined(separator: "\n")
+                    if stderrText.isEmpty {
+                        continuation.resume(returning: (nil, "yt-dlp exited with status \(proc.terminationStatus)"))
+                    } else {
+                        continuation.resume(returning: (nil, stderrText))
+                    }
+                }
+            }
+        }
+    }
+
     private func findFFmpegExecutable() -> URL? {
         if let bundled = Bundle.main.url(forResource: "ffmpeg", withExtension: nil),
            FileManager.default.isExecutableFile(atPath: bundled.path) {
@@ -3166,6 +3804,29 @@ final class WorkspaceViewModel: ObservableObject {
                 return URL(fileURLWithPath: candidate)
             }
         }
+        return nil
+    }
+
+    private func findYTDLPExecutable() -> URL? {
+        let candidates = [
+            "/opt/homebrew/bin/yt-dlp",
+            "/usr/local/bin/yt-dlp",
+            "/usr/bin/yt-dlp"
+        ]
+
+        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
+            return URL(fileURLWithPath: candidate)
+        }
+
+        if let path = ProcessInfo.processInfo.environment["PATH"] {
+            for entry in path.split(separator: ":") {
+                let candidate = String(entry) + "/yt-dlp"
+                if FileManager.default.isExecutableFile(atPath: candidate) {
+                    return URL(fileURLWithPath: candidate)
+                }
+            }
+        }
+
         return nil
     }
 

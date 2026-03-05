@@ -114,6 +114,14 @@ struct CheckBlackFramesApp: App {
                 .keyboardShortcut("o", modifiers: [.command])
 
                 Button {
+                    focusedModel?.importSourceFromURL()
+                } label: {
+                    Label("Download Media from URL…", systemImage: "link.badge.plus")
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(!(focusedModel?.canRequestURLDownload ?? false))
+
+                Button {
                     focusedModel?.clearSource()
                 } label: {
                     Label("Close Media", systemImage: "xmark.circle")
