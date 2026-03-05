@@ -40,6 +40,8 @@ QUICK_EXPORT_SOUND_SOURCE="$ROOT_DIR/assets/QuickExportSnip.aiff"
 QUICK_EXPORT_SOUND_DEST="$APP_RESOURCES/QuickExportSnip.aiff"
 PINNED_FFMPEG_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg"
 PINNED_FFMPEG_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg.sha256"
+PINNED_YTDLP_DEFAULT="$ROOT_DIR/vendor/yt-dlp/macos-arm64/yt-dlp"
+PINNED_YTDLP_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/yt-dlp/macos-arm64/yt-dlp.sha256"
 
 copy_whisper_runtime_libs() {
   local whisper_cli_path="$1"
@@ -396,6 +398,66 @@ if [[ -n "$FFMPEG_SOURCE" && -x "$FFMPEG_SOURCE" ]]; then
   fi
 else
   echo "ffmpeg not bundled (set BUNDLED_FFMPEG_PATH to include one)."
+fi
+
+YTDLP_SOURCE="${BUNDLED_YTDLP_PATH:-}"
+PINNED_YTDLP_SHA_FILE="${BUNDLED_YTDLP_SHA_FILE:-$PINNED_YTDLP_SHA_FILE_DEFAULT}"
+EXPECTED_YTDLP_SHA="${BUNDLED_YTDLP_SHA256:-}"
+if [[ -z "$YTDLP_SOURCE" && -x "$PINNED_YTDLP_DEFAULT" ]]; then
+  YTDLP_SOURCE="$PINNED_YTDLP_DEFAULT"
+fi
+if [[ -z "$YTDLP_SOURCE" ]]; then
+  for candidate in /opt/homebrew/bin/yt-dlp /usr/local/bin/yt-dlp /usr/bin/yt-dlp; do
+    if [[ -x "$candidate" ]]; then
+      YTDLP_SOURCE="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ "$BUILD_MODE" == "release" ]]; then
+  if [[ -z "$YTDLP_SOURCE" || ! -x "$YTDLP_SOURCE" ]]; then
+    echo "ERROR: release build requires a bundled yt-dlp binary."
+    echo "Set BUNDLED_YTDLP_PATH or provide pinned binary at:"
+    echo "  $PINNED_YTDLP_DEFAULT"
+    exit 1
+  fi
+
+  if [[ -z "$EXPECTED_YTDLP_SHA" && -f "$PINNED_YTDLP_SHA_FILE" ]]; then
+    EXPECTED_YTDLP_SHA="$(awk '{print $1}' "$PINNED_YTDLP_SHA_FILE" | head -n 1)"
+  fi
+  if [[ -z "$EXPECTED_YTDLP_SHA" ]]; then
+    echo "ERROR: release build requires yt-dlp checksum pinning."
+    echo "Set BUNDLED_YTDLP_SHA256 or provide: $PINNED_YTDLP_SHA_FILE"
+    exit 1
+  fi
+
+  ACTUAL_YTDLP_SHA="$(shasum -a 256 "$YTDLP_SOURCE" | awk '{print $1}')"
+  if [[ "$ACTUAL_YTDLP_SHA" != "$EXPECTED_YTDLP_SHA" ]]; then
+    echo "ERROR: yt-dlp checksum mismatch."
+    echo "Expected: $EXPECTED_YTDLP_SHA"
+    echo "Actual:   $ACTUAL_YTDLP_SHA"
+    echo "Binary:   $YTDLP_SOURCE"
+    exit 1
+  fi
+
+  "$ROOT_DIR/scripts/ytdlp_portability_audit.sh" "$YTDLP_SOURCE"
+fi
+
+if [[ -n "$YTDLP_SOURCE" && -x "$YTDLP_SOURCE" ]]; then
+  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/yt-dlp" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
+    echo "Quick mode: keeping existing bundled yt-dlp."
+  else
+    cp "$YTDLP_SOURCE" "$APP_RESOURCES/yt-dlp"
+    chmod +x "$APP_RESOURCES/yt-dlp"
+    if [[ -n "${ACTUAL_YTDLP_SHA:-}" ]]; then
+      echo "Bundled yt-dlp: $YTDLP_SOURCE (sha256: $ACTUAL_YTDLP_SHA)"
+    else
+      echo "Bundled yt-dlp: $YTDLP_SOURCE"
+    fi
+  fi
+else
+  echo "yt-dlp not bundled (set BUNDLED_YTDLP_PATH to include one)."
 fi
 
 WHISPER_SOURCE="${BUNDLED_WHISPER_PATH:-}"

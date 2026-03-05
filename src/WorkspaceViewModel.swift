@@ -528,7 +528,11 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var ytDLPAvailable: Bool {
-        findYTDLPExecutable() != nil
+        guard let ytDLPURL = findYTDLPExecutable() else { return false }
+        if isMachOExecutable(at: ytDLPURL) {
+            return true
+        }
+        return findPython3Executable() != nil
     }
 
     var canRequestURLDownload: Bool {
@@ -1031,8 +1035,8 @@ final class WorkspaceViewModel: ObservableObject {
         guard ytDLPAvailable else {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "yt-dlp Not Found"
-            alert.informativeText = "Install yt-dlp (for example: brew install yt-dlp), then try again."
+            alert.messageText = "yt-dlp Not Available"
+            alert.informativeText = "Install yt-dlp, then try again."
             alert.addButton(withTitle: "OK")
             alert.runModal()
             uiMessage = "yt-dlp is required to import from URL."
@@ -1056,7 +1060,7 @@ final class WorkspaceViewModel: ObservableObject {
             uiMessage = "Finish current task before downloading."
             return
         }
-        guard let ytDLPURL = findYTDLPExecutable() else {
+        guard let ytDLPLaunch = resolveYTDLPLaunch() else {
             uiMessage = "yt-dlp is required to import from URL."
             return
         }
@@ -1125,7 +1129,8 @@ final class WorkspaceViewModel: ObservableObject {
                 ] + self.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
 
                 let staged = await self.runYTDLPProcessWithProgress(
-                    executableURL: ytDLPURL,
+                    executableURL: ytDLPLaunch.executableURL,
+                    preArguments: ytDLPLaunch.preArguments,
                     arguments: stagedArgs,
                     statusPrefix: "Downloading source",
                     progressRange: 0.0...0.6
@@ -1144,7 +1149,8 @@ final class WorkspaceViewModel: ObservableObject {
                 ] + self.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
 
                 let direct = await self.runYTDLPProcessWithProgress(
-                    executableURL: ytDLPURL,
+                    executableURL: ytDLPLaunch.executableURL,
+                    preArguments: ytDLPLaunch.preArguments,
                     arguments: args,
                     statusPrefix: "Downloading media",
                     progressRange: 0.0...1.0
@@ -1391,7 +1397,7 @@ final class WorkspaceViewModel: ObservableObject {
             ]
         case .audioOnly:
             return [
-                "-f", "bestaudio",
+                "-f", "bestaudio/best",
                 "--extract-audio",
                 "--audio-format", "mp3"
             ]
@@ -3638,15 +3644,17 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func runYTDLPProcessWithProgress(
         executableURL: URL,
+        preArguments: [String],
         arguments: [String],
         statusPrefix: String,
         progressRange: ClosedRange<Double>
     ) async -> (downloadedPath: String?, error: String?) {
-        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: arguments)
+        let finalArguments = preArguments + arguments
+        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: finalArguments)
         return await withCheckedContinuation { (continuation: CheckedContinuation<(downloadedPath: String?, error: String?), Never>) in
             let process = Process()
             process.executableURL = executableURL
-            process.arguments = arguments
+            process.arguments = finalArguments
 
             let stderr = Pipe()
             let stdout = Pipe()
@@ -3657,6 +3665,12 @@ final class WorkspaceViewModel: ObservableObject {
             var stderrBuffer = Data()
             var stderrLines: [String] = []
             var outputPath: String?
+
+            func isYTDLPWarningLine(_ line: String) -> Bool {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                let upper = trimmed.uppercased()
+                return upper.hasPrefix("WARNING:") || upper.hasPrefix("[WARNING]")
+            }
 
             Task { @MainActor [weak self] in
                 self?.appendActivityConsole("$ \(commandLine)", source: "yt-dlp")
@@ -3757,7 +3771,18 @@ final class WorkspaceViewModel: ObservableObject {
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: (outputPath, nil))
                 } else {
-                    let stderrText = stderrLines.suffix(8).joined(separator: "\n")
+                    let nonWarningLines = stderrLines.filter { !isYTDLPWarningLine($0) }
+
+                    // Some sites (for example TikTok) can emit impersonation warnings while still
+                    // producing a valid output file. Don't fail on warning-only stderr in that case.
+                    if nonWarningLines.isEmpty,
+                       let outputPath,
+                       FileManager.default.fileExists(atPath: outputPath) {
+                        continuation.resume(returning: (outputPath, nil))
+                        return
+                    }
+
+                    let stderrText = nonWarningLines.suffix(8).joined(separator: "\n")
                     if stderrText.isEmpty {
                         continuation.resume(returning: (nil, "yt-dlp exited with status \(proc.terminationStatus)"))
                     } else {
@@ -3794,6 +3819,11 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func findYTDLPExecutable() -> URL? {
+        if let bundled = Bundle.main.url(forResource: "yt-dlp", withExtension: nil),
+           FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled
+        }
+
         let candidates = [
             "/opt/homebrew/bin/yt-dlp",
             "/usr/local/bin/yt-dlp",
@@ -3814,6 +3844,56 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         return nil
+    }
+
+    private struct YTDLPLaunchCommand {
+        let executableURL: URL
+        let preArguments: [String]
+    }
+
+    private func resolveYTDLPLaunch() -> YTDLPLaunchCommand? {
+        guard let ytDLPURL = findYTDLPExecutable() else { return nil }
+        if isMachOExecutable(at: ytDLPURL) {
+            return YTDLPLaunchCommand(executableURL: ytDLPURL, preArguments: [])
+        }
+        guard let pythonURL = findPython3Executable() else { return nil }
+        return YTDLPLaunchCommand(executableURL: pythonURL, preArguments: [ytDLPURL.path])
+    }
+
+    private func findPython3Executable() -> URL? {
+        var candidates = [
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/usr/bin/python3"
+        ]
+        if let path = ProcessInfo.processInfo.environment["PATH"] {
+            for entry in path.split(separator: ":") {
+                let candidate = String(entry) + "/python3"
+                if !candidates.contains(candidate) {
+                    candidates.append(candidate)
+                }
+            }
+        }
+        for candidate in candidates {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return URL(fileURLWithPath: candidate)
+            }
+        }
+        return nil
+    }
+
+    private func isMachOExecutable(at url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let bytes = try? handle.read(upToCount: 4), bytes.count == 4 else { return false }
+        let magic = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
+        let known: Set<UInt32> = [
+            0xFEEDFACE, 0xCEFAEDFE,
+            0xFEEDFACF, 0xCFFAEDFE,
+            0xCAFEBABE, 0xBEBAFECA,
+            0xCAFEBABF, 0xBFBAFECA
+        ]
+        return known.contains(magic)
     }
 
     func revealOutput() {

@@ -62,7 +62,6 @@ struct ClipToolView: View {
     @State private var importURLSaveMode: URLDownloadSaveLocationMode = .askEachTime
     @State private var importCustomFolderPath: String = ""
     @State private var showURLImportAdvancedOptions = false
-    @State private var urlImportAdvancedRevealProgress: CGFloat = 0
     @FocusState private var isImportURLFieldFocused: Bool
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
@@ -1391,12 +1390,9 @@ struct ClipToolView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Button {
-                    showURLImportAdvancedOptions.toggle()
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                        urlImportAdvancedRevealProgress = showURLImportAdvancedOptions ? 1 : 0
-                    }
-                } label: {
+                ZStack {
+                    Rectangle()
+                        .fill(Color.clear)
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.right")
                             .font(.caption.weight(.semibold))
@@ -1407,98 +1403,102 @@ struct ClipToolView: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                     }
-                    .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
                     .padding(.horizontal, 6)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Quality")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(URLDownloadPreset.allCases) { preset in
-                            Button {
-                                importURLPreset = preset
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: importURLPreset == preset ? "largecircle.fill.circle" : "circle")
-                                        .font(.system(size: 13, weight: .regular))
-                                        .foregroundStyle(importURLPreset == preset ? Color.accentColor : .secondary)
-                                    Text(preset.rawValue)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
-                                    if preset == .compatibleBest {
-                                        Text("Recommended")
-                                            .font(.caption2.weight(.semibold))
-                                            .padding(.horizontal, 7)
-                                            .padding(.vertical, 3)
-                                            .background(Color.accentColor.opacity(0.16), in: Capsule())
-                                            .foregroundStyle(Color.accentColor)
-                                    }
-                                    if preset == .bestAnyToMP4 {
-                                        Text("Slow")
-                                            .font(.caption2.weight(.semibold))
-                                            .padding(.horizontal, 7)
-                                            .padding(.vertical, 3)
-                                            .background(Color.red.opacity(0.16), in: Capsule())
-                                            .foregroundStyle(.red)
-                                    }
-                                    Spacer(minLength: 0)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
+                .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showURLImportAdvancedOptions.toggle()
                     }
+                }
 
-                    if let importPresetHelpText {
-                        Text(importPresetHelpText)
-                            .font(.caption)
+                if showURLImportAdvancedOptions {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Quality")
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
-                    }
 
-                    Spacer()
-                        .frame(height: 8)
-
-                    Text("Save Location")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Picker("Save location", selection: $importURLSaveMode) {
-                        ForEach(URLDownloadSaveLocationMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if importURLSaveMode == .customFolder {
-                        HStack(spacing: 8) {
-                            Text(importCustomFolderPath.isEmpty ? "No custom folder selected" : importCustomFolderPath)
-                                .font(.caption)
-                                .foregroundStyle(importCustomFolderPath.isEmpty ? .secondary : .primary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Button("Choose…") {
-                                model.chooseCustomURLDownloadDirectory()
-                                importCustomFolderPath = model.customURLDownloadDirectoryPath
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(URLDownloadPreset.allCases) { preset in
+                                Button {
+                                    importURLPreset = preset
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: importURLPreset == preset ? "largecircle.fill.circle" : "circle")
+                                            .font(.system(size: 13, weight: .regular))
+                                            .foregroundStyle(importURLPreset == preset ? Color.accentColor : .secondary)
+                                        Text(preset.rawValue)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                        if preset == .compatibleBest {
+                                            Text("Recommended")
+                                                .font(.caption2.weight(.semibold))
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 3)
+                                                .background(Color.accentColor.opacity(0.16), in: Capsule())
+                                                .foregroundStyle(Color.accentColor)
+                                        }
+                                        if preset == .bestAnyToMP4 {
+                                            Text("Slow")
+                                                .font(.caption2.weight(.semibold))
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 3)
+                                                .background(Color.red.opacity(0.16), in: Capsule())
+                                                .foregroundStyle(.red)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                        }
+
+                        if let importPresetHelpText {
+                            Text(importPresetHelpText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+                            .frame(height: 8)
+
+                        Text("Save Location")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Picker("Save location", selection: $importURLSaveMode) {
+                            ForEach(URLDownloadSaveLocationMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if importURLSaveMode == .customFolder {
+                            HStack(spacing: 8) {
+                                Text(importCustomFolderPath.isEmpty ? "No custom folder selected" : importCustomFolderPath)
+                                    .font(.caption)
+                                    .foregroundStyle(importCustomFolderPath.isEmpty ? .secondary : .primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Button("Choose…") {
+                                    model.chooseCustomURLDownloadDirectory()
+                                    importCustomFolderPath = model.customURLDownloadDirectoryPath
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
                         }
                     }
+                    .padding(.top, 8)
+                    .padding(.leading, 14)
+                    .transition(.opacity.combined(with: .offset(y: -6)))
                 }
-                .padding(.leading, 14)
-                .frame(maxHeight: 560 * urlImportAdvancedRevealProgress, alignment: .top)
-                .opacity(urlImportAdvancedRevealProgress)
-                .offset(y: (1 - urlImportAdvancedRevealProgress) * -8)
-                .clipped()
-                .allowsHitTesting(urlImportAdvancedRevealProgress > 0.01)
             }
+            .animation(.easeInOut(duration: 0.2), value: showURLImportAdvancedOptions)
             .animation(.easeInOut(duration: 0.15), value: importURLPreset)
 
             HStack {
@@ -1522,7 +1522,6 @@ struct ClipToolView: View {
             if importURLText.isEmpty {
                 prepareURLImportSheetDefaults()
             }
-            urlImportAdvancedRevealProgress = showURLImportAdvancedOptions ? 1 : 0
             DispatchQueue.main.async {
                 isImportURLFieldFocused = true
             }

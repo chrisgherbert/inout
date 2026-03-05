@@ -13,6 +13,7 @@ APP_PATH="$DIST_DIR/$APP_NAME"
 ZIP_NAME="In-Out-macOS.zip"
 ZIP_PATH="$DIST_DIR/$ZIP_NAME"
 RELEASE_ENV="$ROOT_DIR/scripts/release.env"
+YTDLP_ENTITLEMENTS="$ROOT_DIR/scripts/yt-dlp.entitlements"
 
 usage() {
   cat <<USAGE
@@ -95,7 +96,14 @@ fi
 
 if [[ "$SKIP_SMOKE" -eq 0 ]]; then
   "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$APP_PATH/Contents/Resources/ffmpeg"
+  "$ROOT_DIR/scripts/ytdlp_portability_audit.sh" "$APP_PATH/Contents/Resources/yt-dlp"
   "$ROOT_DIR/scripts/whisper_dependency_audit.sh" "$APP_PATH"
+  if [[ ! -x "$APP_PATH/Contents/Resources/yt-dlp" ]]; then
+    echo "Missing bundled yt-dlp: $APP_PATH/Contents/Resources/yt-dlp"
+    exit 1
+  fi
+  echo "Running bundled yt-dlp smoke test..."
+  "$APP_PATH/Contents/Resources/yt-dlp" --version >/dev/null
   echo "Running bundled ffmpeg smoke tests..."
   "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
 fi
@@ -119,8 +127,27 @@ for binary in "$APP_PATH/Contents/Resources/ffmpeg" "$APP_PATH/Contents/Resource
   fi
 done
 
+if [[ -f "$APP_PATH/Contents/Resources/yt-dlp" ]]; then
+  if [[ ! -f "$YTDLP_ENTITLEMENTS" ]]; then
+    echo "Missing yt-dlp entitlements file: $YTDLP_ENTITLEMENTS"
+    exit 1
+  fi
+  if file "$APP_PATH/Contents/Resources/yt-dlp" | grep -q "Mach-O"; then
+    codesign --force --options runtime --timestamp --entitlements "$YTDLP_ENTITLEMENTS" --sign "$DEV_ID_APP" "$APP_PATH/Contents/Resources/yt-dlp"
+  else
+    # Script-style yt-dlp (recommended) should not be signed as a nested runtime binary.
+    # It is sealed by the parent app signature.
+    echo "yt-dlp is script-style; skipping nested runtime codesign."
+  fi
+else
+  echo "Warning: nested binary not found, skipping: $APP_PATH/Contents/Resources/yt-dlp"
+fi
+
 echo "Signing app bundle..."
-codesign --force --deep --options runtime --timestamp --sign "$DEV_ID_APP" "$APP_PATH"
+# Important: do NOT use --deep here.
+# We sign nested binaries explicitly above (including yt-dlp with custom entitlements).
+# A deep re-sign can replace nested signatures/entitlements and break runtime behavior.
+codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$APP_PATH"
 
 echo "Verifying code signature..."
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
