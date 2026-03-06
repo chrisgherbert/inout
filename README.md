@@ -12,6 +12,7 @@ Simple clipping, converting, and QA testing of video/audio files on macOS.
 - Clip media with In/Out points and marker navigation
 - Export clips quickly or with advanced options
 - Export audio-only files
+- Open source media from URL (YouTube, TikTok, and more) via bundled `yt-dlp`
 - Analyze for:
   - black segments
   - silent gaps
@@ -21,7 +22,9 @@ Simple clipping, converting, and QA testing of video/audio files on macOS.
 ### Basic Usage
 
 1. Download and open `In-Out.app`.
-2. Choose a source media file (or drag/drop one into the window).
+2. Load source media:
+   - choose a local media file (or drag/drop one into the window), or
+   - use `File > Download Media from URL…` to import from a web link.
 3. Pick a tool tab:
    - `Clip`
    - `Analyze`

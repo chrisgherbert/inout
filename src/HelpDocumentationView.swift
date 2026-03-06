@@ -18,6 +18,7 @@ struct HelpDocumentationView: View {
             title: "Getting Started",
             items: [
                 "Choose a media file with Choose Media, or drag a file into the main window.",
+                "You can also import media from a URL via File > Download Media from URL…",
                 "Use the top tool tabs to switch between Clip, Analyze, Convert, and Inspect.",
                 "The footer always shows current activity, progress, and completion state."
             ]
@@ -66,6 +67,7 @@ struct HelpDocumentationView: View {
             title: "Bundled Components",
             items: [
                 "ffmpeg is bundled for conversion/export workflows.",
+                "yt-dlp is bundled for URL import/download workflows.",
                 "whisper-cli + bundled model are used for profanity detection and caption generation.",
                 "If Whisper resources are missing, rebuild with bundled resources."
             ]
