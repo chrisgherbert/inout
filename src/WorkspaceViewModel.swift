@@ -319,6 +319,8 @@ final class WorkspaceViewModel: ObservableObject {
     private let maxWaveformCacheEntries = 6
     private let maxActivityConsoleCharacters = 200_000
     private let activityConsoleTrimCharacters = 150_000
+    private var cachedYTDLPAvailable = false
+    private var cachedWhisperAvailable = false
 
     init() {
         willTerminateObserver = NotificationCenter.default.addObserver(
@@ -330,6 +332,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         loadPreferences()
+        refreshExternalToolAvailabilityCache()
         if let firstArg = CommandLine.arguments.dropFirst().first {
             let url = URL(fileURLWithPath: firstArg)
             if FileManager.default.fileExists(atPath: url.path) {
@@ -475,7 +478,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var whisperTranscriptionAvailable: Bool {
-        findWhisperExecutable() != nil && findWhisperModel() != nil
+        cachedWhisperAvailable
     }
 
     var hasAudioTrack: Bool {
@@ -528,11 +531,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var ytDLPAvailable: Bool {
-        guard let ytDLPURL = findYTDLPExecutable() else { return false }
-        if isMachOExecutable(at: ytDLPURL) {
-            return true
-        }
-        return findPython3Executable() != nil
+        cachedYTDLPAvailable
     }
 
     var canRequestURLDownload: Bool {
@@ -551,6 +550,15 @@ final class WorkspaceViewModel: ObservableObject {
             && !isExporting
             && !isGeneratingTranscript
             && !hasCachedTranscript
+    }
+
+    private func refreshExternalToolAvailabilityCache() {
+        if let ytDLPURL = findYTDLPExecutable() {
+            cachedYTDLPAvailable = isMachOExecutable(at: ytDLPURL) || (findPython3Executable() != nil)
+        } else {
+            cachedYTDLPAvailable = false
+        }
+        cachedWhisperAvailable = (findWhisperExecutable() != nil && findWhisperModel() != nil)
     }
 
     var sourceDurationSeconds: Double {

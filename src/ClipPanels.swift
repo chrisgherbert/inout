@@ -277,11 +277,18 @@ private struct TimelineMiniMapView: View {
     }
 }
 
-struct ClipSelectionPanel: View {
-    @ObservedObject var model: WorkspaceViewModel
-    @Environment(\.undoManager) private var undoManager
+struct ClipSelectionPanel: View, Equatable {
     @State private var isTimecodeRowHovered = false
     let player: AVPlayer
+    let sourceSessionID: UUID
+    let clipStartSeconds: Double
+    let clipEndSeconds: Double
+    let clipDurationSeconds: Double
+    let hasVideoTrack: Bool
+    @Binding var clipStartText: String
+    @Binding var clipEndText: String
+    let onCommitClipStartText: () -> Void
+    let onCommitClipEndText: () -> Void
     let isCompactLayout: Bool
     let reduceTransparency: Bool
     let isWaveformLoading: Bool
@@ -297,6 +304,11 @@ struct ClipSelectionPanel: View {
     let playheadSeconds: Double
     let playheadCopyFlash: Bool
     let isTimelineHovered: Bool
+    let captureMarkers: [CaptureTimelineMarker]
+    let highlightedMarkerID: UUID?
+    let highlightedClipBoundary: ClipBoundaryHighlight?
+    let captureFrameFlashToken: Int
+    let quickExportFlashToken: Int
     let onTimelineWidthChanged: (CGFloat) -> Void
     let onSeek: (Double, Bool) -> Void
     let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
@@ -311,205 +323,233 @@ struct ClipSelectionPanel: View {
     let onJumpToEnd: () -> Void
     let onCaptureFrame: () -> Void
 
+    static func == (lhs: ClipSelectionPanel, rhs: ClipSelectionPanel) -> Bool {
+        lhs.sourceSessionID == rhs.sourceSessionID &&
+        abs(lhs.clipStartSeconds - rhs.clipStartSeconds) < 0.0001 &&
+        abs(lhs.clipEndSeconds - rhs.clipEndSeconds) < 0.0001 &&
+        abs(lhs.clipDurationSeconds - rhs.clipDurationSeconds) < 0.0001 &&
+        lhs.hasVideoTrack == rhs.hasVideoTrack &&
+        lhs.isCompactLayout == rhs.isCompactLayout &&
+        lhs.reduceTransparency == rhs.reduceTransparency &&
+        lhs.isWaveformLoading == rhs.isWaveformLoading &&
+        lhs.waveformSamples.count == rhs.waveformSamples.count &&
+        lhs.allowedTimelineZoomLevels == rhs.allowedTimelineZoomLevels &&
+        abs(lhs.timelineZoom - rhs.timelineZoom) < 0.0001 &&
+        abs(lhs.totalDurationSeconds - rhs.totalDurationSeconds) < 0.0001 &&
+        abs(lhs.visibleStartSeconds - rhs.visibleStartSeconds) < 0.0001 &&
+        abs(lhs.visibleEndSeconds - rhs.visibleEndSeconds) < 0.0001 &&
+        abs(lhs.playheadVisualSeconds - rhs.playheadVisualSeconds) < 0.0001 &&
+        abs(lhs.playheadJumpFromSeconds - rhs.playheadJumpFromSeconds) < 0.0001 &&
+        lhs.playheadJumpAnimationToken == rhs.playheadJumpAnimationToken &&
+        abs(lhs.playheadSeconds - rhs.playheadSeconds) < 0.0001 &&
+        lhs.playheadCopyFlash == rhs.playheadCopyFlash &&
+        lhs.isTimelineHovered == rhs.isTimelineHovered &&
+        lhs.captureMarkers == rhs.captureMarkers &&
+        lhs.highlightedMarkerID == rhs.highlightedMarkerID &&
+        lhs.highlightedClipBoundary == rhs.highlightedClipBoundary &&
+        lhs.captureFrameFlashToken == rhs.captureFrameFlashToken &&
+        lhs.quickExportFlashToken == rhs.quickExportFlashToken
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-                if isWaveformLoading {
-                    HStack {
-                        ProgressView()
-                        Text("Generating waveform…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else if !waveformSamples.isEmpty {
-                    WaveformView(
-                        player: player,
-                        sourceSessionID: model.sourceSessionID,
-                        samples: waveformSamples,
-                        zoomLevel: timelineZoom,
-                        renderBuckets: allowedTimelineZoomLevels,
-                        startSeconds: model.clipStartSeconds,
-                        visualPlayheadSeconds: playheadVisualSeconds,
-                        playheadJumpFromSeconds: playheadJumpFromSeconds,
-                        playheadJumpAnimationToken: playheadJumpAnimationToken,
-                        endSeconds: model.clipEndSeconds,
-                        totalDurationSeconds: totalDurationSeconds,
-                        visibleStartSeconds: visibleStartSeconds,
-                        visibleEndSeconds: visibleEndSeconds,
-                        captureMarkers: model.captureTimelineMarkers,
-                        highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
-                        highlightedClipBoundary: model.highlightedClipBoundary,
-                        captureFrameFlashToken: model.captureFrameFlashToken,
-                        quickExportFlashToken: model.quickExportFlashToken,
-                        onSeek: onSeek,
-                        onPlayheadDragEdgePan: onPlayheadDragEdgePan,
-                        onPlayheadDragStateChanged: onPlayheadDragStateChanged,
-                        onSetStart: onSetStart,
-                        onSetEnd: onSetEnd,
-                        onHoverChanged: onWaveformHoverChanged,
-                        onPointerTimeChanged: onWaveformPointerTimeChanged
-                    )
-                    .frame(height: isCompactLayout ? 64 : 74)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .padding(.bottom, -6)
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear
-                                .onAppear { onTimelineWidthChanged(geo.size.width) }
-                                .onChange(of: geo.size.width) { width in
-                                    onTimelineWidthChanged(width)
-                                }
-                        }
-                    )
+            if isWaveformLoading {
+                HStack {
+                    ProgressView()
+                    Text("Generating waveform…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+            } else if !waveformSamples.isEmpty {
+                WaveformView(
+                    player: player,
+                    sourceSessionID: sourceSessionID,
+                    samples: waveformSamples,
+                    zoomLevel: timelineZoom,
+                    renderBuckets: allowedTimelineZoomLevels,
+                    startSeconds: clipStartSeconds,
+                    visualPlayheadSeconds: playheadVisualSeconds,
+                    playheadJumpFromSeconds: playheadJumpFromSeconds,
+                    playheadJumpAnimationToken: playheadJumpAnimationToken,
+                    endSeconds: clipEndSeconds,
+                    totalDurationSeconds: totalDurationSeconds,
+                    visibleStartSeconds: visibleStartSeconds,
+                    visibleEndSeconds: visibleEndSeconds,
+                    captureMarkers: captureMarkers,
+                    highlightedMarkerID: highlightedMarkerID,
+                    highlightedClipBoundary: highlightedClipBoundary,
+                    captureFrameFlashToken: captureFrameFlashToken,
+                    quickExportFlashToken: quickExportFlashToken,
+                    onSeek: onSeek,
+                    onPlayheadDragEdgePan: onPlayheadDragEdgePan,
+                    onPlayheadDragStateChanged: onPlayheadDragStateChanged,
+                    onSetStart: onSetStart,
+                    onSetEnd: onSetEnd,
+                    onHoverChanged: onWaveformHoverChanged,
+                    onPointerTimeChanged: onWaveformPointerTimeChanged
+                )
+                .frame(height: isCompactLayout ? 64 : 74)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .padding(.bottom, -6)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { onTimelineWidthChanged(geo.size.width) }
+                            .onChange(of: geo.size.width) { width in
+                                onTimelineWidthChanged(width)
+                            }
+                    }
+                )
+            }
 
-                if !isCompactLayout {
-                    HStack {
-                        Text("In: \(formatSeconds(model.clipStartSeconds))")
+            if !isCompactLayout {
+                HStack {
+                    Text("In: \(formatSeconds(clipStartSeconds))")
+                        .font(.caption.monospacedDigit())
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text("Playhead: \(formatSeconds(playheadSeconds))")
                             .font(.caption.monospacedDigit())
-                        Spacer()
-                        HStack(spacing: 6) {
-                            Text("Playhead: \(formatSeconds(playheadSeconds))")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.secondary)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(Color.accentColor.opacity(playheadCopyFlash ? 0.20 : 0.0))
-                                )
+                            .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(Color.accentColor.opacity(playheadCopyFlash ? 0.20 : 0.0))
+                            )
 
-                            if isTimecodeRowHovered {
-                                Button {
+                        if isTimecodeRowHovered {
+                            Button {
+                                onCopyPlayheadTimecode()
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy playhead timecode")
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                            .contextMenu {
+                                Button("Copy Timecode") {
                                     onCopyPlayheadTimecode()
-                                } label: {
-                                    Image(systemName: "doc.on.doc")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Copy playhead timecode")
-                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                                .contextMenu {
-                                    Button("Copy Timecode") {
-                                        onCopyPlayheadTimecode()
-                                    }
                                 }
                             }
                         }
-                        Spacer()
-                        Text("Out: \(formatSeconds(model.clipEndSeconds))")
-                            .font(.caption.monospacedDigit())
                     }
-                    .foregroundStyle(.secondary)
-                    .padding(.top, -7)
-                    .onHover { hovering in
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            isTimecodeRowHovered = hovering
-                        }
-                    }
+                    Spacer()
+                    Text("Out: \(formatSeconds(clipEndSeconds))")
+                        .font(.caption.monospacedDigit())
                 }
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) {
-                        HStack(spacing: 8) {
-                            Text("In")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 18, alignment: .leading)
-                            TextField("00:00:00.000", text: $model.clipStartText)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(width: 140)
-                                .onSubmit { model.commitClipStartText(undoManager: undoManager) }
-                            Button("Set In") { onSetStart(playheadSeconds) }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                        }
-
-                        HStack(spacing: 8) {
-                            Text("Out")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 24, alignment: .leading)
-                            TextField("00:00:00.000", text: $model.clipEndText)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(width: 140)
-                                .onSubmit { model.commitClipEndText(undoManager: undoManager) }
-                            Button("Set Out") { onSetEnd(playheadSeconds) }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                        }
-                    }
-                    .font(.caption)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Text("In")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 18, alignment: .leading)
-                            TextField("00:00:00.000", text: $model.clipStartText)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .onSubmit { model.commitClipStartText(undoManager: undoManager) }
-                            Button("Set In") { onSetStart(playheadSeconds) }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                        }
-
-                        HStack(spacing: 8) {
-                            Text("Out")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 24, alignment: .leading)
-                            TextField("00:00:00.000", text: $model.clipEndText)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .onSubmit { model.commitClipEndText(undoManager: undoManager) }
-                            Button("Set Out") { onSetEnd(playheadSeconds) }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                        }
-                    }
-                    .font(.caption)
-                }
-
-                if !isCompactLayout {
-                    HStack {
-                        Text("Duration: \(formatSeconds(model.clipDurationSeconds))")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        ControlGroup {
-                            Button(action: onJumpToStart) {
-                                Image(systemName: "backward.end.fill")
-                            }
-                            .help("Jump to Clip Start")
-                            .accessibilityLabel("Jump to Clip Start")
-
-                            Button(action: onJumpToEnd) {
-                                Image(systemName: "forward.end.fill")
-                            }
-                            .help("Jump to Clip End")
-                            .accessibilityLabel("Jump to Clip End")
-                        }
-                        .controlSize(.mini)
-                        .opacity(isTimelineHovered ? 0.95 : 0.0)
-                        .allowsHitTesting(isTimelineHovered)
-                        .animation(.easeOut(duration: 0.15), value: isTimelineHovered)
-
-                        if model.hasVideoTrack {
-                            Button(action: onCaptureFrame) {
-                                Label("Capture Frame", systemImage: "camera")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
-                            .help("Save a PNG frame at the current playhead")
-                            .labelStyle(.titleAndIcon)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.leading, 2)
-                        }
+                .foregroundStyle(.secondary)
+                .padding(.top, -7)
+                .onHover { hovering in
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isTimecodeRowHovered = hovering
                     }
                 }
             }
-            .onHover(perform: onTimelineHoverChanged)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                        Text("In")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18, alignment: .leading)
+                        TextField("00:00:00.000", text: $clipStartText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(width: 140)
+                            .onSubmit { onCommitClipStartText() }
+                        Button("Set In") { onSetStart(playheadSeconds) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+
+                    HStack(spacing: 8) {
+                        Text("Out")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, alignment: .leading)
+                        TextField("00:00:00.000", text: $clipEndText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(width: 140)
+                            .onSubmit { onCommitClipEndText() }
+                        Button("Set Out") { onSetEnd(playheadSeconds) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+                .font(.caption)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text("In")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18, alignment: .leading)
+                        TextField("00:00:00.000", text: $clipStartText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .onSubmit { onCommitClipStartText() }
+                        Button("Set In") { onSetStart(playheadSeconds) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+
+                    HStack(spacing: 8) {
+                        Text("Out")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, alignment: .leading)
+                        TextField("00:00:00.000", text: $clipEndText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .onSubmit { onCommitClipEndText() }
+                        Button("Set Out") { onSetEnd(playheadSeconds) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+                .font(.caption)
+            }
+
+            if !isCompactLayout {
+                HStack {
+                    Text("Duration: \(formatSeconds(clipDurationSeconds))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    ControlGroup {
+                        Button(action: onJumpToStart) {
+                            Image(systemName: "backward.end.fill")
+                        }
+                        .help("Jump to Clip Start")
+                        .accessibilityLabel("Jump to Clip Start")
+
+                        Button(action: onJumpToEnd) {
+                            Image(systemName: "forward.end.fill")
+                        }
+                        .help("Jump to Clip End")
+                        .accessibilityLabel("Jump to Clip End")
+                    }
+                    .controlSize(.mini)
+                    .opacity(isTimelineHovered ? 0.95 : 0.0)
+                    .allowsHitTesting(isTimelineHovered)
+                    .animation(.easeOut(duration: 0.15), value: isTimelineHovered)
+
+                    if hasVideoTrack {
+                        Button(action: onCaptureFrame) {
+                            Label("Capture Frame", systemImage: "camera")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .help("Save a PNG frame at the current playhead")
+                        .labelStyle(.titleAndIcon)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.leading, 2)
+                    }
+                }
+            }
+        }
+        .onHover(perform: onTimelineHoverChanged)
     }
 }
 
@@ -521,17 +561,43 @@ struct ClipOutputPanel: View {
     let advancedClipFormats: [ClipFormat]
     let onStartExport: (_ quickExport: Bool) -> Void
     let onEnqueueExport: (_ quickExport: Bool) -> Void
+    @State private var uiClipEncodingMode: ClipEncodingMode
+
+    init(
+        model: WorkspaceViewModel,
+        reduceTransparency: Bool,
+        isOptionKeyPressed: Bool,
+        fastClipFormats: [ClipFormat],
+        advancedClipFormats: [ClipFormat],
+        onStartExport: @escaping (_ quickExport: Bool) -> Void,
+        onEnqueueExport: @escaping (_ quickExport: Bool) -> Void
+    ) {
+        self.model = model
+        self.reduceTransparency = reduceTransparency
+        self.isOptionKeyPressed = isOptionKeyPressed
+        self.fastClipFormats = fastClipFormats
+        self.advancedClipFormats = advancedClipFormats
+        self.onStartExport = onStartExport
+        self.onEnqueueExport = onEnqueueExport
+        _uiClipEncodingMode = State(initialValue: model.clipEncodingMode)
+    }
+
+    private func syncModelEncodingModeIfNeeded() {
+        if model.clipEncodingMode != uiClipEncodingMode {
+            model.clipEncodingMode = uiClipEncodingMode
+        }
+    }
 
     var body: some View {
         GroupBox("Output") {
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Picker("", selection: $model.clipEncodingMode) {
+                    Picker("", selection: $uiClipEncodingMode) {
                         if model.hasVideoTrack {
-                            Label("Fast", systemImage: "bolt.fill").tag(ClipEncodingMode.fast)
-                            Label("Advanced", systemImage: "slider.horizontal.3").tag(ClipEncodingMode.compressed)
+                            Text("Fast").tag(ClipEncodingMode.fast)
+                            Text("Advanced").tag(ClipEncodingMode.compressed)
                         }
-                        Label("Audio Only", systemImage: "waveform").tag(ClipEncodingMode.audioOnly)
+                        Text("Audio Only").tag(ClipEncodingMode.audioOnly)
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
@@ -539,9 +605,9 @@ struct ClipOutputPanel: View {
                     .frame(maxWidth: .infinity)
 
                     Text(
-                        model.clipEncodingMode == .fast
+                        uiClipEncodingMode == .fast
                         ? "Fast mode uses passthrough copy with minimal processing."
-                        : model.clipEncodingMode == .compressed
+                        : uiClipEncodingMode == .compressed
                             ? "Advanced mode unlocks codec, container, resolution, and bitrate options."
                             : "Audio Only exports only audio from the selected clip range."
                     )
@@ -550,208 +616,218 @@ struct ClipOutputPanel: View {
 
                     Divider()
 
-                    if model.clipEncodingMode == .audioOnly {
-                        LabeledContent("Audio format") {
-                            Picker("Audio format", selection: $model.clipAudioOnlyFormat) {
-                                ForEach(ClipAudioOnlyFormat.allCases) { format in
-                                    Text(format.rawValue).tag(format)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .controlSize(.small)
-                            .frame(width: 148)
-                        }
-
-                        HStack {
-                            Text("Audio bitrate")
-                                .frame(width: 120, alignment: .leading)
-                            Slider(
-                                value: Binding(
-                                    get: { Double(model.clipAudioBitrateKbps) },
-                                    set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
-                                ),
-                                in: 64...320,
-                                step: 32
-                            )
-                            .controlSize(.small)
-                            Text("\(model.clipAudioBitrateKbps) kbps")
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 90, alignment: .trailing)
-                        }
-
-                        HStack(spacing: 10) {
-                            Toggle(
-                                "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
-                                isOn: $model.clipAudioOnlyBoostAudio
-                            )
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-
-                            if model.clipAudioOnlyBoostAudio {
-                                Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
-                                    ForEach(AdvancedBoostAmount.allCases) { amount in
-                                        Text(amount.label).tag(amount)
+                    Group {
+                        if uiClipEncodingMode == .audioOnly {
+                            VStack(alignment: .leading, spacing: 10) {
+                                LabeledContent("Audio format") {
+                                    Picker("Audio format", selection: $model.clipAudioOnlyFormat) {
+                                        ForEach(ClipAudioOnlyFormat.allCases) { format in
+                                            Text(format.rawValue).tag(format)
+                                        }
                                     }
+                                    .pickerStyle(.menu)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                                    .frame(width: 148)
                                 }
-                                .labelsHidden()
-                                .pickerStyle(.menu)
-                                .controlSize(.mini)
-                                .frame(width: 88, alignment: .leading)
-                                .help("Input gain before limiter.")
+
+                                HStack {
+                                    Text("Audio bitrate")
+                                        .frame(width: 120, alignment: .leading)
+                                    Slider(
+                                        value: Binding(
+                                            get: { Double(model.clipAudioBitrateKbps) },
+                                            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
+                                        ),
+                                        in: 64...320,
+                                        step: 32
+                                    )
+                                    .controlSize(.small)
+                                    Text("\(model.clipAudioBitrateKbps) kbps")
+                                        .font(.caption.monospacedDigit())
+                                        .frame(width: 90, alignment: .trailing)
+                                }
+
+                                HStack(spacing: 10) {
+                                    Toggle(
+                                        "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
+                                        isOn: $model.clipAudioOnlyBoostAudio
+                                    )
+                                    .toggleStyle(.switch)
+                                    .controlSize(.mini)
+
+                                    if model.clipAudioOnlyBoostAudio {
+                                        Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
+                                            ForEach(AdvancedBoostAmount.allCases) { amount in
+                                                Text(amount.label).tag(amount)
+                                            }
+                                        }
+                                        .labelsHidden()
+                                        .pickerStyle(.menu)
+                                        .controlSize(.mini)
+                                        .frame(width: 88, alignment: .leading)
+                                        .help("Input gain before limiter.")
+                                    }
+
+                                    Spacer(minLength: 0)
+                                }
+
+                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAudioOnlyAddFadeInOut)
+                                    .toggleStyle(.switch)
+                                    .controlSize(.mini)
                             }
-
-                            Spacer(minLength: 0)
-                        }
-
-                        Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAudioOnlyAddFadeInOut)
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-                    } else {
-                        LabeledContent("Format") {
-                            Picker("Format", selection: $model.selectedClipFormat) {
-                                if model.clipEncodingMode == .fast {
+                        } else if uiClipEncodingMode == .fast {
+                            LabeledContent("Format") {
+                                Picker("Format", selection: $model.selectedClipFormat) {
                                     ForEach(fastClipFormats) { format in
                                         Text(format.rawValue).tag(format)
                                     }
-                                } else {
-                                    ForEach(advancedClipFormats) { format in
-                                        Text(format.rawValue).tag(format)
-                                    }
                                 }
                             }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .controlSize(.small)
-                            .frame(width: 148)
-                        }
-                    }
-
-                    if model.clipEncodingMode == .compressed {
-                        if model.selectedClipFormat != .webm {
-                            LabeledContent("Video codec") {
-                                Picker("Video codec", selection: $model.clipAdvancedVideoCodec) {
-                                    ForEach(AdvancedVideoCodec.allCases) { codec in
-                                        Text(codec.rawValue).tag(codec)
-                                    }
-                                }
                                 .pickerStyle(.menu)
                                 .labelsHidden()
                                 .controlSize(.small)
                                 .frame(width: 148)
-                            }
                         } else {
-                            Text("Video codec: VP9 (WebM)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        LabeledContent("Speed") {
-                            Picker("Speed", selection: $model.clipCompatibleSpeedPreset) {
-                                ForEach(CompatibleSpeedPreset.allCases) { preset in
-                                    Text(preset.rawValue).tag(preset)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .controlSize(.small)
-                            .frame(width: 148)
-                        }
-
-                        LabeledContent("Max resolution") {
-                            Picker("Max resolution", selection: $model.clipCompatibleMaxResolution) {
-                                ForEach(CompatibleMaxResolution.allCases) { resolution in
-                                    Text(resolution.rawValue).tag(resolution)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .controlSize(.small)
-                            .frame(width: 148)
-                        }
-
-                        HStack {
-                            Text("Video bitrate")
-                                .frame(width: 120, alignment: .leading)
-                            Slider(value: $model.clipVideoBitrateMbps, in: 0.5...20, step: 0.5)
-                                .controlSize(.small)
-                            Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 90, alignment: .trailing)
-                        }
-
-                        HStack {
-                            Text("Audio bitrate")
-                                .frame(width: 120, alignment: .leading)
-                            Slider(
-                                value: Binding(
-                                    get: { Double(model.clipAudioBitrateKbps) },
-                                    set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
-                                ),
-                                in: 64...320,
-                                step: 32
-                            )
-                            .controlSize(.small)
-                            Text("\(model.clipAudioBitrateKbps) kbps")
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 90, alignment: .trailing)
-                        }
-
-                        HStack(spacing: 10) {
-                            Toggle(
-                                "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
-                                isOn: $model.clipAdvancedBoostAudio
-                            )
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-
-                            if model.clipAdvancedBoostAudio {
-                                Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
-                                    ForEach(AdvancedBoostAmount.allCases) { amount in
-                                        Text(amount.label).tag(amount)
+                            VStack(alignment: .leading, spacing: 10) {
+                                LabeledContent("Format") {
+                                    Picker("Format", selection: $model.selectedClipFormat) {
+                                        ForEach(advancedClipFormats) { format in
+                                            Text(format.rawValue).tag(format)
+                                        }
                                     }
+                                    .pickerStyle(.menu)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                                    .frame(width: 148)
                                 }
-                                .labelsHidden()
-                                .pickerStyle(.menu)
-                                .controlSize(.mini)
-                                .frame(width: 88, alignment: .leading)
-                                .help("Input gain before limiter.")
-                            }
 
-                            Spacer(minLength: 0)
-                        }
-
-                        Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAdvancedAddFadeInOut)
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-
-                        HStack(spacing: 10) {
-                            Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
-                                .toggleStyle(.switch)
-                                .controlSize(.mini)
-                                .disabled(!model.whisperTranscriptionAvailable)
-
-                            if model.clipAdvancedBurnInCaptions {
-                                Picker("Caption style", selection: $model.clipAdvancedCaptionStyle) {
-                                    ForEach(BurnInCaptionStyle.allCases) { style in
-                                        Text(style.rawValue).tag(style)
+                                if model.selectedClipFormat != .webm {
+                                    LabeledContent("Video codec") {
+                                        Picker("Video codec", selection: $model.clipAdvancedVideoCodec) {
+                                            ForEach(AdvancedVideoCodec.allCases) { codec in
+                                                Text(codec.rawValue).tag(codec)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                        .labelsHidden()
+                                        .controlSize(.small)
+                                        .frame(width: 148)
                                     }
+                                } else {
+                                    Text("Video codec: VP9 (WebM)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                                .labelsHidden()
-                                .pickerStyle(.menu)
-                                .controlSize(.mini)
-                                .frame(width: 168, alignment: .leading)
-                                .disabled(!model.whisperTranscriptionAvailable)
-                                .help("Caption style for this export.")
+
+                                LabeledContent("Speed") {
+                                    Picker("Speed", selection: $model.clipCompatibleSpeedPreset) {
+                                        ForEach(CompatibleSpeedPreset.allCases) { preset in
+                                            Text(preset.rawValue).tag(preset)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                                    .frame(width: 148)
+                                }
+
+                                LabeledContent("Max resolution") {
+                                    Picker("Max resolution", selection: $model.clipCompatibleMaxResolution) {
+                                        ForEach(CompatibleMaxResolution.allCases) { resolution in
+                                            Text(resolution.rawValue).tag(resolution)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .labelsHidden()
+                                    .controlSize(.small)
+                                    .frame(width: 148)
+                                }
+
+                                HStack {
+                                    Text("Video bitrate")
+                                        .frame(width: 120, alignment: .leading)
+                                    Slider(value: $model.clipVideoBitrateMbps, in: 0.5...20, step: 0.5)
+                                        .controlSize(.small)
+                                    Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
+                                        .font(.caption.monospacedDigit())
+                                        .frame(width: 90, alignment: .trailing)
+                                }
+
+                                HStack {
+                                    Text("Audio bitrate")
+                                        .frame(width: 120, alignment: .leading)
+                                    Slider(
+                                        value: Binding(
+                                            get: { Double(model.clipAudioBitrateKbps) },
+                                            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
+                                        ),
+                                        in: 64...320,
+                                        step: 32
+                                    )
+                                    .controlSize(.small)
+                                    Text("\(model.clipAudioBitrateKbps) kbps")
+                                        .font(.caption.monospacedDigit())
+                                        .frame(width: 90, alignment: .trailing)
+                                }
+
+                                HStack(spacing: 10) {
+                                    Toggle(
+                                        "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
+                                        isOn: $model.clipAdvancedBoostAudio
+                                    )
+                                    .toggleStyle(.switch)
+                                    .controlSize(.mini)
+
+                                    if model.clipAdvancedBoostAudio {
+                                        Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
+                                            ForEach(AdvancedBoostAmount.allCases) { amount in
+                                                Text(amount.label).tag(amount)
+                                            }
+                                        }
+                                        .labelsHidden()
+                                        .pickerStyle(.menu)
+                                        .controlSize(.mini)
+                                        .frame(width: 88, alignment: .leading)
+                                        .help("Input gain before limiter.")
+                                    }
+
+                                    Spacer(minLength: 0)
+                                }
+
+                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAdvancedAddFadeInOut)
+                                    .toggleStyle(.switch)
+                                    .controlSize(.mini)
+
+                                HStack(spacing: 10) {
+                                    Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
+                                        .toggleStyle(.switch)
+                                        .controlSize(.mini)
+                                        .disabled(!model.whisperTranscriptionAvailable)
+
+                                    if model.clipAdvancedBurnInCaptions {
+                                        Picker("Caption style", selection: $model.clipAdvancedCaptionStyle) {
+                                            ForEach(BurnInCaptionStyle.allCases) { style in
+                                                Text(style.rawValue).tag(style)
+                                            }
+                                        }
+                                        .labelsHidden()
+                                        .pickerStyle(.menu)
+                                        .controlSize(.mini)
+                                        .frame(width: 168, alignment: .leading)
+                                        .disabled(!model.whisperTranscriptionAvailable)
+                                        .help("Caption style for this export.")
+                                    }
+
+                                    Spacer(minLength: 0)
+                                }
+
+                                if !model.whisperTranscriptionAvailable {
+                                    Text("Whisper binary/model not available in app bundle.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-
-                            Spacer(minLength: 0)
-                        }
-
-                        if !model.whisperTranscriptionAvailable {
-                            Text("Whisper binary/model not available in app bundle.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -769,7 +845,7 @@ struct ClipOutputPanel: View {
                 Divider()
 
                 HStack {
-                    if model.clipEncodingMode == .audioOnly, model.clipAudioOnlyFormat != .wav {
+                    if uiClipEncodingMode == .audioOnly, model.clipAudioOnlyFormat != .wav {
                         HStack(spacing: 8) {
                             Label("Estimated output size", systemImage: "ruler")
                                 .font(.body.weight(.medium))
@@ -780,7 +856,7 @@ struct ClipOutputPanel: View {
                                 dangerThresholdGB: model.estimatedSizeDangerThresholdGB
                             )
                         }
-                    } else if model.clipEncodingMode == .compressed {
+                    } else if uiClipEncodingMode == .compressed {
                         HStack(spacing: 8) {
                             Label("Estimated output size", systemImage: "ruler")
                                 .font(.body.weight(.medium))
@@ -795,6 +871,7 @@ struct ClipOutputPanel: View {
                     Spacer(minLength: 8)
                     Button {
                         let quickExport = NSEvent.modifierFlags.contains(.option)
+                        syncModelEncodingModeIfNeeded()
                         if model.isActivityRunning {
                             onEnqueueExport(quickExport)
                         } else {
@@ -830,6 +907,21 @@ struct ClipOutputPanel: View {
                 RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
                     .stroke(Color.primary.opacity(0.045), lineWidth: 0.4)
             )
+        }
+        .onChange(of: uiClipEncodingMode) { mode in
+            if !model.hasVideoTrack && mode != .audioOnly {
+                uiClipEncodingMode = .audioOnly
+                return
+            }
+            syncModelEncodingModeIfNeeded()
+            if mode == .fast && !model.selectedClipFormat.supportsPassthrough {
+                model.selectedClipFormat = .mp4
+            }
+        }
+        .onChange(of: model.clipEncodingMode) { mode in
+            if uiClipEncodingMode != mode {
+                uiClipEncodingMode = mode
+            }
         }
     }
 }

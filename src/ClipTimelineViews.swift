@@ -1144,8 +1144,16 @@ struct ClipToolView: View {
 
     private var selectionSection: some View {
         ClipSelectionPanel(
-            model: model,
             player: player,
+            sourceSessionID: model.sourceSessionID,
+            clipStartSeconds: model.clipStartSeconds,
+            clipEndSeconds: model.clipEndSeconds,
+            clipDurationSeconds: model.clipDurationSeconds,
+            hasVideoTrack: model.hasVideoTrack,
+            clipStartText: $model.clipStartText,
+            clipEndText: $model.clipEndText,
+            onCommitClipStartText: { model.commitClipStartText(undoManager: undoManager) },
+            onCommitClipEndText: { model.commitClipEndText(undoManager: undoManager) },
             isCompactLayout: isCompactLayout,
             reduceTransparency: reduceTransparency,
             isWaveformLoading: isWaveformLoading,
@@ -1161,6 +1169,11 @@ struct ClipToolView: View {
             playheadSeconds: playheadSeconds,
             playheadCopyFlash: playheadCopyFlash,
             isTimelineHovered: isTimelineHovered,
+            captureMarkers: model.captureTimelineMarkers,
+            highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
+            highlightedClipBoundary: model.highlightedClipBoundary,
+            captureFrameFlashToken: model.captureFrameFlashToken,
+            quickExportFlashToken: model.quickExportFlashToken,
             onTimelineWidthChanged: { timelineInteractiveWidth = $0 },
             onSeek: { seconds, shouldSnapToMarker in
                 let target = shouldSnapToMarker ? snappedMarkerTime(around: seconds) : seconds
@@ -1207,6 +1220,7 @@ struct ClipToolView: View {
                 model.captureFrame(at: playheadSeconds)
             }
         )
+        .equatable()
     }
 
     private var outputSection: some View {
