@@ -30,11 +30,8 @@ struct InspectToolView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var transcriptSearchText = ""
     @State private var transcriptFontSize: CGFloat = 14
-    @State private var allTranscriptRows: [TranscriptDisplayRow] = []
-    @State private var filteredTranscriptRows: [TranscriptDisplayRow] = []
-
-    private func rebuildTranscriptRows() {
-        let built = transcriptSegments.map { segment in
+    private var allTranscriptRows: [TranscriptDisplayRow] {
+        transcriptSegments.map { segment in
             TranscriptDisplayRow(
                 id: segment.id,
                 start: segment.start,
@@ -42,17 +39,14 @@ struct InspectToolView: View {
                 text: segment.text
             )
         }
-        allTranscriptRows = built
-        applyTranscriptFilter()
     }
 
-    private func applyTranscriptFilter() {
+    private var filteredTranscriptRows: [TranscriptDisplayRow] {
         let query = transcriptSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
-            filteredTranscriptRows = allTranscriptRows
-            return
+            return allTranscriptRows
         }
-        filteredTranscriptRows = allTranscriptRows.filter { $0.text.localizedCaseInsensitiveContains(query) }
+        return allTranscriptRows.filter { $0.text.localizedCaseInsensitiveContains(query) }
     }
 
     private func fileIcon(for url: URL) -> NSImage {
@@ -320,15 +314,6 @@ struct InspectToolView: View {
             if !isCompactLayout {
                 Spacer()
             }
-        }
-        .onAppear {
-            rebuildTranscriptRows()
-        }
-        .onChange(of: transcriptSegments.count) { _ in
-            rebuildTranscriptRows()
-        }
-        .onChange(of: transcriptSearchText) { _ in
-            applyTranscriptFilter()
         }
     }
 }
