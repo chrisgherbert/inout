@@ -29,6 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return true
     }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor in
+            AppUpdateChecker.shared.performInitialCheckIfNeeded()
+        }
+    }
 }
 
 @main
@@ -52,6 +58,12 @@ struct CheckBlackFramesApp: App {
         .windowResizability(.contentSize)
 
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    AppUpdateChecker.shared.checkForUpdates(userInitiated: true)
+                }
+            }
+
             CommandGroup(after: .pasteboard) {
                 Divider()
 
