@@ -62,6 +62,8 @@ struct ClipToolView: View {
     @State private var importURLSaveMode: URLDownloadSaveLocationMode = .askEachTime
     @State private var importCustomFolderPath: String = ""
     @State private var showURLImportAdvancedOptions = false
+    @State private var emptyStateURLText: String = ""
+    @State private var isEmptyDropTargeted = false
     @FocusState private var isImportURLFieldFocused: Bool
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
@@ -1249,16 +1251,17 @@ struct ClipToolView: View {
                 clipPlayerSection
                 timelineControlsSection
                 outputSection
+                Spacer()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        dismissTimecodeFieldFocus()
+                    }
             } else {
+                Spacer(minLength: 0)
                 emptySourceImportView
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
             }
-
-            Spacer()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    dismissTimecodeFieldFocus()
-                }
         }
         .background(
             GeometryReader { geo in
@@ -1277,56 +1280,108 @@ struct ClipToolView: View {
     }
 
     private var emptySourceImportView: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            GroupBox("Open Source Media") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Choose one way to start.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .center, spacing: 22) {
+            Text("Open Media")
+                .font(.system(size: 32, weight: .semibold))
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("From File")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Button {
-                            model.chooseSource()
-                        } label: {
-                            Label("Choose Media…", systemImage: "video.badge.plus")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
-                    }
+            VStack(spacing: 10) {
+                Image(systemName: "film")
+                    .font(.system(size: 58, weight: .regular))
+                    .foregroundStyle(isEmptyDropTargeted ? Color.accentColor : Color.secondary)
 
-                    Divider()
+                Text("Drag a video or audio file here")
+                    .font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(.secondary)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("From URL")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        HStack(spacing: 8) {
-                            Button {
-                                prepareURLImportSheetDefaults()
-                                model.presentURLImportSheet()
-                            } label: {
-                                Label("Download from URL…", systemImage: "link.badge.plus")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(!model.ytDLPAvailable || !model.canRequestURLDownload)
-
-                            if !model.ytDLPAvailable {
-                                Text("Install yt-dlp first")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                Button("Choose File…") {
+                    model.chooseSource()
                 }
-                .padding(12)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
-            .frame(maxWidth: 520, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 360)
+            .background(
+                RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+                    .fill(
+                        adaptiveContainerFill(
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            reduceTransparency: reduceTransparency
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+                    .stroke(
+                        isEmptyDropTargeted ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.24),
+                        style: StrokeStyle(lineWidth: isEmptyDropTargeted ? 2.4 : 1.6, dash: [8, 6])
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+                    .stroke(isEmptyDropTargeted ? Color.accentColor.opacity(0.2) : Color.clear, lineWidth: 6)
+            )
+            .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isEmptyDropTargeted) { providers in
+                model.handleDrop(providers: providers)
+            }
+
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.16))
+                    .frame(height: 1)
+                    .frame(maxWidth: 260)
+                Text("or")
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(.tertiary)
+                Rectangle()
+                    .fill(Color.primary.opacity(0.16))
+                    .frame(height: 1)
+                    .frame(maxWidth: 260)
+            }
+            .padding(.vertical, 2)
+
+            VStack(alignment: .center, spacing: 10) {
+                Text("Download from URL")
+                    .font(.system(size: 26, weight: .semibold))
+
+                HStack(spacing: 8) {
+                    TextField("https://…", text: $emptyStateURLText)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.large)
+                        .font(.system(size: 18))
+                        .frame(minHeight: 44)
+
+                    Button("Download") {
+                        let trimmed = emptyStateURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        model.startURLImport(
+                            urlText: trimmed,
+                            preset: model.urlDownloadPreset,
+                            saveMode: model.urlDownloadSaveLocationMode,
+                            customFolderPath: model.customURLDownloadDirectoryPath
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.roundedRectangle(radius: 8))
+                    .controlSize(.large)
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(minHeight: 44)
+                    .disabled(emptyStateURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .frame(maxWidth: 920)
+
+                if !model.ytDLPAvailable {
+                    Text("yt-dlp is required for URL downloads.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .disabled(!model.ytDLPAvailable || !model.canRequestURLDownload)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: 980)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var clipboardURLString: String? {

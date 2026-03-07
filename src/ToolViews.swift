@@ -82,13 +82,21 @@ struct ToolContentView: View {
 
     var body: some View {
         TabView(selection: $model.selectedTool) {
-            ScrollView {
-                ClipToolView(model: model, isCompactLayout: isCompactLayout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .id("clip-\(model.sourceSessionID.uuidString)")
+            Group {
+                if model.sourceURL != nil {
+                    ScrollView {
+                        ClipToolView(model: model, isCompactLayout: isCompactLayout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id("clip-\(model.sourceSessionID.uuidString)")
+                    }
+                    .scrollIndicators(.automatic)
+                } else {
+                    ClipToolView(model: model, isCompactLayout: isCompactLayout)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                        .id("clip-\(model.sourceSessionID.uuidString)")
+                }
             }
             .padding(10)
-            .scrollIndicators(.automatic)
             .tabItem { Text(WorkspaceTool.clip.rawValue) }
             .tag(WorkspaceTool.clip)
 
@@ -326,4 +334,3 @@ struct ConvertToolView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isExporting)
     }
 }
-
