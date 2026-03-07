@@ -1451,11 +1451,12 @@ final class WorkspaceViewModel: ObservableObject {
         return FileManager.default.homeDirectoryForCurrentUser
     }
 
-    private func defaultDownloadBaseName(for sourceURL: URL) -> String {
-        let host = sourceURL.host?.replacingOccurrences(of: ".", with: "_") ?? "download"
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return "inout_\(host)_\(formatter.string(from: Date()))"
+    private func defaultDownloadFileNameTemplate(for preset: URLDownloadPreset, sourceURL: URL) -> String {
+        let host = (sourceURL.host ?? "download")
+            .replacingOccurrences(of: ".", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        // yt-dlp will expand title/id placeholders. Prefixing with host keeps source context.
+        return "\(host) - %(title)s [%(id)s].\(preset.outputExtension)"
     }
 
     private func promptURLDownloadDestination(for preset: URLDownloadPreset, sourceURL: URL) -> URL? {
@@ -1463,7 +1464,7 @@ final class WorkspaceViewModel: ObservableObject {
         panel.canCreateDirectories = true
         panel.allowsOtherFileTypes = false
         panel.allowedFileTypes = [preset.outputExtension]
-        panel.nameFieldStringValue = "\(defaultDownloadBaseName(for: sourceURL)).\(preset.outputExtension)"
+        panel.nameFieldStringValue = defaultDownloadFileNameTemplate(for: preset, sourceURL: sourceURL)
         panel.title = "Save Downloaded Media"
         panel.prompt = "Save"
         if let defaultDirectory = defaultDownloadDirectoryURL() {
@@ -1498,7 +1499,7 @@ final class WorkspaceViewModel: ObservableObject {
             guard let folder = defaultDownloadDirectoryURL() else { return nil }
             return uniqueUnderscoreIndexedURL(
                 in: folder,
-                preferredFileName: "\(defaultDownloadBaseName(for: sourceURL)).\(preset.outputExtension)"
+                preferredFileName: defaultDownloadFileNameTemplate(for: preset, sourceURL: sourceURL)
             )
         case .customFolder:
             guard let customFolderPathOverride, !customFolderPathOverride.isEmpty else { return nil }
@@ -1506,7 +1507,7 @@ final class WorkspaceViewModel: ObservableObject {
             guard FileManager.default.fileExists(atPath: folder.path) else { return nil }
             return uniqueUnderscoreIndexedURL(
                 in: folder,
-                preferredFileName: "\(defaultDownloadBaseName(for: sourceURL)).\(preset.outputExtension)"
+                preferredFileName: defaultDownloadFileNameTemplate(for: preset, sourceURL: sourceURL)
             )
         }
     }
