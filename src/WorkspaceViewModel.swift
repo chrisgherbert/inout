@@ -319,7 +319,11 @@ final class WorkspaceViewModel: ObservableObject {
     private let maxWaveformCacheEntries = 6
     private let maxActivityConsoleCharacters = 200_000
     private let activityConsoleTrimCharacters = 150_000
+    private var cachedFFmpegAvailable = false
+    private var cachedFFprobeAvailable = false
     private var cachedYTDLPAvailable = false
+    private var cachedWhisperCLIAvailable = false
+    private var cachedWhisperModelAvailable = false
     private var cachedWhisperAvailable = false
 
     init() {
@@ -481,6 +485,26 @@ final class WorkspaceViewModel: ObservableObject {
         cachedWhisperAvailable
     }
 
+    var ffmpegAvailable: Bool {
+        cachedFFmpegAvailable
+    }
+
+    var ffprobeAvailable: Bool {
+        cachedFFprobeAvailable
+    }
+
+    var ytDLPToolAvailable: Bool {
+        cachedYTDLPAvailable
+    }
+
+    var whisperCLIAvailable: Bool {
+        cachedWhisperCLIAvailable
+    }
+
+    var whisperModelAvailable: Bool {
+        cachedWhisperModelAvailable
+    }
+
     var hasAudioTrack: Bool {
         guard let sourceInfo else { return false }
         if let bitrate = sourceInfo.audioBitrateBps, bitrate > 0 { return true }
@@ -553,12 +577,20 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func refreshExternalToolAvailabilityCache() {
+        cachedFFmpegAvailable = (findFFmpegExecutable() != nil)
+        cachedFFprobeAvailable = (findFFprobeExecutable() != nil)
         if let ytDLPURL = findYTDLPExecutable() {
             cachedYTDLPAvailable = isMachOExecutable(at: ytDLPURL) || (findPython3Executable() != nil)
         } else {
             cachedYTDLPAvailable = false
         }
-        cachedWhisperAvailable = (findWhisperExecutable() != nil && findWhisperModel() != nil)
+        cachedWhisperCLIAvailable = (findWhisperExecutable() != nil)
+        cachedWhisperModelAvailable = (findWhisperModel() != nil)
+        cachedWhisperAvailable = (cachedWhisperCLIAvailable && cachedWhisperModelAvailable)
+    }
+
+    func recheckSetupChecks() {
+        refreshExternalToolAvailabilityCache()
     }
 
     var sourceDurationSeconds: Double {
@@ -3815,6 +3847,31 @@ final class WorkspaceViewModel: ObservableObject {
         if let path = ProcessInfo.processInfo.environment["PATH"] {
             for entry in path.split(separator: ":") {
                 candidates.append(String(entry) + "/ffmpeg")
+            }
+        }
+
+        for candidate in candidates {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return URL(fileURLWithPath: candidate)
+            }
+        }
+        return nil
+    }
+
+    private func findFFprobeExecutable() -> URL? {
+        if let bundled = Bundle.main.url(forResource: "ffprobe", withExtension: nil),
+           FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled
+        }
+
+        var candidates = [
+            "/opt/homebrew/bin/ffprobe",
+            "/usr/local/bin/ffprobe",
+            "/usr/bin/ffprobe"
+        ]
+        if let path = ProcessInfo.processInfo.environment["PATH"] {
+            for entry in path.split(separator: ":") {
+                candidates.append(String(entry) + "/ffprobe")
             }
         }
 

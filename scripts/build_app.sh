@@ -40,6 +40,8 @@ QUICK_EXPORT_SOUND_SOURCE="$ROOT_DIR/assets/QuickExportSnip.aiff"
 QUICK_EXPORT_SOUND_DEST="$APP_RESOURCES/QuickExportSnip.aiff"
 PINNED_FFMPEG_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg"
 PINNED_FFMPEG_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg.sha256"
+PINNED_FFPROBE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffprobe"
+PINNED_FFPROBE_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffprobe.sha256"
 PINNED_YTDLP_DEFAULT="$ROOT_DIR/vendor/yt-dlp/macos-arm64/yt-dlp"
 PINNED_YTDLP_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/yt-dlp/macos-arm64/yt-dlp.sha256"
 
@@ -338,16 +340,34 @@ fi
 FFMPEG_SOURCE="${BUNDLED_FFMPEG_PATH:-}"
 PINNED_FFMPEG_SHA_FILE="${BUNDLED_FFMPEG_SHA_FILE:-$PINNED_FFMPEG_SHA_FILE_DEFAULT}"
 EXPECTED_FFMPEG_SHA="${BUNDLED_FFMPEG_SHA256:-}"
+FFPROBE_SOURCE="${BUNDLED_FFPROBE_PATH:-}"
+PINNED_FFPROBE_SHA_FILE="${BUNDLED_FFPROBE_SHA_FILE:-$PINNED_FFPROBE_SHA_FILE_DEFAULT}"
+EXPECTED_FFPROBE_SHA="${BUNDLED_FFPROBE_SHA256:-}"
 
 if [[ "$BUILD_MODE" == "release" ]]; then
   if [[ -z "$FFMPEG_SOURCE" ]]; then
     FFMPEG_SOURCE="$PINNED_FFMPEG_DEFAULT"
+  fi
+  if [[ -z "$FFPROBE_SOURCE" && -n "$FFMPEG_SOURCE" ]]; then
+    guessed_ffprobe="$(cd "$(dirname "$FFMPEG_SOURCE")" && pwd)/ffprobe"
+    if [[ -x "$guessed_ffprobe" ]]; then
+      FFPROBE_SOURCE="$guessed_ffprobe"
+    fi
+  fi
+  if [[ -z "$FFPROBE_SOURCE" ]]; then
+    FFPROBE_SOURCE="$PINNED_FFPROBE_DEFAULT"
   fi
 
   if [[ ! -x "$FFMPEG_SOURCE" ]]; then
     echo "ERROR: release build requires a pinned ffmpeg binary."
     echo "Missing executable: $FFMPEG_SOURCE"
     echo "Use scripts/pin_ffmpeg.sh or set BUNDLED_FFMPEG_PATH."
+    exit 1
+  fi
+  if [[ ! -x "$FFPROBE_SOURCE" ]]; then
+    echo "ERROR: release build requires a pinned ffprobe binary."
+    echo "Missing executable: $FFPROBE_SOURCE"
+    echo "Use scripts/pin_ffmpeg.sh or set BUNDLED_FFPROBE_PATH."
     exit 1
   fi
 
@@ -359,6 +379,14 @@ if [[ "$BUILD_MODE" == "release" ]]; then
     echo "Set BUNDLED_FFMPEG_SHA256 or provide: $PINNED_FFMPEG_SHA_FILE"
     exit 1
   fi
+  if [[ -z "$EXPECTED_FFPROBE_SHA" && -f "$PINNED_FFPROBE_SHA_FILE" ]]; then
+    EXPECTED_FFPROBE_SHA="$(awk '{print $1}' "$PINNED_FFPROBE_SHA_FILE" | head -n 1)"
+  fi
+  if [[ -z "$EXPECTED_FFPROBE_SHA" ]]; then
+    echo "ERROR: release build requires ffprobe checksum pinning."
+    echo "Set BUNDLED_FFPROBE_SHA256 or provide: $PINNED_FFPROBE_SHA_FILE"
+    exit 1
+  fi
 
   ACTUAL_FFMPEG_SHA="$(shasum -a 256 "$FFMPEG_SOURCE" | awk '{print $1}')"
   if [[ "$ACTUAL_FFMPEG_SHA" != "$EXPECTED_FFMPEG_SHA" ]]; then
@@ -368,16 +396,42 @@ if [[ "$BUILD_MODE" == "release" ]]; then
     echo "Binary:   $FFMPEG_SOURCE"
     exit 1
   fi
+  ACTUAL_FFPROBE_SHA="$(shasum -a 256 "$FFPROBE_SOURCE" | awk '{print $1}')"
+  if [[ "$ACTUAL_FFPROBE_SHA" != "$EXPECTED_FFPROBE_SHA" ]]; then
+    echo "ERROR: ffprobe checksum mismatch."
+    echo "Expected: $EXPECTED_FFPROBE_SHA"
+    echo "Actual:   $ACTUAL_FFPROBE_SHA"
+    echo "Binary:   $FFPROBE_SOURCE"
+    exit 1
+  fi
 
   "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$FFMPEG_SOURCE"
+  "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$FFPROBE_SOURCE"
 else
   if [[ -z "$FFMPEG_SOURCE" && -x "$PINNED_FFMPEG_DEFAULT" ]]; then
     FFMPEG_SOURCE="$PINNED_FFMPEG_DEFAULT"
+  fi
+  if [[ -z "$FFPROBE_SOURCE" && -n "$FFMPEG_SOURCE" ]]; then
+    guessed_ffprobe="$(cd "$(dirname "$FFMPEG_SOURCE")" && pwd)/ffprobe"
+    if [[ -x "$guessed_ffprobe" ]]; then
+      FFPROBE_SOURCE="$guessed_ffprobe"
+    fi
+  fi
+  if [[ -z "$FFPROBE_SOURCE" && -x "$PINNED_FFPROBE_DEFAULT" ]]; then
+    FFPROBE_SOURCE="$PINNED_FFPROBE_DEFAULT"
   fi
   if [[ -z "$FFMPEG_SOURCE" ]]; then
     for candidate in /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg /usr/bin/ffmpeg; do
       if [[ -x "$candidate" ]]; then
         FFMPEG_SOURCE="$candidate"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$FFPROBE_SOURCE" ]]; then
+    for candidate in /opt/homebrew/bin/ffprobe /usr/local/bin/ffprobe /usr/bin/ffprobe; do
+      if [[ -x "$candidate" ]]; then
+        FFPROBE_SOURCE="$candidate"
         break
       fi
     done
@@ -398,6 +452,22 @@ if [[ -n "$FFMPEG_SOURCE" && -x "$FFMPEG_SOURCE" ]]; then
   fi
 else
   echo "ffmpeg not bundled (set BUNDLED_FFMPEG_PATH to include one)."
+fi
+
+if [[ -n "$FFPROBE_SOURCE" && -x "$FFPROBE_SOURCE" ]]; then
+  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/ffprobe" && "$BUILD_MODE" != "release" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
+    echo "Quick mode: keeping existing bundled ffprobe."
+  else
+    cp "$FFPROBE_SOURCE" "$APP_RESOURCES/ffprobe"
+    chmod +x "$APP_RESOURCES/ffprobe"
+    if [[ -n "${ACTUAL_FFPROBE_SHA:-}" ]]; then
+      echo "Bundled ffprobe: $FFPROBE_SOURCE (sha256: $ACTUAL_FFPROBE_SHA)"
+    else
+      echo "Bundled ffprobe: $FFPROBE_SOURCE"
+    fi
+  fi
+else
+  echo "ffprobe not bundled (set BUNDLED_FFPROBE_PATH to include one)."
 fi
 
 YTDLP_SOURCE="${BUNDLED_YTDLP_PATH:-}"

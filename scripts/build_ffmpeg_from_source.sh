@@ -44,8 +44,8 @@ CONFIGURE_ARGS=(
   --disable-debug
   --disable-doc
   --disable-ffplay
-  --disable-ffprobe
   --enable-ffmpeg
+  --enable-ffprobe
   --enable-static
   --disable-shared
   --enable-avfoundation
@@ -68,19 +68,25 @@ fi
 echo "Configuring ffmpeg source build..."
 ./configure "${CONFIGURE_ARGS[@]}"
 
-echo "Building ffmpeg..."
-make -j"$JOBS" ffmpeg
+echo "Building ffmpeg/ffprobe..."
+make -j"$JOBS" ffmpeg ffprobe
 
 cp ffmpeg "$OUT_DIR/ffmpeg"
 chmod +x "$OUT_DIR/ffmpeg"
 shasum -a 256 "$OUT_DIR/ffmpeg" | awk '{print $1 "  ffmpeg"}' > "$OUT_DIR/ffmpeg.sha256"
+cp ffprobe "$OUT_DIR/ffprobe"
+chmod +x "$OUT_DIR/ffprobe"
+shasum -a 256 "$OUT_DIR/ffprobe" | awk '{print $1 "  ffprobe"}' > "$OUT_DIR/ffprobe.sha256"
 
 "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$OUT_DIR/ffmpeg"
+"$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$OUT_DIR/ffprobe"
 
-echo "Built source ffmpeg:"
+echo "Built source ffmpeg/ffprobe:"
 echo "  $OUT_DIR/ffmpeg"
-echo "Checksum:"
+echo "  $OUT_DIR/ffprobe"
+echo "Checksums:"
 echo "  $OUT_DIR/ffmpeg.sha256"
+echo "  $OUT_DIR/ffprobe.sha256"
 echo ""
 echo "Tip:"
 echo "  If you need extra codecs/filters, set FFMPEG_EXTRA_CONFIGURE_FLAGS and ensure deps are available."

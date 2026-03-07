@@ -4,10 +4,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="${1:-$ROOT_DIR/dist/In-Out.app}"
 FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg"
+FFPROBE_PATH="$APP_PATH/Contents/Resources/ffprobe"
 
 if [[ ! -x "$FFMPEG_PATH" ]]; then
   echo "Smoke test failed: bundled ffmpeg missing or not executable"
   echo "Path: $FFMPEG_PATH"
+  exit 1
+fi
+if [[ ! -x "$FFPROBE_PATH" ]]; then
+  echo "Smoke test failed: bundled ffprobe missing or not executable"
+  echo "Path: $FFPROBE_PATH"
   exit 1
 fi
 
@@ -38,6 +44,7 @@ escape_subtitles_path() {
 }
 
 echo "Running ffmpeg smoke test..."
+"$FFPROBE_PATH" -hide_banner -loglevel error -version >/dev/null
 
 "$FFMPEG_PATH" -y -hide_banner -loglevel error \
   -f lavfi -i testsrc2=size=640x360:rate=30 \

@@ -14,8 +14,8 @@ Fast local iteration build:
   - Skips signing/notarization/release
 
 Options:
-  --refresh-tools  Re-copy bundled ffmpeg/yt-dlp/whisper/model into app resources
-  --verify-tools   Run dependency audits on bundled ffmpeg + whisper in dist app
+  --refresh-tools  Re-copy bundled ffmpeg/ffprobe/yt-dlp/whisper/model into app resources
+  --verify-tools   Run dependency audits on bundled ffmpeg/ffprobe + whisper in dist app
   --run            Launch built app after successful build
 USAGE
 }
@@ -47,6 +47,7 @@ REFRESH_BUNDLED_TOOLS="$REFRESH_TOOLS" ./scripts/build_app.sh quick
 if [[ "$VERIFY_TOOLS" -eq 1 ]]; then
   echo "Verifying bundled tool portability..."
   ./scripts/ffmpeg_dependency_audit.sh "$APP_PATH/Contents/Resources/ffmpeg"
+  ./scripts/ffmpeg_dependency_audit.sh "$APP_PATH/Contents/Resources/ffprobe"
   ./scripts/ytdlp_portability_audit.sh "$APP_PATH/Contents/Resources/yt-dlp"
   ./scripts/whisper_dependency_audit.sh "$APP_PATH"
   if [[ ! -x "$APP_PATH/Contents/Resources/yt-dlp" ]]; then
