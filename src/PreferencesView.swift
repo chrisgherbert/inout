@@ -63,6 +63,19 @@ struct PreferencesView: View {
     }
 
     @ViewBuilder
+    private func setupCheckRow(_ label: String, available: Bool) -> some View {
+        settingsRow(label) {
+            HStack(spacing: 8) {
+                Image(systemName: available ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundStyle(available ? Color.green : Color.red)
+                Text(available ? "Available" : "Missing")
+                    .foregroundStyle(available ? Color.green : Color.red)
+            }
+            .font(.body)
+        }
+    }
+
+    @ViewBuilder
     private func paneScroll<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -106,6 +119,23 @@ struct PreferencesView: View {
                         .controlSize(.small)
                         .disabled(model.completionSound == .none)
                     }
+                }
+            }
+            Divider()
+
+            settingsSection("Setup Checks") {
+                setupCheckRow("ffmpeg", available: model.ffmpegAvailable)
+                setupCheckRow("ffprobe", available: model.ffprobeAvailable)
+                setupCheckRow("yt-dlp", available: model.ytDLPToolAvailable)
+                setupCheckRow("whisper-cli", available: model.whisperCLIAvailable)
+                setupCheckRow("Whisper model", available: model.whisperModelAvailable)
+
+                settingsRow("") {
+                    Button("Recheck") {
+                        model.recheckSetupChecks()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
             Divider()
@@ -381,5 +411,8 @@ struct PreferencesView: View {
         }
         .controlSize(.regular)
         .frame(width: 760, height: 560)
+        .onAppear {
+            model.recheckSetupChecks()
+        }
     }
 }
