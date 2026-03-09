@@ -1340,44 +1340,22 @@ struct ClipToolView: View {
             }
             .padding(.vertical, 2)
 
-            VStack(alignment: .center, spacing: 10) {
-                Text("Download from URL")
-                    .font(.system(size: 26, weight: .semibold))
-
-                HStack(spacing: 8) {
-                    TextField("https://…", text: $emptyStateURLText)
-                        .textFieldStyle(.roundedBorder)
-                        .controlSize(.large)
-                        .font(.system(size: 18))
-                        .frame(minHeight: 44)
-
-                    Button("Download") {
-                        let trimmed = emptyStateURLText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-                        model.startURLImport(
-                            urlText: trimmed,
-                            preset: model.urlDownloadPreset,
-                            saveMode: model.urlDownloadSaveLocationMode,
-                            customFolderPath: model.customURLDownloadDirectoryPath
-                        )
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.roundedRectangle(radius: 8))
-                    .controlSize(.large)
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(minHeight: 44)
-                    .disabled(emptyStateURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            InitialURLDownloadControl(
+                text: $emptyStateURLText,
+                isEnabled: model.ytDLPAvailable && model.canRequestURLDownload,
+                reduceTransparency: reduceTransparency,
+                onDownload: {
+                    let trimmed = emptyStateURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    model.startURLImport(
+                        urlText: trimmed,
+                        preset: model.urlDownloadPreset,
+                        saveMode: model.urlDownloadSaveLocationMode,
+                        customFolderPath: model.customURLDownloadDirectoryPath
+                    )
                 }
-                .frame(maxWidth: 920)
-
-                if !model.ytDLPAvailable {
-                    Text("yt-dlp is required for URL downloads.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            )
             .frame(maxWidth: .infinity)
-            .disabled(!model.ytDLPAvailable || !model.canRequestURLDownload)
         }
         .frame(maxWidth: 980)
         .padding(.horizontal, 24)
@@ -1687,6 +1665,97 @@ struct ClipToolView: View {
                     clipWindow = window
                 }
             )
+    }
+}
+
+private struct InitialURLDownloadControl: View {
+    @Binding var text: String
+    let isEnabled: Bool
+    let reduceTransparency: Bool
+    let onDownload: () -> Void
+
+    @FocusState private var isFocused: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var canSubmit: Bool {
+        isEnabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 10) {
+            Text("Download from URL")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            HStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "link")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+
+                    TextField("https://…", text: $text)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 17, weight: .regular))
+                        .focused($isFocused)
+                        .onSubmit {
+                            if canSubmit {
+                                onDownload()
+                            }
+                        }
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button(action: onDownload) {
+                    Text("Download")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(canSubmit ? Color.white : Color.white.opacity(0.72))
+                        .frame(minWidth: 120)
+                        .frame(maxHeight: .infinity)
+                        .padding(.horizontal, 12)
+                }
+                .buttonStyle(.plain)
+                .background(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 0,
+                        bottomLeadingRadius: 0,
+                        bottomTrailingRadius: UIRadius.medium,
+                        topTrailingRadius: UIRadius.medium,
+                        style: .continuous
+                    )
+                    .fill(canSubmit ? Color.accentColor : Color.white.opacity(colorScheme == .dark ? 0.10 : 0.08))
+                )
+                .disabled(!canSubmit)
+            }
+            .frame(maxWidth: 920)
+            .frame(height: 56)
+            .background(
+                adaptiveContainerFill(
+                    material: .thinMaterial,
+                    fallback: Color(nsColor: .controlBackgroundColor),
+                    reduceTransparency: reduceTransparency
+                ),
+                in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
+                    .stroke(
+                        isFocused ? Color.accentColor.opacity(0.55) : Color.white.opacity(0.10),
+                        lineWidth: isFocused ? 1.2 : 0.8
+                    )
+            )
+            .opacity(isEnabled ? 1.0 : 0.72)
+
+            if !isEnabled {
+                Text("yt-dlp is required for URL downloads.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .animation(.easeOut(duration: 0.14), value: isFocused)
+        .animation(.easeOut(duration: 0.14), value: canSubmit)
     }
 }
 
