@@ -460,12 +460,49 @@ final class DownloaderManager {
     }
 
     private func pythonEnvironment(homeURL: URL) -> [String: String] {
-        [
+        var environment = [
             "PYTHONHOME": homeURL.path,
             "PYTHONNOUSERSITE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONPYCACHEPREFIX": tmpPycacheRoot.path
         ]
+
+        if let certFile = sslCertificateFileURL(forHome: homeURL) {
+            environment["SSL_CERT_FILE"] = certFile.path
+            environment["REQUESTS_CA_BUNDLE"] = certFile.path
+            environment["CURL_CA_BUNDLE"] = certFile.path
+        }
+
+        return environment
+    }
+
+    private func sslCertificateFileURL(forHome homeURL: URL) -> URL? {
+        let libRoot = homeURL.appendingPathComponent("lib", isDirectory: true)
+        if let pythonChildren = try? fileManager.contentsOfDirectory(
+            at: libRoot,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for child in pythonChildren
+            where child.lastPathComponent.hasPrefix("python") {
+                let certifiURL = child
+                    .appendingPathComponent("site-packages", isDirectory: true)
+                    .appendingPathComponent("certifi", isDirectory: true)
+                    .appendingPathComponent("cacert.pem")
+                if fileManager.fileExists(atPath: certifiURL.path) {
+                    return certifiURL
+                }
+            }
+        }
+
+        let candidates = [
+            homeURL.appendingPathComponent("etc", isDirectory: true)
+                .appendingPathComponent("ssl", isDirectory: true)
+                .appendingPathComponent("cert.pem"),
+            URL(fileURLWithPath: "/etc/ssl/cert.pem")
+        ]
+
+        return candidates.first(where: { fileManager.fileExists(atPath: $0.path) })
     }
 
     private func pythonExecutableURL(forHome homeURL: URL) -> URL? {

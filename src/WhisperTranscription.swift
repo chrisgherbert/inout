@@ -61,11 +61,7 @@ private func findSystemFFmpegExecutable() -> URL? {
         return bundled
     }
 
-    var candidates = [
-        "/opt/homebrew/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-        "/usr/bin/ffmpeg"
-    ]
+    var candidates = ["/usr/bin/ffmpeg"]
     if let path = ProcessInfo.processInfo.environment["PATH"] {
         for entry in path.split(separator: ":") {
             candidates.append(String(entry) + "/ffmpeg")

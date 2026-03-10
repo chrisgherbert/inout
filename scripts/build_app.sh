@@ -421,7 +421,19 @@ else
     FFPROBE_SOURCE="$PINNED_FFPROBE_DEFAULT"
   fi
   if [[ -z "$FFMPEG_SOURCE" ]]; then
-    for candidate in /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg /usr/bin/ffmpeg; do
+    if [[ -n "${PATH:-}" ]]; then
+      IFS=: read -rA path_entries <<< "$PATH"
+      for entry in "${path_entries[@]}"; do
+        candidate="${entry}/ffmpeg"
+        if [[ -x "$candidate" ]]; then
+          FFMPEG_SOURCE="$candidate"
+          break
+        fi
+      done
+    fi
+  fi
+  if [[ -z "$FFMPEG_SOURCE" ]]; then
+    for candidate in /usr/bin/ffmpeg; do
       if [[ -x "$candidate" ]]; then
         FFMPEG_SOURCE="$candidate"
         break
@@ -429,7 +441,19 @@ else
     done
   fi
   if [[ -z "$FFPROBE_SOURCE" ]]; then
-    for candidate in /opt/homebrew/bin/ffprobe /usr/local/bin/ffprobe /usr/bin/ffprobe; do
+    if [[ -n "${PATH:-}" ]]; then
+      IFS=: read -rA path_entries <<< "$PATH"
+      for entry in "${path_entries[@]}"; do
+        candidate="${entry}/ffprobe"
+        if [[ -x "$candidate" ]]; then
+          FFPROBE_SOURCE="$candidate"
+          break
+        fi
+      done
+    fi
+  fi
+  if [[ -z "$FFPROBE_SOURCE" ]]; then
+    for candidate in /usr/bin/ffprobe; do
       if [[ -x "$candidate" ]]; then
         FFPROBE_SOURCE="$candidate"
         break
@@ -477,12 +501,16 @@ if [[ -z "$YTDLP_SOURCE" && -x "$PINNED_YTDLP_DEFAULT" ]]; then
   YTDLP_SOURCE="$PINNED_YTDLP_DEFAULT"
 fi
 if [[ -z "$YTDLP_SOURCE" ]]; then
-  for candidate in /opt/homebrew/bin/yt-dlp /usr/local/bin/yt-dlp /usr/bin/yt-dlp; do
-    if [[ -x "$candidate" ]]; then
-      YTDLP_SOURCE="$candidate"
-      break
-    fi
-  done
+  if [[ -n "${PATH:-}" ]]; then
+    IFS=: read -rA path_entries <<< "$PATH"
+    for entry in "${path_entries[@]}"; do
+      candidate="${entry}/yt-dlp"
+      if [[ -x "$candidate" ]]; then
+        YTDLP_SOURCE="$candidate"
+        break
+      fi
+    done
+  fi
 fi
 
 if [[ "$BUILD_MODE" == "release" ]]; then
@@ -566,12 +594,16 @@ if [[ -z "$WHISPER_SOURCE" ]]; then
   fi
 fi
 if [[ -z "$WHISPER_SOURCE" ]]; then
-  for candidate in /opt/homebrew/bin/whisper-cli /usr/local/bin/whisper-cli; do
-    if [[ -x "$candidate" ]]; then
-      WHISPER_SOURCE="$candidate"
-      break
-    fi
-  done
+  if [[ -n "${PATH:-}" ]]; then
+    IFS=: read -rA path_entries <<< "$PATH"
+    for entry in "${path_entries[@]}"; do
+      candidate="${entry}/whisper-cli"
+      if [[ -x "$candidate" ]]; then
+        WHISPER_SOURCE="$candidate"
+        break
+      fi
+    done
+  fi
 fi
 
 if [[ -n "$WHISPER_SOURCE" && -x "$WHISPER_SOURCE" ]]; then

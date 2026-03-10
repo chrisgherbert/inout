@@ -8,8 +8,23 @@ DEST_SHA="$DEST_DIR/ffmpeg.sha256"
 DEST_PROBE="$DEST_DIR/ffprobe"
 DEST_PROBE_SHA="$DEST_DIR/ffprobe.sha256"
 
-SOURCE="${1:-/opt/homebrew/bin/ffmpeg}"
+SOURCE="${1:-}"
 PROBE_SOURCE="${2:-}"
+if [[ -z "$SOURCE" ]]; then
+  if [[ -n "${PATH:-}" ]]; then
+    IFS=: read -rA path_entries <<< "$PATH"
+    for entry in "${path_entries[@]}"; do
+      candidate="${entry}/ffmpeg"
+      if [[ -x "$candidate" ]]; then
+        SOURCE="$candidate"
+        break
+      fi
+    done
+  fi
+fi
+if [[ -z "$SOURCE" && -x "/usr/bin/ffmpeg" ]]; then
+  SOURCE="/usr/bin/ffmpeg"
+fi
 if [[ -z "$PROBE_SOURCE" ]]; then
   PROBE_SOURCE="$(cd "$(dirname "$SOURCE")" && pwd)/ffprobe"
 fi
