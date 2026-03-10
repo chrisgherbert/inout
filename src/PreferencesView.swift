@@ -126,9 +126,16 @@ struct PreferencesView: View {
             settingsSection("Setup Checks") {
                 setupCheckRow("ffmpeg", available: model.ffmpegAvailable)
                 setupCheckRow("ffprobe", available: model.ffprobeAvailable)
+                setupCheckRow("Managed Python 3", available: model.managedPythonVersionText != "Unavailable")
                 setupCheckRow("yt-dlp", available: model.ytDLPToolAvailable)
                 setupCheckRow("whisper-cli", available: model.whisperCLIAvailable)
                 setupCheckRow("Whisper model", available: model.whisperModelAvailable)
+
+                settingsRow("") {
+                    Text("URL downloads use an app-managed Python runtime together with yt-dlp. Both are checked separately here so runtime and downloader issues are easier to diagnose.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 settingsRow("") {
                     Button("Recheck") {
@@ -136,6 +143,70 @@ struct PreferencesView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                }
+            }
+            Divider()
+
+            settingsSection("Downloader") {
+                settingsRow("") {
+                    Text("This app manages the URL download stack for you. `yt-dlp` handles site extraction, and `Managed Python 3` is the runtime used to launch it. Updates and repairs happen automatically or from the controls below.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                settingsRow("Downloader status") {
+                    Text(model.downloaderStatusText)
+                }
+
+                settingsRow("Managed Python 3") {
+                    Text(model.managedPythonVersionText)
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                settingsRow("yt-dlp version") {
+                    Text(model.downloaderVersionText)
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                if !model.downloaderPreviousVersionText.isEmpty {
+                    settingsRow("Previous yt-dlp version") {
+                        Text(model.downloaderPreviousVersionText)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if !model.downloaderLastErrorText.isEmpty {
+                    settingsRow("Last error") {
+                        Text(model.downloaderLastErrorText)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                settingsRow("") {
+                    HStack(spacing: 8) {
+                        Button("Check for Updates") {
+                            model.updateDownloaderSupport()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(model.isUpdatingDownloader)
+
+                        Button("Repair Downloader") {
+                            model.repairDownloaderSupport()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(model.isUpdatingDownloader)
+
+                        Button("Rollback") {
+                            model.rollbackDownloaderSupport()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(model.isUpdatingDownloader || !model.downloaderCanRollback)
+                    }
                 }
             }
             Divider()

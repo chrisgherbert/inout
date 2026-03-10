@@ -265,6 +265,13 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var showActivityConsole = false
     @Published var activityConsoleText = ""
     @Published var isURLImportSheetPresented = false
+    @Published private(set) var downloaderStatusText = "Bundled fallback"
+    @Published private(set) var downloaderVersionText = "Unavailable"
+    @Published private(set) var isUpdatingDownloader = false
+    @Published private(set) var downloaderLastErrorText = ""
+    @Published private(set) var downloaderCanRollback = false
+    @Published private(set) var downloaderPreviousVersionText = ""
+    @Published private(set) var managedPythonVersionText = "Unavailable"
 
     private var analyzeTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -319,6 +326,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let maxWaveformCacheEntries = 6
     private let maxActivityConsoleCharacters = 200_000
     private let activityConsoleTrimCharacters = 150_000
+    private let downloaderManager = DownloaderManager.shared
     private var cachedFFmpegAvailable = false
     private var cachedFFprobeAvailable = false
     private var cachedYTDLPAvailable = false
@@ -337,6 +345,7 @@ final class WorkspaceViewModel: ObservableObject {
 
         loadPreferences()
         refreshExternalToolAvailabilityCache()
+        refreshDownloaderStatus()
         if let firstArg = CommandLine.arguments.dropFirst().first {
             let url = URL(fileURLWithPath: firstArg)
             if FileManager.default.fileExists(atPath: url.path) {
@@ -579,11 +588,8 @@ final class WorkspaceViewModel: ObservableObject {
     private func refreshExternalToolAvailabilityCache() {
         cachedFFmpegAvailable = (findFFmpegExecutable() != nil)
         cachedFFprobeAvailable = (findFFprobeExecutable() != nil)
-        if let ytDLPURL = findYTDLPExecutable() {
-            cachedYTDLPAvailable = isMachOExecutable(at: ytDLPURL) || (findPython3Executable() != nil)
-        } else {
-            cachedYTDLPAvailable = false
-        }
+        cachedYTDLPAvailable = downloaderManager.pythonRuntimeAvailable()
+            && (downloaderManager.activeLaunchCommand() != nil)
         cachedWhisperCLIAvailable = (findWhisperExecutable() != nil)
         cachedWhisperModelAvailable = (findWhisperModel() != nil)
         cachedWhisperAvailable = (cachedWhisperCLIAvailable && cachedWhisperModelAvailable)
@@ -591,6 +597,148 @@ final class WorkspaceViewModel: ObservableObject {
 
     func recheckSetupChecks() {
         refreshExternalToolAvailabilityCache()
+        refreshDownloaderStatus()
+    }
+
+    private func refreshDownloaderStatus() {
+        let status = downloaderManager.currentStatus()
+        downloaderCanRollback = downloaderManager.canRollbackToPrevious
+        downloaderPreviousVersionText = downloaderManager.previousManifest()?.version ?? ""
+        managedPythonVersionText = downloaderManager.pythonRuntimeVersion() ?? "Unavailable"
+        downloaderStatusText = status.label
+        switch status {
+        case .bundledFallback:
+            if let fallback = downloaderManager.bundledFallbackLaunchCommand(),
+               let version = try? downloaderManagerVersion(for: fallback) {
+                downloaderVersionText = version
+            } else {
+                downloaderVersionText = "Bundled fallback"
+            }
+            downloaderLastErrorText = ""
+        case .externalCurrent(let version):
+            downloaderVersionText = version
+            downloaderLastErrorText = ""
+        case .missing:
+            downloaderVersionText = "Unavailable"
+            downloaderLastErrorText = ""
+        case .broken(let detail):
+            downloaderVersionText = "Unavailable"
+            downloaderLastErrorText = detail
+        }
+    }
+
+    func updateDownloaderSupport() {
+        guard !isUpdatingDownloader else { return }
+        isUpdatingDownloader = true
+        downloaderLastErrorText = ""
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let manifest = try await self.downloaderManager.installOrUpdateDownloader()
+                self.uiMessage = "Downloader updated to \(manifest.version)."
+            } catch {
+                self.downloaderLastErrorText = error.localizedDescription
+                self.uiMessage = error.localizedDescription
+            }
+            self.isUpdatingDownloader = false
+            self.refreshExternalToolAvailabilityCache()
+            self.refreshDownloaderStatus()
+        }
+    }
+
+    func repairDownloaderSupport() {
+        guard !isUpdatingDownloader else { return }
+        isUpdatingDownloader = true
+        downloaderLastErrorText = ""
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let manifest = try await self.downloaderManager.repairDownloader()
+                self.uiMessage = "Downloader repaired (\(manifest.version))."
+            } catch {
+                self.downloaderLastErrorText = error.localizedDescription
+                self.uiMessage = error.localizedDescription
+            }
+            self.isUpdatingDownloader = false
+            self.refreshExternalToolAvailabilityCache()
+            self.refreshDownloaderStatus()
+        }
+    }
+
+    func rollbackDownloaderSupport() {
+        guard !isUpdatingDownloader else { return }
+        isUpdatingDownloader = true
+        downloaderLastErrorText = ""
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let manifest = try self.downloaderManager.rollbackToPreviousDownloader()
+                self.uiMessage = "Downloader rolled back to \(manifest.version)."
+            } catch {
+                self.downloaderLastErrorText = error.localizedDescription
+                self.uiMessage = error.localizedDescription
+            }
+            self.isUpdatingDownloader = false
+            self.refreshExternalToolAvailabilityCache()
+            self.refreshDownloaderStatus()
+        }
+    }
+
+    private func ensureManagedDownloaderReadyIfNeeded(then action: @escaping @MainActor () -> Void) {
+        switch downloaderManager.currentStatus() {
+        case .externalCurrent:
+            action()
+        case .bundledFallback, .missing, .broken:
+            guard !isUpdatingDownloader else {
+                uiMessage = "Preparing downloader support…"
+                return
+            }
+            isUpdatingDownloader = true
+            downloaderLastErrorText = ""
+            uiMessage = "Preparing downloader support…"
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer {
+                    self.isUpdatingDownloader = false
+                    self.refreshExternalToolAvailabilityCache()
+                    self.refreshDownloaderStatus()
+                }
+                do {
+                    let manifest = try await self.downloaderManager.installOrUpdateDownloader()
+                    self.uiMessage = "Downloader ready (\(manifest.version))."
+                } catch {
+                    self.downloaderLastErrorText = error.localizedDescription
+                    if self.ytDLPAvailable {
+                        self.uiMessage = "Using bundled fallback downloader."
+                    } else {
+                        self.uiMessage = error.localizedDescription
+                        return
+                    }
+                }
+                action()
+            }
+        }
+    }
+
+    private func downloaderManagerVersion(for command: YTDLPLaunchCommand) throws -> String {
+        let process = Process()
+        process.executableURL = command.executableURL
+        process.arguments = command.preArguments + ["--version"]
+        if !command.environment.isEmpty {
+            var merged = ProcessInfo.processInfo.environment
+            for (key, value) in command.environment {
+                merged[key] = value
+            }
+            process.environment = merged
+        }
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "Unknown" : text
     }
 
     var sourceDurationSeconds: Double {
@@ -1073,16 +1221,14 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
         guard ytDLPAvailable else {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "yt-dlp Not Available"
-            alert.informativeText = "Install yt-dlp, then try again."
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            uiMessage = "yt-dlp is required to import from URL."
+            ensureManagedDownloaderReadyIfNeeded { [weak self] in
+                self?.isURLImportSheetPresented = true
+            }
             return
         }
-        isURLImportSheetPresented = true
+        ensureManagedDownloaderReadyIfNeeded { [weak self] in
+            self?.isURLImportSheetPresented = true
+        }
     }
 
     // Backwards compatibility for existing call sites.
@@ -1101,7 +1247,7 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
         guard let ytDLPLaunch = resolveYTDLPLaunch() else {
-            uiMessage = "yt-dlp is required to import from URL."
+            uiMessage = "Downloader support is required to import from URL."
             return
         }
         guard let normalized = normalizedDownloadURL(from: urlText) else {
@@ -1171,6 +1317,7 @@ final class WorkspaceViewModel: ObservableObject {
                 let staged = await self.runYTDLPProcessWithProgress(
                     executableURL: ytDLPLaunch.executableURL,
                     preArguments: ytDLPLaunch.preArguments,
+                    environment: ytDLPLaunch.environment,
                     arguments: stagedArgs,
                     statusPrefix: "Downloading source",
                     progressRange: 0.0...0.6
@@ -1191,6 +1338,7 @@ final class WorkspaceViewModel: ObservableObject {
                 let direct = await self.runYTDLPProcessWithProgress(
                     executableURL: ytDLPLaunch.executableURL,
                     preArguments: ytDLPLaunch.preArguments,
+                    environment: ytDLPLaunch.environment,
                     arguments: args,
                     statusPrefix: "Downloading media",
                     progressRange: 0.0...1.0
@@ -3686,6 +3834,7 @@ final class WorkspaceViewModel: ObservableObject {
     private func runYTDLPProcessWithProgress(
         executableURL: URL,
         preArguments: [String],
+        environment: [String: String],
         arguments: [String],
         statusPrefix: String,
         progressRange: ClosedRange<Double>
@@ -3696,6 +3845,13 @@ final class WorkspaceViewModel: ObservableObject {
             let process = Process()
             process.executableURL = executableURL
             process.arguments = finalArguments
+            if !environment.isEmpty {
+                var merged = ProcessInfo.processInfo.environment
+                for (key, value) in environment {
+                    merged[key] = value
+                }
+                process.environment = merged
+            }
 
             let stderr = Pipe()
             let stdout = Pipe()
@@ -3884,68 +4040,8 @@ final class WorkspaceViewModel: ObservableObject {
         return nil
     }
 
-    private func findYTDLPExecutable() -> URL? {
-        if let bundled = Bundle.main.url(forResource: "yt-dlp", withExtension: nil),
-           FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return bundled
-        }
-
-        let candidates = [
-            "/opt/homebrew/bin/yt-dlp",
-            "/usr/local/bin/yt-dlp",
-            "/usr/bin/yt-dlp"
-        ]
-
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
-            return URL(fileURLWithPath: candidate)
-        }
-
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
-            for entry in path.split(separator: ":") {
-                let candidate = String(entry) + "/yt-dlp"
-                if FileManager.default.isExecutableFile(atPath: candidate) {
-                    return URL(fileURLWithPath: candidate)
-                }
-            }
-        }
-
-        return nil
-    }
-
-    private struct YTDLPLaunchCommand {
-        let executableURL: URL
-        let preArguments: [String]
-    }
-
     private func resolveYTDLPLaunch() -> YTDLPLaunchCommand? {
-        guard let ytDLPURL = findYTDLPExecutable() else { return nil }
-        if isMachOExecutable(at: ytDLPURL) {
-            return YTDLPLaunchCommand(executableURL: ytDLPURL, preArguments: [])
-        }
-        guard let pythonURL = findPython3Executable() else { return nil }
-        return YTDLPLaunchCommand(executableURL: pythonURL, preArguments: [ytDLPURL.path])
-    }
-
-    private func findPython3Executable() -> URL? {
-        var candidates = [
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3"
-        ]
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
-            for entry in path.split(separator: ":") {
-                let candidate = String(entry) + "/python3"
-                if !candidates.contains(candidate) {
-                    candidates.append(candidate)
-                }
-            }
-        }
-        for candidate in candidates {
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return URL(fileURLWithPath: candidate)
-            }
-        }
-        return nil
+        downloaderManager.activeLaunchCommand()
     }
 
     private func isMachOExecutable(at url: URL) -> Bool {
