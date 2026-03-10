@@ -1705,17 +1705,26 @@ private struct InitialURLDownloadControl: View {
                 }
                 .padding(.leading, 14)
                 .padding(.trailing, 8)
+                .frame(maxHeight: .infinity, alignment: .center)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard isEnabled else { return }
+                    isFocused = true
+                }
 
                 Button(action: onDownload) {
                     Text("Download")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(canSubmit ? Color.white : Color.white.opacity(0.72))
                         .frame(minWidth: 120)
+                        .frame(minHeight: 56)
                         .frame(maxHeight: .infinity)
                         .padding(.horizontal, 12)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 .background(
                     UnevenRoundedRectangle(
                         topLeadingRadius: 0,

@@ -531,21 +531,36 @@ else
 fi
 
 WHISPER_SOURCE="${BUNDLED_WHISPER_PATH:-}"
+WHISPER_VENDOR_ROOT="$ROOT_DIR/vendor/whisper.cpp"
+WHISPER_BUILD_ROOT="$ROOT_DIR/.build/whisper.cpp"
+WHISPER_BUILD_NOCOREML="$WHISPER_BUILD_ROOT/build-bvt-nocoreml"
+WHISPER_BUILD_DEFAULT="$WHISPER_BUILD_ROOT/build"
+
+if [[ -d "$WHISPER_VENDOR_ROOT" ]]; then
+  mkdir -p "$WHISPER_BUILD_ROOT"
+  if [[ -d "$WHISPER_VENDOR_ROOT/build-bvt-nocoreml" && ! -e "$WHISPER_BUILD_NOCOREML" ]]; then
+    mv "$WHISPER_VENDOR_ROOT/build-bvt-nocoreml" "$WHISPER_BUILD_NOCOREML"
+  fi
+  if [[ -d "$WHISPER_VENDOR_ROOT/build" && ! -e "$WHISPER_BUILD_DEFAULT" ]]; then
+    mv "$WHISPER_VENDOR_ROOT/build" "$WHISPER_BUILD_DEFAULT"
+  fi
+fi
+
 if [[ -z "$WHISPER_SOURCE" ]]; then
-  local_vendor_nocoreml="$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml/bin/whisper-cli"
+  local_vendor_nocoreml="$WHISPER_BUILD_NOCOREML/bin/whisper-cli"
   if [[ -x "$local_vendor_nocoreml" ]]; then
     WHISPER_SOURCE="$local_vendor_nocoreml"
-  elif [[ "$QUICK_BUILD" -eq 0 && -d "$ROOT_DIR/vendor/whisper.cpp" ]] && command -v cmake >/dev/null 2>&1; then
+  elif [[ "$QUICK_BUILD" -eq 0 && -d "$WHISPER_VENDOR_ROOT" ]] && command -v cmake >/dev/null 2>&1; then
     echo "Building local no-CoreML whisper-cli for app bundling..."
-    cmake -S "$ROOT_DIR/vendor/whisper.cpp" -B "$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml" -DWHISPER_COREML=OFF >/dev/null 2>&1 || true
-    cmake --build "$ROOT_DIR/vendor/whisper.cpp/build-bvt-nocoreml" -j >/dev/null 2>&1 || true
+    cmake -S "$WHISPER_VENDOR_ROOT" -B "$WHISPER_BUILD_NOCOREML" -DWHISPER_COREML=OFF >/dev/null 2>&1 || true
+    cmake --build "$WHISPER_BUILD_NOCOREML" -j >/dev/null 2>&1 || true
     if [[ -x "$local_vendor_nocoreml" ]]; then
       WHISPER_SOURCE="$local_vendor_nocoreml"
     fi
   fi
 fi
 if [[ -z "$WHISPER_SOURCE" ]]; then
-  local_vendor_whisper="$ROOT_DIR/vendor/whisper.cpp/build/bin/whisper-cli"
+  local_vendor_whisper="$WHISPER_BUILD_DEFAULT/bin/whisper-cli"
   if [[ -x "$local_vendor_whisper" ]]; then
     WHISPER_SOURCE="$local_vendor_whisper"
   fi
