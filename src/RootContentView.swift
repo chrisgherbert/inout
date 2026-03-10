@@ -36,11 +36,14 @@ struct WindowAccessor: NSViewRepresentable {
 struct ContentView: View {
     @StateObject private var model: WorkspaceViewModel
     @ObservedObject private var externalOpenBridge = ExternalFileOpenBridge.shared
+    @AppStorage("onboarding.urlDownloadSetupCompleted") private var urlDownloadSetupCompleted = false
+    @AppStorage("onboarding.urlDownloadSetupDismissed") private var urlDownloadSetupDismissed = false
     @State private var isDropTargeted = false
     @State private var appWindow: NSWindow?
     @State private var showJobsPopover = false
     @State private var lastQueuedCount = 0
     @State private var lastPendingQueuedCount = 0
+    @State private var showURLDownloadSetupSheet = false
 
     @MainActor init() {
         _model = StateObject(wrappedValue: WorkspaceViewModel())
@@ -124,6 +127,26 @@ struct ContentView: View {
         .onAppear {
             lastQueuedCount = model.queuedJobs.count
             lastPendingQueuedCount = model.queuedJobs.filter { $0.status == .queued }.count
+            updateURLDownloadOnboardingPresentation()
+        }
+        .onChange(of: model.urlDownloadSetupComplete) { isComplete in
+            if isComplete {
+                urlDownloadSetupCompleted = true
+                showURLDownloadSetupSheet = false
+            }
+        }
+        .onChange(of: model.sourceURL?.path) { _ in
+            updateURLDownloadOnboardingPresentation()
+        }
+        .sheet(isPresented: $showURLDownloadSetupSheet) {
+            URLDownloadSetupSheet(
+                model: model,
+                onNotNow: {
+                    urlDownloadSetupDismissed = true
+                    showURLDownloadSetupSheet = false
+                }
+            )
+            .preferredColorScheme(model.appearance.colorScheme)
         }
         .focusedSceneValue(\.workspaceModel, model)
         .toolbar {
@@ -150,5 +173,88 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private func updateURLDownloadOnboardingPresentation() {
+        if model.urlDownloadSetupComplete {
+            urlDownloadSetupCompleted = true
+            showURLDownloadSetupSheet = false
+            return
+        }
+
+        let shouldShow =
+            model.sourceURL == nil &&
+            !urlDownloadSetupCompleted &&
+            !urlDownloadSetupDismissed
+
+        showURLDownloadSetupSheet = shouldShow
+    }
+}
+
+private struct URLDownloadSetupSheet: View {
+    @ObservedObject var model: WorkspaceViewModel
+    let onNotNow: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 30, weight: .regular))
+                    .foregroundStyle(Color.accentColor)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Set Up URL Downloads")
+                        .font(.title2.weight(.semibold))
+                    Text("In/Out can download media from supported sites using a managed Python runtime and yt-dlp. This is downloaded and maintained automatically by the app.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Local files already work without setup.", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                Label("URL downloads need one-time downloader support.", systemImage: "gearshape.2.fill")
+                    .foregroundStyle(.secondary)
+                Label("You can repair or update this later in Settings.", systemImage: "wrench.and.screwdriver.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.body)
+
+            if model.isUpdatingDownloader || !model.downloaderActionStatusText.isEmpty || !model.downloaderLastErrorText.isEmpty {
+                HStack(alignment: .center, spacing: 10) {
+                    if model.isUpdatingDownloader {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: model.downloaderLastErrorText.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(model.downloaderLastErrorText.isEmpty ? Color.green : Color.orange)
+                    }
+
+                    Text(model.downloaderLastErrorText.isEmpty ? model.downloaderActionStatusText : model.downloaderLastErrorText)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(12)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
+            HStack(spacing: 10) {
+                Button("Not Now") {
+                    onNotNow()
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Button(model.isUpdatingDownloader ? "Setting Up…" : "Set Up URL Downloads") {
+                    model.repairDownloaderSupport()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isUpdatingDownloader)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
     }
 }

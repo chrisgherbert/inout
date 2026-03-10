@@ -184,16 +184,34 @@ struct PreferencesView: View {
                     }
                 }
 
+                if model.isUpdatingDownloader || !model.downloaderActionStatusText.isEmpty {
+                    settingsRow("Activity") {
+                        HStack(spacing: 8) {
+                            if model.isUpdatingDownloader {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: model.downloaderLastErrorText.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                    .foregroundStyle(model.downloaderLastErrorText.isEmpty ? Color.green : Color.orange)
+                            }
+
+                            Text(model.downloaderActionStatusText)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
                 settingsRow("") {
                     HStack(spacing: 8) {
-                        Button("Check for Updates") {
+                        Button(model.isUpdatingDownloader ? "Checking…" : "Check for Updates") {
                             model.updateDownloaderSupport()
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .disabled(model.isUpdatingDownloader)
 
-                        Button("Repair Downloader") {
+                        Button(model.isUpdatingDownloader ? "Repairing…" : "Repair Downloader") {
                             model.repairDownloaderSupport()
                         }
                         .buttonStyle(.bordered)

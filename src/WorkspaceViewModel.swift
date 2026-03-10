@@ -272,6 +272,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var downloaderCanRollback = false
     @Published private(set) var downloaderPreviousVersionText = ""
     @Published private(set) var managedPythonVersionText = "Unavailable"
+    @Published private(set) var downloaderActionStatusText = ""
 
     private var analyzeTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -567,6 +568,10 @@ final class WorkspaceViewModel: ObservableObject {
         cachedYTDLPAvailable
     }
 
+    var urlDownloadSetupComplete: Bool {
+        managedPythonVersionText != "Unavailable" && ytDLPToolAvailable
+    }
+
     var canRequestURLDownload: Bool {
         !isAnalyzing && !isExporting && !isGeneratingTranscript
     }
@@ -636,14 +641,17 @@ final class WorkspaceViewModel: ObservableObject {
         guard !isUpdatingDownloader else { return }
         isUpdatingDownloader = true
         downloaderLastErrorText = ""
+        downloaderActionStatusText = "Checking for downloader updates…"
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let manifest = try await self.downloaderManager.installOrUpdateDownloader()
                 self.uiMessage = "Downloader updated to \(manifest.version)."
+                self.downloaderActionStatusText = "Downloader updated to \(manifest.version)."
             } catch {
                 self.downloaderLastErrorText = error.localizedDescription
                 self.uiMessage = error.localizedDescription
+                self.downloaderActionStatusText = "Downloader update failed."
             }
             self.isUpdatingDownloader = false
             self.refreshExternalToolAvailabilityCache()
@@ -655,14 +663,17 @@ final class WorkspaceViewModel: ObservableObject {
         guard !isUpdatingDownloader else { return }
         isUpdatingDownloader = true
         downloaderLastErrorText = ""
+        downloaderActionStatusText = "Repairing downloader support…"
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let manifest = try await self.downloaderManager.repairDownloader()
                 self.uiMessage = "Downloader repaired (\(manifest.version))."
+                self.downloaderActionStatusText = "Downloader repaired (\(manifest.version))."
             } catch {
                 self.downloaderLastErrorText = error.localizedDescription
                 self.uiMessage = error.localizedDescription
+                self.downloaderActionStatusText = "Downloader repair failed."
             }
             self.isUpdatingDownloader = false
             self.refreshExternalToolAvailabilityCache()
@@ -674,14 +685,17 @@ final class WorkspaceViewModel: ObservableObject {
         guard !isUpdatingDownloader else { return }
         isUpdatingDownloader = true
         downloaderLastErrorText = ""
+        downloaderActionStatusText = "Rolling back downloader…"
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let manifest = try self.downloaderManager.rollbackToPreviousDownloader()
                 self.uiMessage = "Downloader rolled back to \(manifest.version)."
+                self.downloaderActionStatusText = "Downloader rolled back to \(manifest.version)."
             } catch {
                 self.downloaderLastErrorText = error.localizedDescription
                 self.uiMessage = error.localizedDescription
+                self.downloaderActionStatusText = "Downloader rollback failed."
             }
             self.isUpdatingDownloader = false
             self.refreshExternalToolAvailabilityCache()
@@ -696,11 +710,13 @@ final class WorkspaceViewModel: ObservableObject {
         case .bundledFallback, .missing, .broken:
             guard !isUpdatingDownloader else {
                 uiMessage = "Preparing downloader support…"
+                downloaderActionStatusText = "Preparing downloader support…"
                 return
             }
             isUpdatingDownloader = true
             downloaderLastErrorText = ""
             uiMessage = "Preparing downloader support…"
+            downloaderActionStatusText = "Preparing downloader support…"
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 defer {
@@ -711,12 +727,15 @@ final class WorkspaceViewModel: ObservableObject {
                 do {
                     let manifest = try await self.downloaderManager.installOrUpdateDownloader()
                     self.uiMessage = "Downloader ready (\(manifest.version))."
+                    self.downloaderActionStatusText = "Downloader ready (\(manifest.version))."
                 } catch {
                     self.downloaderLastErrorText = error.localizedDescription
                     if self.ytDLPAvailable {
                         self.uiMessage = "Using bundled fallback downloader."
+                        self.downloaderActionStatusText = "Using bundled fallback downloader."
                     } else {
                         self.uiMessage = error.localizedDescription
+                        self.downloaderActionStatusText = "Downloader preparation failed."
                         return
                     }
                 }

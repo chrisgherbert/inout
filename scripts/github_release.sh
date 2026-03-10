@@ -100,6 +100,8 @@ fi
 TAG="v$VERSION"
 VERSIONED_ZIP="$DIST_DIR/In-Out-macOS-$TAG.zip"
 SHA_PATH="$VERSIONED_ZIP.sha256"
+RUNTIME_ARCHIVE="$DIST_DIR/In-Out-python-runtime.tar.gz"
+RUNTIME_SHA_PATH="$DIST_DIR/In-Out-python-runtime.tar.gz.sha256"
 
 echo "Release version: $VERSION"
 echo "Build number:    $BUILD_NUMBER"
@@ -119,6 +121,14 @@ if [[ ! -f "$NOTARIZED_ZIP" ]]; then
   echo "Notarized zip not found: $NOTARIZED_ZIP"
   exit 1
 fi
+if [[ ! -f "$RUNTIME_ARCHIVE" ]]; then
+  echo "Managed Python runtime archive not found: $RUNTIME_ARCHIVE"
+  exit 1
+fi
+if [[ ! -f "$RUNTIME_SHA_PATH" ]]; then
+  echo "Managed Python runtime checksum not found: $RUNTIME_SHA_PATH"
+  exit 1
+fi
 
 cp "$NOTARIZED_ZIP" "$VERSIONED_ZIP"
 shasum -a 256 "$VERSIONED_ZIP" > "$SHA_PATH"
@@ -129,6 +139,8 @@ In/Out $TAG
 Artifacts:
 - $(basename "$VERSIONED_ZIP")
 - $(basename "$SHA_PATH")
+- $(basename "$RUNTIME_ARCHIVE")
+- $(basename "$RUNTIME_SHA_PATH")
 
 Build metadata:
 - CFBundleShortVersionString: $VERSION
@@ -137,12 +149,14 @@ EOF
 
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo "Release $TAG already exists; uploading updated assets..."
-  gh release upload "$TAG" "$VERSIONED_ZIP" "$SHA_PATH" --clobber
+  gh release upload "$TAG" "$VERSIONED_ZIP" "$SHA_PATH" "$RUNTIME_ARCHIVE" "$RUNTIME_SHA_PATH" --clobber
 else
   CREATE_ARGS=(
     "$TAG"
     "$VERSIONED_ZIP"
     "$SHA_PATH"
+    "$RUNTIME_ARCHIVE"
+    "$RUNTIME_SHA_PATH"
     --title "In/Out $TAG"
     --notes-file "$NOTES_PATH"
   )
@@ -156,3 +170,5 @@ echo "Done"
 echo "GitHub release: $TAG"
 echo "Uploaded asset: $VERSIONED_ZIP"
 echo "Checksum file:  $SHA_PATH"
+echo "Runtime asset:  $RUNTIME_ARCHIVE"
+echo "Runtime sha:    $RUNTIME_SHA_PATH"
