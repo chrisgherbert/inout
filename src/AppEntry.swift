@@ -42,7 +42,11 @@ struct CheckBlackFramesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.workspaceModel) private var focusedModel
-    @StateObject private var settingsModel = WorkspaceViewModel()
+    @AppStorage("prefs.appearance") private var appearanceRawValue = AppAppearance.dark.rawValue
+
+    private var appearanceColorScheme: ColorScheme? {
+        AppAppearance(rawValue: appearanceRawValue)?.colorScheme ?? AppAppearance.dark.colorScheme
+    }
 
     var body: some Scene {
         WindowGroup("In/Out", id: "main", for: UUID.self) { _ in
@@ -52,7 +56,7 @@ struct CheckBlackFramesApp: App {
 
         Window("In/Out Help", id: "help") {
             HelpDocumentationView()
-                .preferredColorScheme(settingsModel.appearance.colorScheme)
+                .preferredColorScheme(appearanceColorScheme)
         }
         .defaultSize(width: 760, height: 680)
         .windowResizability(.contentSize)
@@ -241,7 +245,15 @@ struct CheckBlackFramesApp: App {
         }
 
         Settings {
-            PreferencesView(model: settingsModel)
+            SettingsRootView()
         }
+    }
+}
+
+private struct SettingsRootView: View {
+    @StateObject private var model = WorkspaceViewModel()
+
+    var body: some View {
+        PreferencesView(model: model)
     }
 }

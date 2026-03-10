@@ -85,6 +85,38 @@ final class DownloaderManager {
     }
 
     func currentStatus() -> DownloaderStatus {
+        quickStatus()
+    }
+
+    func quickStatus() -> DownloaderStatus {
+        if let manifest = externalManifest(),
+           let externalScriptURL,
+           let pythonHome = activePythonHomeURL,
+           fileManager.fileExists(atPath: externalScriptURL.path),
+           fileManager.isExecutableFile(atPath: pythonHome.appendingPathComponent("bin/python3").path) {
+            return .externalCurrent(version: manifest.version)
+        }
+
+        if bundledYTDLPScriptURL != nil, activePythonURL != nil {
+            return .bundledFallback
+        }
+
+        if activePythonURL == nil {
+            return .missing
+        }
+
+        if externalScriptURL != nil {
+            return .broken("External downloader files are present but metadata is incomplete.")
+        }
+
+        if bundledYTDLPScriptURL != nil {
+            return .broken("Bundled fallback downloader files are present but runtime is unavailable.")
+        }
+
+        return .missing
+    }
+
+    func validatedStatus() -> DownloaderStatus {
         if let externalScriptURL,
            let command = externalLaunchCommand(for: externalScriptURL),
            let version = try? readVersion(using: command),
@@ -118,19 +150,18 @@ final class DownloaderManager {
     }
 
     func pythonRuntimeVersion() -> String? {
-        if let bundled = bundledPythonHomeURL {
-            return try? readPythonVersion(atHome: bundled)
+        if bundledPythonHomeURL != nil {
+            return "Bundled (dev)"
         }
-        if let installed = installedPythonHomeURL {
-            return try? readPythonVersion(atHome: installed)
+        if let installed = runtimeManifest()?.version, !installed.isEmpty {
+            return installed
         }
         return nil
     }
 
     func activeLaunchCommand() -> YTDLPLaunchCommand? {
         if let externalScriptURL,
-           let command = externalLaunchCommand(for: externalScriptURL),
-           (try? readVersion(using: command)) != nil {
+           let command = externalLaunchCommand(for: externalScriptURL) {
             return command
         }
         return bundledFallbackLaunchCommand()

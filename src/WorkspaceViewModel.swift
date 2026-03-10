@@ -598,10 +598,15 @@ final class WorkspaceViewModel: ObservableObject {
     func recheckSetupChecks() {
         refreshExternalToolAvailabilityCache()
         refreshDownloaderStatus()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.refreshDownloaderStatus(validating: true)
+            self.refreshExternalToolAvailabilityCache()
+        }
     }
 
-    private func refreshDownloaderStatus() {
-        let status = downloaderManager.currentStatus()
+    private func refreshDownloaderStatus(validating: Bool = false) {
+        let status = validating ? downloaderManager.validatedStatus() : downloaderManager.quickStatus()
         downloaderCanRollback = downloaderManager.canRollbackToPrevious
         downloaderPreviousVersionText = downloaderManager.previousManifest()?.version ?? ""
         managedPythonVersionText = downloaderManager.pythonRuntimeVersion() ?? "Unavailable"
@@ -642,7 +647,7 @@ final class WorkspaceViewModel: ObservableObject {
             }
             self.isUpdatingDownloader = false
             self.refreshExternalToolAvailabilityCache()
-            self.refreshDownloaderStatus()
+            self.refreshDownloaderStatus(validating: true)
         }
     }
 
@@ -661,7 +666,7 @@ final class WorkspaceViewModel: ObservableObject {
             }
             self.isUpdatingDownloader = false
             self.refreshExternalToolAvailabilityCache()
-            self.refreshDownloaderStatus()
+            self.refreshDownloaderStatus(validating: true)
         }
     }
 
@@ -680,12 +685,12 @@ final class WorkspaceViewModel: ObservableObject {
             }
             self.isUpdatingDownloader = false
             self.refreshExternalToolAvailabilityCache()
-            self.refreshDownloaderStatus()
+            self.refreshDownloaderStatus(validating: true)
         }
     }
 
     private func ensureManagedDownloaderReadyIfNeeded(then action: @escaping @MainActor () -> Void) {
-        switch downloaderManager.currentStatus() {
+        switch downloaderManager.validatedStatus() {
         case .externalCurrent:
             action()
         case .bundledFallback, .missing, .broken:
@@ -701,7 +706,7 @@ final class WorkspaceViewModel: ObservableObject {
                 defer {
                     self.isUpdatingDownloader = false
                     self.refreshExternalToolAvailabilityCache()
-                    self.refreshDownloaderStatus()
+                    self.refreshDownloaderStatus(validating: true)
                 }
                 do {
                     let manifest = try await self.downloaderManager.installOrUpdateDownloader()
