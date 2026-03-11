@@ -46,6 +46,9 @@ struct ClipToolView: View {
     @State private var playheadDragAutoPanTask: Task<Void, Never>?
     @State private var keyboardPanTask: Task<Void, Never>?
     @State private var playheadCopyFlash = false
+    @State private var dragVisualPlayheadSeconds: Double?
+    @State private var lastInteractiveSeekCommitTimestamp: CFTimeInterval = 0
+    @State private var lastInteractiveReadoutSyncTimestamp: CFTimeInterval = 0
     @State private var isPlayerTimecodeHovered = false
     @State private var isZoomOutHovered = false
     @State private var isZoomInHovered = false
@@ -313,6 +316,7 @@ struct ClipToolView: View {
     private func seekPlayer(to time: Double) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
         lastInteractiveSeekSeconds = -1
+        dragVisualPlayheadSeconds = nil
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
         syncSharedPlayheadStateIfNeeded(clamped, force: true)
@@ -320,7 +324,7 @@ struct ClipToolView: View {
         updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
     }
 
-    private func seekPlayerInteractive(to time: Double) {
+    private func commitInteractiveSeek(to time: Double) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
 
         // Coalesce tiny drag deltas so scrubbing stays responsive without flooding seeks.
@@ -337,8 +341,25 @@ struct ClipToolView: View {
         )
         playheadSeconds = clamped
         syncSharedPlayheadStateIfNeeded(clamped, force: true)
-        syncVisualPlayheadImmediately(clamped)
+        playheadVisualSeconds = clamped
         updateViewportForPlayhead(shouldFollow: false)
+    }
+
+    private func seekPlayerInteractive(to time: Double, forceCommit: Bool = false) {
+        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+
+        let now = CACurrentMediaTime()
+        let readoutInterval = 1.0 / 12.0
+        if forceCommit || (now - lastInteractiveReadoutSyncTimestamp) >= readoutInterval {
+            dragVisualPlayheadSeconds = clamped
+            playheadVisualSeconds = clamped
+            lastInteractiveReadoutSyncTimestamp = now
+        }
+
+        let commitInterval = 1.0 / 12.0
+        guard forceCommit || (now - lastInteractiveSeekCommitTimestamp) >= commitInterval else { return }
+        lastInteractiveSeekCommitTimestamp = now
+        commitInteractiveSeek(to: clamped)
     }
 
     private func seekPlayerAnimatedFromKeyboard(to time: Double) {
@@ -618,9 +639,21 @@ struct ClipToolView: View {
     private func setPlayheadDragActive(_ active: Bool) {
         isPlayheadDragActive = active
         if active {
+            lastInteractiveSeekCommitTimestamp = 0
+            lastInteractiveReadoutSyncTimestamp = 0
             startPlayheadDragAutoPanLoopIfNeeded()
         } else {
             stopPlayheadDragAutoPanLoop()
+            if let x = playheadDragLocationX, playheadDragWidth > 0 {
+                seekPlayerInteractive(to: timeForPlayheadDragLocation(x: x, width: playheadDragWidth), forceCommit: true)
+            }
+            if let dragVisualPlayheadSeconds {
+                playheadSeconds = dragVisualPlayheadSeconds
+                syncSharedPlayheadStateIfNeeded(dragVisualPlayheadSeconds, force: true)
+                syncVisualPlayheadImmediately(dragVisualPlayheadSeconds)
+            }
+            dragVisualPlayheadSeconds = nil
+            lastInteractiveSeekSeconds = -1
             playheadDragLocationX = nil
             playheadDragWidth = 0
         }
@@ -1048,6 +1081,14 @@ struct ClipToolView: View {
         return clampedPlayerHeight(raw)
     }
 
+    private var displayedPlayheadSeconds: Double {
+        dragVisualPlayheadSeconds ?? playheadSeconds
+    }
+
+    private var displayedVisualPlayheadSeconds: Double {
+        dragVisualPlayheadSeconds ?? playheadVisualSeconds
+    }
+
     private var clipPlayerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             InlinePlayerView(player: player)
@@ -1141,7 +1182,7 @@ struct ClipToolView: View {
 
                     if model.hasVideoTrack {
                         Button {
-                            model.captureFrame(at: playheadSeconds)
+                            model.captureFrame(at: displayedPlayheadSeconds)
                         } label: {
                             Label("Capture Frame", systemImage: "camera")
                         }
@@ -1173,7 +1214,7 @@ struct ClipToolView: View {
                         }
                     }
 
-                    Text(formatSeconds(playheadSeconds))
+                    Text(formatSeconds(displayedPlayheadSeconds))
                         .font(.caption.monospacedDigit())
                         .fontWeight(.semibold)
                         .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.primary)
@@ -1322,10 +1363,10 @@ struct ClipToolView: View {
             totalDurationSeconds: totalDurationSeconds,
             visibleStartSeconds: visibleStartSeconds,
             visibleEndSeconds: visibleEndSeconds,
-            playheadVisualSeconds: playheadVisualSeconds,
+            playheadVisualSeconds: displayedVisualPlayheadSeconds,
             playheadJumpFromSeconds: playheadJumpFromSeconds,
             playheadJumpAnimationToken: playheadJumpAnimationToken,
-            playheadSeconds: playheadSeconds,
+            playheadSeconds: displayedPlayheadSeconds,
             playheadCopyFlash: playheadCopyFlash,
             isTimelineHovered: isTimelineHovered,
             captureMarkers: model.captureTimelineMarkers,
@@ -2318,7 +2359,10 @@ struct WaveformView: View {
                     highlightedMarkerID: highlightedMarkerID,
                     onMarkerSeek: { seconds in
                         onSeek(seconds, true)
-                    }
+                    },
+                    onInteractiveSeek: onSeek,
+                    onPlayheadDragStateChanged: onPlayheadDragStateChanged,
+                    onPlayheadDragEdgePan: onPlayheadDragEdgePan
                 )
                 .frame(maxWidth: .infinity, minHeight: timelineHeight, maxHeight: timelineHeight, alignment: .center)
                 .offset(y: timelineVerticalOffset)
@@ -2494,41 +2538,6 @@ struct WaveformView: View {
                     isPlayheadCaptureFlashing = false
                 }
             }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let isFirstDragEvent = !didStartPlayheadDrag
-                        let shouldSnapToMarker = isFirstDragEvent
-                        if !didStartPlayheadDrag {
-                            didStartPlayheadDrag = true
-                            onPlayheadDragStateChanged(true)
-                        }
-                        if let snapLock = markerSnapLockSeconds {
-                            // Keep click-to-snap stable across micro movement/noise.
-                            if abs(value.translation.width) <= 3 && abs(value.translation.height) <= 3 {
-                                onSeek(snapLock, true)
-                                return
-                            }
-                            markerSnapLockSeconds = nil
-                        }
-                        onPlayheadDragEdgePan(value.location.x, width)
-                        if isFirstDragEvent,
-                           let markerSeconds = markerNearX(value.location.x, width: width) {
-                            markerSnapLockSeconds = markerSeconds
-                            onSeek(markerSeconds, true)
-                            return
-                        }
-                        onSeek(
-                            timeValue(for: value.location.x, width: width, windowStart: visibleStartSeconds, windowEnd: visibleEndSeconds),
-                            shouldSnapToMarker
-                        )
-                    }
-                    .onEnded { _ in
-                        didStartPlayheadDrag = false
-                        markerSnapLockSeconds = nil
-                        onPlayheadDragStateChanged(false)
-                    }
-            , including: .gesture)
             .overlay(alignment: .bottomLeading) {
                 Text(formatSeconds(visibleStartSeconds))
                     .font(.caption2.monospacedDigit())
@@ -2584,14 +2593,21 @@ private final class WaveformRasterHostView: NSView {
     var totalDurationSeconds: Double = 0
     var visibleStartSeconds: Double = 0
     var visibleEndSeconds: Double = 1
+    var modelPlayheadSeconds: Double = 0
     var playheadDisplayWidth: CGFloat = 2
     private var livePlaybackTimer: Timer?
     var onMarkerSeek: ((Double) -> Void)?
+    var onInteractiveSeek: ((Double, Bool) -> Void)?
+    var onPlayheadDragStateChanged: ((Bool) -> Void)?
+    var onPlayheadDragEdgePan: ((CGFloat, CGFloat) -> Void)?
     var markerHotspots: [MarkerHotspot] = []
     var markerLayersByID: [UUID: CALayer] = [:]
     private var trackingAreaRef: NSTrackingArea?
     private var markerCursorActive = false
     private let markerHitTolerance: CGFloat = 12
+    private var isDraggingPlayhead = false
+    var dragPlayheadSeconds: Double?
+    private var lastDragCommitTimestamp: CFTimeInterval = 0
     private var hoveredMarkerID: UUID? {
         didSet {
             applyMarkerHoverState(animated: true)
@@ -2663,6 +2679,53 @@ private final class WaveformRasterHostView: NSView {
     private func markerNear(point: NSPoint) -> MarkerHotspot? {
         // Shared hover/click hit test so both behaviors match exactly.
         markerHotspots.first(where: { abs($0.x - point.x) <= markerHitTolerance })
+    }
+
+    private var visibleDuration: Double {
+        max(0.0001, visibleEndSeconds - visibleStartSeconds)
+    }
+
+    private func timeValue(forX x: CGFloat) -> Double {
+        guard bounds.width > 0 else { return modelPlayheadSeconds }
+        let ratio = min(max(0, x / bounds.width), 1.0)
+        return min(totalDurationSeconds, max(0, visibleStartSeconds + (Double(ratio) * visibleDuration)))
+    }
+
+    private func snappedPlayheadFrame(for seconds: Double) -> CGRect {
+        let local = (seconds - visibleStartSeconds) / visibleDuration
+        let x = CGFloat(local) * bounds.width
+        let snappedX = x.rounded()
+        return CGRect(
+            x: snappedX - (playheadDisplayWidth / 2.0),
+            y: -4,
+            width: playheadDisplayWidth,
+            height: bounds.height + 8
+        )
+    }
+
+    private func applyDisplayedPlayhead(_ seconds: Double) {
+        let targetFrame = snappedPlayheadFrame(for: seconds)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playheadLayer.frame = targetFrame
+        let visible = targetFrame.midX >= -6 && targetFrame.midX <= (bounds.width + 6)
+        playheadLayer.opacity = visible ? 1.0 : 0.0
+        CATransaction.commit()
+    }
+
+    private func updateInteractiveDrag(at point: NSPoint, forceCommit: Bool) {
+        let target = timeValue(forX: point.x)
+        dragPlayheadSeconds = target
+        applyDisplayedPlayhead(target)
+        onPlayheadDragEdgePan?(point.x, bounds.width)
+
+        let now = CACurrentMediaTime()
+        // Keep the visible line immediate, but reduce actual seek pressure while dragging.
+        // Lower seek cadence generally feels smoother than trying to seek on every drag event.
+        let commitInterval = 1.0 / 24.0
+        guard forceCommit || (now - lastDragCommitTimestamp) >= commitInterval else { return }
+        lastDragCommitTimestamp = now
+        onInteractiveSeek?(target, forceCommit)
     }
 
     func applyMarkerHoverState(animated: Bool) {
@@ -2749,9 +2812,40 @@ private final class WaveformRasterHostView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        // Marker click-to-seek is handled in the SwiftUI gesture path so
-        // hover/click use one resolver and avoid double-seek race conditions.
-        super.mouseDown(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        isDraggingPlayhead = true
+        lastDragCommitTimestamp = 0
+        onPlayheadDragStateChanged?(true)
+
+        if let marker = markerNear(point: point) {
+            dragPlayheadSeconds = marker.seconds
+            applyDisplayedPlayhead(marker.seconds)
+            onInteractiveSeek?(marker.seconds, true)
+            return
+        }
+
+        updateInteractiveDrag(at: point, forceCommit: true)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isDraggingPlayhead else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        updateInteractiveDrag(at: point, forceCommit: false)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isDraggingPlayhead else {
+            super.mouseUp(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        updateInteractiveDrag(at: point, forceCommit: true)
+        isDraggingPlayhead = false
+        dragPlayheadSeconds = nil
+        onPlayheadDragStateChanged?(false)
     }
 
     override func layout() {
@@ -2788,28 +2882,13 @@ private final class WaveformRasterHostView: NSView {
     }
 
     private func tickLivePlayhead() {
-        guard let player, player.rate != 0 else {
+        guard !isDraggingPlayhead, let player, player.rate != 0 else {
             stopLivePlaybackTimer()
             return
         }
         let current = CMTimeGetSeconds(player.currentTime())
         guard current.isFinite else { return }
-        let duration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
-        let local = (current - visibleStartSeconds) / duration
-        let x = CGFloat(local) * bounds.width
-        let snappedX = x.rounded()
-        let targetFrame = CGRect(
-            x: snappedX - (playheadDisplayWidth / 2.0),
-            y: -4,
-            width: playheadDisplayWidth,
-            height: bounds.height + 8
-        )
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        playheadLayer.frame = targetFrame
-        let visible = snappedX >= -6 && snappedX <= (bounds.width + 6)
-        playheadLayer.opacity = visible ? 1.0 : 0.0
-        CATransaction.commit()
+        applyDisplayedPlayhead(current)
     }
 }
 
@@ -2993,6 +3072,9 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let captureMarkers: [CaptureTimelineMarker]
     let highlightedMarkerID: UUID?
     let onMarkerSeek: (Double) -> Void
+    let onInteractiveSeek: (Double, Bool) -> Void
+    let onPlayheadDragStateChanged: (Bool) -> Void
+    let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
 
     static func == (lhs: WaveformRasterLayerView, rhs: WaveformRasterLayerView) -> Bool {
         lhs.sourceSessionID == rhs.sourceSessionID &&
@@ -3019,12 +3101,19 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     func makeNSView(context: Context) -> WaveformRasterHostView {
         let view = WaveformRasterHostView()
         view.onMarkerSeek = onMarkerSeek
+        view.onInteractiveSeek = onInteractiveSeek
+        view.onPlayheadDragStateChanged = onPlayheadDragStateChanged
+        view.onPlayheadDragEdgePan = onPlayheadDragEdgePan
         return view
     }
 
     func updateNSView(_ nsView: WaveformRasterHostView, context: Context) {
         nsView.onMarkerSeek = onMarkerSeek
+        nsView.onInteractiveSeek = onInteractiveSeek
+        nsView.onPlayheadDragStateChanged = onPlayheadDragStateChanged
+        nsView.onPlayheadDragEdgePan = onPlayheadDragEdgePan
         nsView.player = player
+        nsView.modelPlayheadSeconds = playheadSeconds
         context.coordinator.setZoomRenderBuckets(renderBuckets)
 
         let didRebuildImage = context.coordinator.rebuildImageIfNeeded(
@@ -3128,7 +3217,8 @@ private struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             (value / pixel).rounded() * pixel
         }
 
-        let playheadX = snapToPixel(xPosition(for: playheadSeconds))
+        let displayedPlayheadSeconds = nsView.dragPlayheadSeconds ?? playheadSeconds
+        let playheadX = snapToPixel(xPosition(for: displayedPlayheadSeconds))
         let playheadWidth: CGFloat = isPlayheadCaptureFlashing ? 3.6 : 2.0
         nsView.totalDurationSeconds = totalDurationSeconds
         nsView.visibleStartSeconds = visibleStartSeconds
