@@ -53,29 +53,6 @@ struct ClipTimelineControlsPanel<Content: View>: View {
     var body: some View {
         GroupBox("Timeline Controls") {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Text("Zoom")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Slider(
-                        value: Binding(
-                            get: { Double(timelineZoomIndex) },
-                            set: { setTimelineZoomIndex(Int($0.rounded())) }
-                        ),
-                        in: 0...Double(allowedTimelineZoomLevels.count - 1),
-                        step: 1
-                    )
-                    .controlSize(.small)
-                    let displayZoom = allowedTimelineZoomLevels[timelineZoomIndex]
-                    Text("\(Int(displayZoom.rounded()))x")
-                        .font(.caption.monospacedDigit())
-                        .frame(width: 48, alignment: .trailing)
-                    Button("Fit") {
-                        setTimelineZoomIndex(0)
-                    }
-                    .buttonStyle(.bordered)
-                }
-
                 TimelineMiniMapView(
                     totalDurationSeconds: totalDurationSeconds,
                     playheadSeconds: playheadSeconds,
@@ -388,7 +365,7 @@ struct ClipSelectionPanel: View, Equatable {
                     onHoverChanged: onWaveformHoverChanged,
                     onPointerTimeChanged: onWaveformPointerTimeChanged
                 )
-                .frame(height: isCompactLayout ? 64 : 74)
+                .frame(height: isCompactLayout ? 68 : 82)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .padding(.bottom, -6)
@@ -403,55 +380,9 @@ struct ClipSelectionPanel: View, Equatable {
                 )
             }
 
-            if !isCompactLayout {
-                HStack {
-                    Text("In: \(formatSeconds(clipStartSeconds))")
-                        .font(.caption.monospacedDigit())
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Text("Playhead: \(formatSeconds(playheadSeconds))")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.secondary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .fill(Color.accentColor.opacity(playheadCopyFlash ? 0.20 : 0.0))
-                            )
-
-                        if isTimecodeRowHovered {
-                            Button {
-                                onCopyPlayheadTimecode()
-                            } label: {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Copy playhead timecode")
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                            .contextMenu {
-                                Button("Copy Timecode") {
-                                    onCopyPlayheadTimecode()
-                                }
-                            }
-                        }
-                    }
-                    Spacer()
-                    Text("Out: \(formatSeconds(clipEndSeconds))")
-                        .font(.caption.monospacedDigit())
-                }
-                .foregroundStyle(.secondary)
-                .padding(.top, -7)
-                .onHover { hovering in
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        isTimecodeRowHovered = hovering
-                    }
-                }
-            }
-
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 4) {
                         Text("In")
                             .foregroundStyle(.secondary)
                             .frame(width: 18, alignment: .leading)
@@ -465,7 +396,11 @@ struct ClipSelectionPanel: View, Equatable {
                             .controlSize(.small)
                     }
 
-                    HStack(spacing: 8) {
+                    Divider()
+                        .frame(height: 22)
+                        .padding(.horizontal, 10)
+
+                    HStack(spacing: 4) {
                         Text("Out")
                             .foregroundStyle(.secondary)
                             .frame(width: 24, alignment: .leading)
@@ -510,44 +445,8 @@ struct ClipSelectionPanel: View, Equatable {
                 }
                 .font(.caption)
             }
+            .frame(maxWidth: .infinity, alignment: .center)
 
-            if !isCompactLayout {
-                HStack {
-                    Text("Duration: \(formatSeconds(clipDurationSeconds))")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    ControlGroup {
-                        Button(action: onJumpToStart) {
-                            Image(systemName: "backward.end.fill")
-                        }
-                        .help("Jump to Clip Start")
-                        .accessibilityLabel("Jump to Clip Start")
-
-                        Button(action: onJumpToEnd) {
-                            Image(systemName: "forward.end.fill")
-                        }
-                        .help("Jump to Clip End")
-                        .accessibilityLabel("Jump to Clip End")
-                    }
-                    .controlSize(.mini)
-                    .opacity(isTimelineHovered ? 0.95 : 0.0)
-                    .allowsHitTesting(isTimelineHovered)
-                    .animation(.easeOut(duration: 0.15), value: isTimelineHovered)
-
-                    if hasVideoTrack {
-                        Button(action: onCaptureFrame) {
-                            Label("Capture Frame", systemImage: "camera")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        .help("Save a PNG frame at the current playhead")
-                        .labelStyle(.titleAndIcon)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(.leading, 2)
-                    }
-                }
-            }
         }
         .onHover(perform: onTimelineHoverChanged)
     }
