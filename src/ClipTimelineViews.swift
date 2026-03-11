@@ -46,6 +46,9 @@ struct ClipToolView: View {
     @State private var playheadDragAutoPanTask: Task<Void, Never>?
     @State private var keyboardPanTask: Task<Void, Never>?
     @State private var playheadCopyFlash = false
+    @State private var isPlayerTimecodeHovered = false
+    @State private var isZoomOutHovered = false
+    @State private var isZoomInHovered = false
     @State private var lastSharedPlayheadSyncTimestamp: CFTimeInterval = 0
     @State private var timelinePointerSeconds: Double?
     @State private var clipWindow: NSWindow?
@@ -872,11 +875,13 @@ struct ClipToolView: View {
 
             let dx = event.scrollingDeltaX
             let dy = event.scrollingDeltaY
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let acceleratedModifier = flags.contains(.shift) || flags.contains(.command)
             let panPoints: CGFloat
             if abs(dx) >= 0.1 {
                 panPoints = dx
-            } else if event.modifierFlags.contains(.shift) && abs(dy) >= 0.1 {
-                panPoints = dy
+            } else if acceleratedModifier && abs(dy) >= 0.1 {
+                panPoints = dy * 2.5
             } else {
                 return event
             }
@@ -1110,10 +1115,162 @@ struct ClipToolView: View {
             }
             .accessibilityLabel("Resize player height")
             .help("Drag to resize player height. Double-click to toggle default/max height.")
+
+            ZStack {
+                HStack(spacing: 6) {
+                    ControlGroup {
+                        Button {
+                            seekPlayer(to: model.clipStartSeconds)
+                            springAnimateVisualPlayhead(to: model.clipStartSeconds)
+                        } label: {
+                            Image(systemName: "backward.end.fill")
+                        }
+                        .help("Jump to Clip Start")
+                        .accessibilityLabel("Jump to Clip Start")
+
+                        Button {
+                            seekPlayer(to: model.clipEndSeconds)
+                            springAnimateVisualPlayhead(to: model.clipEndSeconds)
+                        } label: {
+                            Image(systemName: "forward.end.fill")
+                        }
+                        .help("Jump to Clip End")
+                        .accessibilityLabel("Jump to Clip End")
+                    }
+                    .controlSize(.mini)
+
+                    if model.hasVideoTrack {
+                        Button {
+                            model.captureFrame(at: playheadSeconds)
+                        } label: {
+                            Image(systemName: "camera")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .help("Save a PNG frame at the current playhead")
+                        .accessibilityLabel("Capture Frame")
+                    }
+
+                    Spacer()
+                }
+
+                HStack(spacing: 6) {
+                    Button {
+                        copyPlayheadTimecode()
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption)
+                            .frame(width: 14, height: 14)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy playhead timecode")
+                    .opacity(isPlayerTimecodeHovered ? 1.0 : 0.0)
+                    .allowsHitTesting(isPlayerTimecodeHovered)
+                    .accessibilityHidden(!isPlayerTimecodeHovered)
+                    .contextMenu {
+                        Button("Copy Timecode") {
+                            copyPlayheadTimecode()
+                        }
+                    }
+
+                    Text(formatSeconds(playheadSeconds))
+                        .font(.caption.monospacedDigit())
+                        .fontWeight(.semibold)
+                        .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.primary)
+                    Text("/")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Text(formatSeconds(max(playerDurationSeconds, model.sourceDurationSeconds)))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .onHover { hovering in
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isPlayerTimecodeHovered = hovering
+                    }
+                }
+
+                HStack {
+                    Spacer()
+
+                    HStack(spacing: 6) {
+                        Button {
+                            setTimelineZoomIndex(max(0, timelineZoomIndex - 1))
+                        } label: {
+                            Image(systemName: "minus.magnifyingglass")
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: 18, height: 18)
+                                .background(
+                                    Circle()
+                                        .fill(Color.primary.opacity(isZoomOutHovered ? 0.10 : 0.0))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Zoom Out")
+                        .onHover { hovering in
+                            withAnimation(.easeOut(duration: 0.12)) {
+                                isZoomOutHovered = hovering
+                            }
+                        }
+
+                        Slider(
+                            value: Binding(
+                                get: { Double(timelineZoomIndex) },
+                                set: { setTimelineZoomIndex(Int($0.rounded())) }
+                            ),
+                            in: 0...Double(allowedTimelineZoomLevels.count - 1),
+                            step: 1
+                        )
+                        .controlSize(.regular)
+                        .frame(width: 104)
+
+                        Button {
+                            setTimelineZoomIndex(min(allowedTimelineZoomLevels.count - 1, timelineZoomIndex + 1))
+                        } label: {
+                            Image(systemName: "plus.magnifyingglass")
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: 18, height: 18)
+                                .background(
+                                    Circle()
+                                        .fill(Color.primary.opacity(isZoomInHovered ? 0.10 : 0.0))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Zoom In")
+                        .onHover { hovering in
+                            withAnimation(.easeOut(duration: 0.12)) {
+                                isZoomInHovered = hovering
+                            }
+                        }
+
+                        Text(compactPlayerZoomDisplayText)
+                            .font(.caption.monospacedDigit())
+                            .frame(width: 34, alignment: .trailing)
+
+                        Button("Fit") {
+                            setTimelineZoomIndex(0)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 2)
         }
         .onChange(of: isCompactLayout) { _ in
             storedPlayerHeight = Double(clampedPlayerHeight(currentPlayerHeight))
         }
+    }
+
+    private var compactPlayerZoomDisplayText: String {
+        let displayZoom = allowedTimelineZoomLevels[timelineZoomIndex]
+        if abs(displayZoom.rounded() - displayZoom) < 0.001 {
+            return "\(Int(displayZoom.rounded()))x"
+        }
+        return String(format: "%.1fx", displayZoom)
     }
 
     private func resetPlayerHeightToDefaultIfNeeded() {
