@@ -1143,10 +1143,10 @@ struct ClipToolView: View {
                         Button {
                             model.captureFrame(at: playheadSeconds)
                         } label: {
-                            Image(systemName: "camera")
+                            Label("Capture Frame", systemImage: "camera")
                         }
                         .buttonStyle(.bordered)
-                        .controlSize(.mini)
+                        .controlSize(.small)
                         .help("Save a PNG frame at the current playhead")
                         .accessibilityLabel("Capture Frame")
                     }
