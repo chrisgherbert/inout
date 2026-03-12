@@ -8,6 +8,7 @@ struct PreferencesView: View {
 
     private enum PreferencesPane: String, CaseIterable, Identifiable {
         case general = "General"
+        case tools = "Tools"
         case analyze = "Analyze"
         case clip = "Clip"
         case audio = "Audio"
@@ -17,6 +18,7 @@ struct PreferencesView: View {
         var symbol: String {
             switch self {
             case .general: return "gearshape"
+            case .tools: return "wrench.and.screwdriver"
             case .analyze: return "waveform.path.ecg"
             case .clip: return "timeline.selection"
             case .audio: return "waveform"
@@ -123,6 +125,29 @@ struct PreferencesView: View {
             }
             Divider()
 
+            settingsSection("Estimated Size Badge") {
+                settingsRow("Warning threshold") {
+                    Stepper(value: $model.estimatedSizeWarningThresholdGB, in: 0.04...20.0, step: 0.01) {
+                        Text(formatSizeThresholdLabel(gigabytes: model.estimatedSizeWarningThresholdGB))
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    .frame(width: 240, alignment: .leading)
+                }
+
+                settingsRow("Danger threshold") {
+                    Stepper(value: $model.estimatedSizeDangerThresholdGB, in: 0.05...40.0, step: 0.01) {
+                        Text(formatSizeThresholdLabel(gigabytes: model.estimatedSizeDangerThresholdGB))
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    .frame(width: 240, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var toolsPane: some View {
+        paneScroll {
             settingsSection("Setup Checks") {
                 setupCheckRow("ffmpeg", available: model.ffmpegAvailable)
                 setupCheckRow("ffprobe", available: model.ffprobeAvailable)
@@ -132,7 +157,7 @@ struct PreferencesView: View {
                 setupCheckRow("Whisper model", available: model.whisperModelAvailable)
 
                 settingsRow("") {
-                    Text("URL downloads use an app-managed Python runtime together with yt-dlp. Both are checked separately here so runtime and downloader issues are easier to diagnose.")
+                    Text("Use this tab to check the bundled and managed tools the app depends on. URL downloads rely on both `Managed Python 3` and `yt-dlp`, while clipping, conversion, and transcription rely on ffmpeg, ffprobe, and Whisper.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -147,9 +172,9 @@ struct PreferencesView: View {
             }
             Divider()
 
-            settingsSection("Downloader") {
+            settingsSection("Downloader Runtime") {
                 settingsRow("") {
-                    Text("This app manages the URL download stack for you. `yt-dlp` handles site extraction, and `Managed Python 3` is the runtime used to launch it. Updates and repairs happen automatically or from the controls below.")
+                    Text("In/Out manages the URL download stack for you. `yt-dlp` handles site extraction, and `Managed Python 3` is the runtime used to launch it. Updates and repairs happen automatically or from the controls below.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -225,25 +250,6 @@ struct PreferencesView: View {
                         .controlSize(.small)
                         .disabled(model.isUpdatingDownloader || !model.downloaderCanRollback)
                     }
-                }
-            }
-            Divider()
-
-            settingsSection("Estimated Size Badge") {
-                settingsRow("Warning threshold") {
-                    Stepper(value: $model.estimatedSizeWarningThresholdGB, in: 0.04...20.0, step: 0.01) {
-                        Text(formatSizeThresholdLabel(gigabytes: model.estimatedSizeWarningThresholdGB))
-                            .font(.system(.body, design: .monospaced))
-                    }
-                    .frame(width: 240, alignment: .leading)
-                }
-
-                settingsRow("Danger threshold") {
-                    Stepper(value: $model.estimatedSizeDangerThresholdGB, in: 0.05...40.0, step: 0.01) {
-                        Text(formatSizeThresholdLabel(gigabytes: model.estimatedSizeDangerThresholdGB))
-                            .font(.system(.body, design: .monospaced))
-                    }
-                    .frame(width: 240, alignment: .leading)
                 }
             }
         }
@@ -478,6 +484,12 @@ struct PreferencesView: View {
                 .tag(PreferencesPane.general)
                 .tabItem {
                     Label(PreferencesPane.general.rawValue, systemImage: PreferencesPane.general.symbol)
+                }
+
+            toolsPane
+                .tag(PreferencesPane.tools)
+                .tabItem {
+                    Label(PreferencesPane.tools.rawValue, systemImage: PreferencesPane.tools.symbol)
                 }
 
             analyzePane
