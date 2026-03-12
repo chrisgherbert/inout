@@ -551,12 +551,13 @@ final class WorkspaceViewModel: ObservableObject {
         } else {
             resolutionToken = clipCompatibleMaxResolution.rawValue
         }
-        return advancedClipFilenameBase(
+        return ClipExportUtilities.advancedClipFilenameBase(
             sourceName: sampleSource,
             startSeconds: sampleStart,
             endSeconds: sampleEnd,
             codec: codecToken,
-            resolution: resolutionToken
+            resolution: resolutionToken,
+            advancedFilenameTemplate: advancedClipFilenameTemplate
         ) + ".\(selectedClipFormat.fileExtension.lowercased())"
     }
 
@@ -888,15 +889,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func clipJobTitle(skipSaveDialog: Bool, mode: ClipEncodingMode) -> String {
-        let prefix = skipSaveDialog ? "Quick " : ""
-        switch mode {
-        case .fast:
-            return "\(prefix)Clip Export - Fast Copy"
-        case .compressed:
-            return "\(prefix)Clip Export - Advanced Encode"
-        case .audioOnly:
-            return "\(prefix)Clip Export - Audio Only"
-        }
+        JobPresentationUtilities.clipJobTitle(skipSaveDialog: skipSaveDialog, mode: mode)
     }
 
     private func clipJobSubtitle(
@@ -905,89 +898,60 @@ final class WorkspaceViewModel: ObservableObject {
         startSeconds: Double,
         endSeconds: Double
     ) -> String {
-        "\(mode.rawValue) • \(format) • \(formatSeconds(startSeconds)) → \(formatSeconds(endSeconds))"
+        JobPresentationUtilities.clipJobSubtitle(
+            mode: mode,
+            format: format,
+            startSeconds: startSeconds,
+            endSeconds: endSeconds
+        )
     }
 
     private func audioExportJobTitle(format: AudioFormat) -> String {
-        "Audio Export - \(format.rawValue)"
+        JobPresentationUtilities.audioExportJobTitle(format: format)
     }
 
     private func audioExportJobSubtitle(bitrateKbps: Int) -> String {
-        "\(bitrateKbps) kbps"
+        JobPresentationUtilities.audioExportJobSubtitle(bitrateKbps: bitrateKbps)
     }
 
     private func analysisJobSubtitle(black: Bool, silence: Bool, profanity: Bool) -> String {
-        var detectors: [String] = []
-        if black { detectors.append("Black Frames") }
-        if silence { detectors.append("Silence") }
-        if profanity { detectors.append("Profanity") }
-        if detectors.isEmpty { return "No detectors selected" }
-        return detectors.joined(separator: " + ")
+        JobPresentationUtilities.analysisJobSubtitle(black: black, silence: silence, profanity: profanity)
     }
 
     private func analysisJobTitle(black: Bool, silence: Bool, profanity: Bool) -> String {
-        let enabledCount = [black, silence, profanity].filter { $0 }.count
-        if enabledCount <= 1 {
-            if black { return "Analyze - Black Frames" }
-            if silence { return "Analyze - Silence Gaps" }
-            if profanity { return "Analyze - Profanity" }
-            return "Analyze Media"
-        }
-        return "Analyze Media"
+        JobPresentationUtilities.analysisJobTitle(black: black, silence: silence, profanity: profanity)
     }
 
     private func defaultAudioExportFileName(for sourceURL: URL) -> String {
-        if selectedAudioFormat == .mp3 {
-            return sourceURL.deletingPathExtension().lastPathComponent + ".mp3"
-        }
-        return sourceURL.deletingPathExtension().lastPathComponent + ".m4a"
+        ClipExportUtilities.defaultAudioExportFileName(sourceURL: sourceURL, selectedAudioFormat: selectedAudioFormat)
     }
 
     private func promptAudioExportDestination(for sourceURL: URL) -> URL? {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = defaultAudioExportFileName(for: sourceURL)
-        panel.allowedContentTypes = selectedAudioFormat == .mp3 ? [.mp3] : [.mpeg4Audio]
-        panel.canCreateDirectories = true
-        panel.title = "Export Audio"
-        guard panel.runModal() == .OK else { return nil }
-        return panel.url
+        ClipExportUtilities.promptAudioExportDestination(sourceURL: sourceURL, selectedAudioFormat: selectedAudioFormat)
     }
 
     private func defaultClipExportFileName(for sourceURL: URL) -> String {
-        let outputExtension = clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.fileExtension : selectedClipFormat.fileExtension
-        let defaultBaseName: String
-        if clipEncodingMode == .compressed {
-            let codecToken = selectedClipFormat == .webm ? "vp9" : (clipAdvancedVideoCodec == .hevc ? "hevc" : "h264")
-            let resolutionToken: String
-            if clipCompatibleMaxResolution == .original {
-                resolutionToken = sourceInfo?.resolution ?? "original"
-            } else {
-                resolutionToken = clipCompatibleMaxResolution.rawValue
-            }
-            defaultBaseName = advancedClipFilenameBase(
+        ClipExportUtilities.defaultClipExportFileName(
+            ClipExportNamingInput(
                 sourceName: sourceURL.deletingPathExtension().lastPathComponent,
-                startSeconds: clipStartSeconds,
-                endSeconds: clipEndSeconds,
-                codec: codecToken,
-                resolution: resolutionToken
+                clipEncodingMode: clipEncodingMode,
+                selectedClipFormat: selectedClipFormat,
+                clipAudioOnlyFormat: clipAudioOnlyFormat,
+                clipAdvancedVideoCodec: clipAdvancedVideoCodec,
+                clipCompatibleMaxResolution: clipCompatibleMaxResolution,
+                sourceResolution: sourceInfo?.resolution,
+                clipStartSeconds: clipStartSeconds,
+                clipEndSeconds: clipEndSeconds,
+                advancedFilenameTemplate: advancedClipFilenameTemplate
             )
-        } else {
-            defaultBaseName = sourceURL.deletingPathExtension().lastPathComponent +
-                "_clip_" + formatSeconds(clipStartSeconds).replacingOccurrences(of: ":", with: "-") +
-                "_to_" + formatSeconds(clipEndSeconds).replacingOccurrences(of: ":", with: "-")
-        }
-
-        return URL(fileURLWithPath: defaultBaseName).deletingPathExtension().lastPathComponent + "." + outputExtension
+        )
     }
 
     private func promptClipExportDestination(for sourceURL: URL, defaultName: String) -> URL? {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = defaultName
-        panel.allowedContentTypes = [clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.contentType : selectedClipFormat.contentType]
-        panel.canCreateDirectories = true
-        panel.title = "Export Clip"
-        guard panel.runModal() == .OK else { return nil }
-        return panel.url
+        ClipExportUtilities.promptClipExportDestination(
+            defaultName: defaultName,
+            contentType: clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.contentType : selectedClipFormat.contentType
+        )
     }
 
     func enqueueCurrentClipExport(skipSaveDialog: Bool = false) {
@@ -1274,7 +1238,8 @@ final class WorkspaceViewModel: ObservableObject {
             uiMessage = "Downloader support is required to import from URL."
             return
         }
-        guard let normalized = normalizedDownloadURL(from: urlText) else {
+        guard let normalized = URLDownloadUtilities.normalizedDownloadURL(from: urlText) else {
+            uiMessage = "Invalid URL. Please use an http(s) link."
             return
         }
 
@@ -1289,11 +1254,11 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
-        guard let destinationURL = resolveURLDownloadDestination(
+        guard let destinationURL = URLDownloadUtilities.resolveURLDownloadDestination(
             for: preset,
             sourceURL: normalized,
-            saveModeOverride: saveMode,
-            customFolderPathOverride: customFolderPath
+            saveMode: saveMode,
+            customFolderPath: customFolderPath
         ) else {
             uiMessage = "Unable to resolve download destination."
             return
@@ -1336,7 +1301,7 @@ final class WorkspaceViewModel: ObservableObject {
                     "--print", "after_move:%(filepath)s",
                     "-o", downloadTemplateURL.path,
                     normalized.absoluteString
-                ] + self.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+                ] + URLDownloadUtilities.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
 
                 let staged = await self.runYTDLPProcessWithProgress(
                     executableURL: ytDLPLaunch.executableURL,
@@ -1357,7 +1322,7 @@ final class WorkspaceViewModel: ObservableObject {
                     "--print", "after_move:%(filepath)s",
                     "-o", destinationURL.path,
                     normalized.absoluteString
-                ] + self.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+                ] + URLDownloadUtilities.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
 
                 let direct = await self.runYTDLPProcessWithProgress(
                     executableURL: ytDLPLaunch.executableURL,
@@ -1565,17 +1530,6 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    private func normalizedDownloadURL(from raw: String) -> URL? {
-        if let parsed = URL(string: raw), let scheme = parsed.scheme?.lowercased(), ["http", "https"].contains(scheme) {
-            return parsed
-        }
-        if let parsed = URL(string: "https://" + raw), let scheme = parsed.scheme?.lowercased(), ["http", "https"].contains(scheme) {
-            return parsed
-        }
-        uiMessage = "Invalid URL. Please use an http(s) link."
-        return nil
-    }
-
     private func confirmTranscodeDownloadWarning() -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -1584,104 +1538,6 @@ final class WorkspaceViewModel: ObservableObject {
         alert.addButton(withTitle: "Continue")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    private func ytDLPFormatArguments(for preset: URLDownloadPreset) -> [String] {
-        switch preset {
-        case .compatibleBest:
-            return [
-                "-S", "res,codec:h264,aext:m4a",
-                "-f", "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4][vcodec^=avc1]/best[ext=mp4]"
-            ]
-        case .compatible1080:
-            return [
-                "-S", "res,codec:h264,aext:m4a",
-                "-f", "bestvideo[height<=1080][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4][vcodec^=avc1]/best[height<=1080][ext=mp4]"
-            ]
-        case .compatible720:
-            return [
-                "-S", "res,codec:h264,aext:m4a",
-                "-f", "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][vcodec^=avc1]/best[height<=720][ext=mp4]"
-            ]
-        case .bestAnyToMP4:
-            return [
-                "-f", "bestvideo*+bestaudio/best"
-            ]
-        case .audioOnly:
-            return [
-                "-f", "bestaudio/best",
-                "--extract-audio",
-                "--audio-format", "mp3"
-            ]
-        }
-    }
-
-    private func defaultDownloadDirectoryURL() -> URL? {
-        if let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
-            return downloads
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
-    }
-
-    private func defaultDownloadFileNameTemplate(for preset: URLDownloadPreset, sourceURL: URL) -> String {
-        let host = (sourceURL.host ?? "download")
-            .replacingOccurrences(of: ".", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-        // yt-dlp will expand title/id placeholders. Prefixing with host keeps source context.
-        return "\(host) - %(title)s [%(id)s].\(preset.outputExtension)"
-    }
-
-    private func promptURLDownloadDestination(for preset: URLDownloadPreset, sourceURL: URL) -> URL? {
-        let panel = NSSavePanel()
-        panel.canCreateDirectories = true
-        panel.allowsOtherFileTypes = false
-        panel.allowedFileTypes = [preset.outputExtension]
-        panel.nameFieldStringValue = defaultDownloadFileNameTemplate(for: preset, sourceURL: sourceURL)
-        panel.title = "Save Downloaded Media"
-        panel.prompt = "Save"
-        if let defaultDirectory = defaultDownloadDirectoryURL() {
-            panel.directoryURL = defaultDirectory
-        }
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        if url.pathExtension.isEmpty {
-            return url.appendingPathExtension(preset.outputExtension)
-        }
-        return url
-    }
-
-    private func resolveURLDownloadDestination(for preset: URLDownloadPreset, sourceURL: URL) -> URL? {
-        resolveURLDownloadDestination(
-            for: preset,
-            sourceURL: sourceURL,
-            saveModeOverride: urlDownloadSaveLocationMode,
-            customFolderPathOverride: customURLDownloadDirectoryPath
-        )
-    }
-
-    private func resolveURLDownloadDestination(
-        for preset: URLDownloadPreset,
-        sourceURL: URL,
-        saveModeOverride: URLDownloadSaveLocationMode,
-        customFolderPathOverride: String?
-    ) -> URL? {
-        switch saveModeOverride {
-        case .askEachTime:
-            return promptURLDownloadDestination(for: preset, sourceURL: sourceURL)
-        case .downloadsFolder:
-            guard let folder = defaultDownloadDirectoryURL() else { return nil }
-            return uniqueUnderscoreIndexedURL(
-                in: folder,
-                preferredFileName: defaultDownloadFileNameTemplate(for: preset, sourceURL: sourceURL)
-            )
-        case .customFolder:
-            guard let customFolderPathOverride, !customFolderPathOverride.isEmpty else { return nil }
-            let folder = URL(fileURLWithPath: customFolderPathOverride)
-            guard FileManager.default.fileExists(atPath: folder.path) else { return nil }
-            return uniqueUnderscoreIndexedURL(
-                in: folder,
-                preferredFileName: defaultDownloadFileNameTemplate(for: preset, sourceURL: sourceURL)
-            )
-        }
     }
 
     func chooseCustomURLDownloadDirectory() {
@@ -1880,67 +1736,24 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func transcriptPlainText() -> String {
-        transcriptSegments
-            .map { $0.formatted }
-            .joined(separator: "\n")
+        TranscriptUtilities.plainText(from: transcriptSegments)
     }
 
     private func srtTimestamp(_ seconds: Double) -> String {
-        let safe = max(0, seconds.isFinite ? seconds : 0)
-        let hours = Int(safe / 3600)
-        let minutes = Int((safe.truncatingRemainder(dividingBy: 3600)) / 60)
-        let wholeSeconds = Int(safe.truncatingRemainder(dividingBy: 60))
-        let millis = Int((safe - floor(safe)) * 1000.0)
-        return String(format: "%02d:%02d:%02d,%03d", hours, minutes, wholeSeconds, millis)
+        TranscriptUtilities.srtTimestamp(seconds)
     }
 
     private func transcriptSRT() -> String {
-        transcriptSegments.enumerated().map { index, segment in
-            let text = segment.text.replacingOccurrences(of: "\r\n", with: "\n")
-            return """
-            \(index + 1)
-            \(srtTimestamp(segment.start)) --> \(srtTimestamp(segment.end))
-            \(text)
-            """
-        }
-        .joined(separator: "\n\n") + "\n"
+        TranscriptUtilities.srt(from: transcriptSegments)
     }
 
     func exportTranscriptFromInspect() {
         guard let sourceURL else { return }
         guard !transcriptSegments.isEmpty else { return }
 
-        let panel = NSSavePanel()
-        panel.allowedFileTypes = ["txt", "srt"]
-        panel.allowsOtherFileTypes = false
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + "_transcript.txt"
-        panel.message = "Export transcript as TXT or SRT"
-        panel.prompt = "Export"
-
-        let formatLabel = NSTextField(labelWithString: "Format:")
-        formatLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-
-        let formatPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        formatPopup.addItems(withTitles: ["Plain Text (.txt)", "SubRip (.srt)"])
-        formatPopup.selectItem(at: 0)
-        formatPopup.controlSize = .small
-        formatPopup.frame.size.width = 150
-
-        let rowStack = NSStackView(views: [formatLabel, formatPopup])
-        rowStack.orientation = .horizontal
-        rowStack.alignment = .firstBaseline
-        rowStack.spacing = 8
-        rowStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let accessoryContainer = NSView(frame: NSRect(x: 0, y: 0, width: 270, height: 30))
-        accessoryContainer.addSubview(rowStack)
-        NSLayoutConstraint.activate([
-            rowStack.leadingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor, constant: 8),
-            rowStack.trailingAnchor.constraint(lessThanOrEqualTo: accessoryContainer.trailingAnchor, constant: -8),
-            rowStack.centerYAnchor.constraint(equalTo: accessoryContainer.centerYAnchor)
-        ])
-        panel.accessoryView = accessoryContainer
+        let (panel, formatPopup) = TranscriptUtilities.makeExportPanel(
+            defaultName: sourceURL.deletingPathExtension().lastPathComponent + "_transcript.txt"
+        )
 
         guard panel.runModal() == .OK, let destination = panel.url else { return }
 
@@ -2004,47 +1817,6 @@ final class WorkspaceViewModel: ObservableObject {
 
     func resetAdvancedClipFilenameTemplateToDefaults() {
         advancedClipFilenamePreset = .sourceClipInOut
-    }
-
-    private func advancedClipFilenameBase(
-        sourceName: String,
-        startSeconds: Double,
-        endSeconds: Double,
-        codec: String,
-        resolution: String
-    ) -> String {
-        let tcStart = formatSeconds(startSeconds).replacingOccurrences(of: ":", with: "-")
-        let tcEnd = formatSeconds(endSeconds).replacingOccurrences(of: ":", with: "-")
-        let duration = String(format: "%.3f", max(0, endSeconds - startSeconds))
-
-        let now = Date()
-        let dateFormatter = DateFormatter()
-        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        let timeFormatter = DateFormatter()
-        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
-        timeFormatter.dateFormat = "HH-mm-ss"
-
-        let replacements: [String: String] = [
-            "{source_name}": sanitizeFilenameComponent(sourceName),
-            "{in_tc}": sanitizeFilenameComponent(tcStart),
-            "{out_tc}": sanitizeFilenameComponent(tcEnd),
-            "{duration}": sanitizeFilenameComponent(duration),
-            "{date}": dateFormatter.string(from: now),
-            "{time}": timeFormatter.string(from: now),
-            "{codec}": sanitizeFilenameComponent(codec.lowercased()),
-            "{resolution}": sanitizeFilenameComponent(resolution.lowercased().replacingOccurrences(of: " ", with: ""))
-        ]
-
-        var rendered = advancedClipFilenameTemplate
-        for (token, value) in replacements {
-            rendered = rendered.replacingOccurrences(of: token, with: value)
-        }
-        rendered = sanitizeFilenameComponent(rendered)
-        if rendered.isEmpty {
-            rendered = "\(sanitizeFilenameComponent(sourceName))_clip_\(tcStart)_to_\(tcEnd)"
-        }
-        return rendered
     }
 
     private func applyClipRange(start: Double, end: Double) {
@@ -2832,7 +2604,7 @@ final class WorkspaceViewModel: ObservableObject {
             try? FileManager.default.removeItem(at: destination)
         } else if skipSaveDialog {
             let sourceDirectory = sourceURL.deletingLastPathComponent()
-            destination = uniqueUnderscoreIndexedURL(in: sourceDirectory, preferredFileName: defaultName)
+            destination = MediaToolUtilities.uniqueUnderscoreIndexedURL(in: sourceDirectory, preferredFileName: defaultName)
         } else {
             guard let chosenDestination = promptClipExportDestination(for: sourceURL, defaultName: defaultName) else {
                 finalizeQueued(.cancelled, "Save cancelled.")
@@ -3293,7 +3065,7 @@ final class WorkspaceViewModel: ObservableObject {
                                     "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
                                     "-pix_fmt", "yuv420p",
                                     "-b:v", "\(bitrateKbps)k",
-                                    "-vf", self.subtitlesFilterArgument(path: prepared.srtURL.path, style: self.clipAdvancedCaptionStyle),
+                                    "-vf", MediaToolUtilities.subtitlesFilterArgument(path: prepared.srtURL.path, style: self.clipAdvancedCaptionStyle),
                                     "-map", "0:a:0?",
                                     "-c:a", "copy"
                                 ]
@@ -3368,22 +3140,6 @@ final class WorkspaceViewModel: ObservableObject {
     private struct BurnInCaptionPreparation {
         let srtURL: URL
         let tempDirectory: URL
-    }
-
-    private func escapeSubtitlesFilterPath(_ path: String) -> String {
-        path
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: ":", with: "\\:")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: ",", with: "\\,")
-    }
-
-    private func subtitlesFilterArgument(path: String, style: BurnInCaptionStyle) -> String {
-        let escapedPath = escapeSubtitlesFilterPath(path)
-        let escapedStyle = style.ffmpegForceStyle
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-        return "subtitles='\(escapedPath)':force_style='\(escapedStyle)'"
     }
 
     private func prepareWhisperBurnInCaptions(
@@ -3502,19 +3258,8 @@ final class WorkspaceViewModel: ObservableObject {
         return text.components(separatedBy: .newlines).filter { $0.contains("-->") }.count
     }
 
-    private func shellQuoted(_ argument: String) -> String {
-        if argument.isEmpty { return "\"\"" }
-        let requiresQuote = argument.contains { $0.isWhitespace || $0 == "\"" || $0 == "'" }
-        if !requiresQuote { return argument }
-        return "\"" + argument.replacingOccurrences(of: "\"", with: "\\\"") + "\""
-    }
-
-    private func formatProcessCommand(executableURL: URL, arguments: [String]) -> String {
-        ([executableURL.path] + arguments).map(shellQuoted).joined(separator: " ")
-    }
-
     private func runProcess(executableURL: URL, arguments: [String]) async -> String? {
-        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: arguments)
+        let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: arguments)
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -3591,7 +3336,7 @@ final class WorkspaceViewModel: ObservableObject {
         statusPrefix: String,
         progressRange: ClosedRange<Double>
     ) async -> String? {
-        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: arguments)
+        let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: arguments)
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -3684,7 +3429,7 @@ final class WorkspaceViewModel: ObservableObject {
         progressRange: ClosedRange<Double>? = nil
     ) async -> String? {
         let ffmpegArguments = arguments + ["-progress", "pipe:1", "-nostats"]
-        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: ffmpegArguments)
+        let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: ffmpegArguments)
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -3864,7 +3609,7 @@ final class WorkspaceViewModel: ObservableObject {
         progressRange: ClosedRange<Double>
     ) async -> (downloadedPath: String?, error: String?) {
         let finalArguments = preArguments + arguments
-        let commandLine = formatProcessCommand(executableURL: executableURL, arguments: finalArguments)
+        let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: finalArguments)
         return await withCheckedContinuation { (continuation: CheckedContinuation<(downloadedPath: String?, error: String?), Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -4015,45 +3760,11 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func findFFmpegExecutable() -> URL? {
-        if let bundled = Bundle.main.url(forResource: "ffmpeg", withExtension: nil),
-           FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return bundled
-        }
-
-        var candidates = ["/usr/bin/ffmpeg"]
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
-            for entry in path.split(separator: ":") {
-                candidates.append(String(entry) + "/ffmpeg")
-            }
-        }
-
-        for candidate in candidates {
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return URL(fileURLWithPath: candidate)
-            }
-        }
-        return nil
+        ToolDiscoveryUtilities.findExecutable(named: "ffmpeg")
     }
 
     private func findFFprobeExecutable() -> URL? {
-        if let bundled = Bundle.main.url(forResource: "ffprobe", withExtension: nil),
-           FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return bundled
-        }
-
-        var candidates = ["/usr/bin/ffprobe"]
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
-            for entry in path.split(separator: ":") {
-                candidates.append(String(entry) + "/ffprobe")
-            }
-        }
-
-        for candidate in candidates {
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return URL(fileURLWithPath: candidate)
-            }
-        }
-        return nil
+        ToolDiscoveryUtilities.findExecutable(named: "ffprobe")
     }
 
     private func resolveYTDLPLaunch() -> YTDLPLaunchCommand? {
@@ -4061,17 +3772,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func isMachOExecutable(at url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
-        defer { try? handle.close() }
-        guard let bytes = try? handle.read(upToCount: 4), bytes.count == 4 else { return false }
-        let magic = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
-        let known: Set<UInt32> = [
-            0xFEEDFACE, 0xCEFAEDFE,
-            0xFEEDFACF, 0xCFFAEDFE,
-            0xCAFEBABE, 0xBEBAFECA,
-            0xCAFEBABF, 0xBFBAFECA
-        ]
-        return known.contains(magic)
+        ToolDiscoveryUtilities.isMachOExecutable(at: url)
     }
 
     func revealOutput() {
@@ -4135,7 +3836,7 @@ final class WorkspaceViewModel: ObservableObject {
             destinationURL = url
         case .sourceFolder:
             let folder = sourceURL.deletingLastPathComponent()
-            destinationURL = uniqueURL(in: folder, preferredFileName: defaultName)
+            destinationURL = MediaToolUtilities.uniqueURL(in: folder, preferredFileName: defaultName)
         case .customFolder:
             let configuredFolder = URL(fileURLWithPath: customFrameSaveDirectoryPath)
             let folder: URL
@@ -4155,7 +3856,7 @@ final class WorkspaceViewModel: ObservableObject {
                 customFrameSaveDirectoryPath = picked.path
                 folder = picked
             }
-            destinationURL = uniqueURL(in: folder, preferredFileName: defaultName)
+            destinationURL = MediaToolUtilities.uniqueURL(in: folder, preferredFileName: defaultName)
         }
 
         do {
@@ -4401,32 +4102,6 @@ final class WorkspaceViewModel: ObservableObject {
                 return
             }
         }
-    }
-
-    private func uniqueURL(in directory: URL, preferredFileName: String) -> URL {
-        let ext = (preferredFileName as NSString).pathExtension
-        let baseName = (preferredFileName as NSString).deletingPathExtension
-        var candidate = directory.appendingPathComponent(preferredFileName)
-        var index = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            let nextName = ext.isEmpty ? "\(baseName)-\(index)" : "\(baseName)-\(index).\(ext)"
-            candidate = directory.appendingPathComponent(nextName)
-            index += 1
-        }
-        return candidate
-    }
-
-    private func uniqueUnderscoreIndexedURL(in directory: URL, preferredFileName: String) -> URL {
-        let ext = (preferredFileName as NSString).pathExtension
-        let baseName = (preferredFileName as NSString).deletingPathExtension
-        var candidate = directory.appendingPathComponent(preferredFileName)
-        var index = 1
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            let nextName = ext.isEmpty ? "\(baseName)_\(index)" : "\(baseName)_\(index).\(ext)"
-            candidate = directory.appendingPathComponent(nextName)
-            index += 1
-        }
-        return candidate
     }
 
     private func notifyCompletion(_ title: String, message: String) {
