@@ -35,4 +35,9 @@ enum ToolDiscoveryUtilities {
         ]
         return known.contains(magic)
     }
+
+    static func countSRTCues(at url: URL) -> Int {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return 0 }
+        return text.components(separatedBy: .newlines).filter { $0.contains("-->") }.count
+    }
 }

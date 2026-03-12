@@ -5,7 +5,6 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import SwiftUI
-import UniformTypeIdentifiers
 import Combine
 import UserNotifications
 
@@ -49,9 +48,6 @@ struct ClipToolView: View {
     @State private var dragVisualPlayheadSeconds: Double?
     @State private var lastInteractiveSeekCommitTimestamp: CFTimeInterval = 0
     @State private var lastInteractiveReadoutSyncTimestamp: CFTimeInterval = 0
-    @State private var isPlayerTimecodeHovered = false
-    @State private var isZoomOutHovered = false
-    @State private var isZoomInHovered = false
     @State private var lastSharedPlayheadSyncTimestamp: CFTimeInterval = 0
     @State private var timelinePointerSeconds: Double?
     @State private var clipWindow: NSWindow?
@@ -1157,149 +1153,39 @@ struct ClipToolView: View {
             .accessibilityLabel("Resize player height")
             .help("Drag to resize player height. Double-click to toggle default/max height.")
 
-            ZStack {
-                HStack(spacing: 6) {
-                    ControlGroup {
-                        Button {
-                            seekPlayer(to: model.clipStartSeconds)
-                            springAnimateVisualPlayhead(to: model.clipStartSeconds)
-                        } label: {
-                            Image(systemName: "backward.end.fill")
-                        }
-                        .help("Jump to Clip Start")
-                        .accessibilityLabel("Jump to Clip Start")
-
-                        Button {
-                            seekPlayer(to: model.clipEndSeconds)
-                            springAnimateVisualPlayhead(to: model.clipEndSeconds)
-                        } label: {
-                            Image(systemName: "forward.end.fill")
-                        }
-                        .help("Jump to Clip End")
-                        .accessibilityLabel("Jump to Clip End")
-                    }
-                    .controlSize(.mini)
-
-                    if model.hasVideoTrack {
-                        Button {
-                            model.captureFrame(at: displayedPlayheadSeconds)
-                        } label: {
-                            Label("Capture Frame", systemImage: "camera")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help("Save a PNG frame at the current playhead")
-                        .accessibilityLabel("Capture Frame")
-                    }
-
-                    Spacer()
-                }
-
-                HStack(spacing: 6) {
-                    Button {
-                        copyPlayheadTimecode()
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(.caption)
-                            .frame(width: 14, height: 14)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Copy playhead timecode")
-                    .opacity(isPlayerTimecodeHovered ? 1.0 : 0.0)
-                    .allowsHitTesting(isPlayerTimecodeHovered)
-                    .accessibilityHidden(!isPlayerTimecodeHovered)
-                    .contextMenu {
-                        Button("Copy Timecode") {
-                            copyPlayheadTimecode()
-                        }
-                    }
-
-                    Text(formatSeconds(displayedPlayheadSeconds))
-                        .font(.caption.monospacedDigit())
-                        .fontWeight(.semibold)
-                        .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.primary)
-                    Text("/")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Text(formatSeconds(max(playerDurationSeconds, model.sourceDurationSeconds)))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .onHover { hovering in
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        isPlayerTimecodeHovered = hovering
-                    }
-                }
-
-                HStack {
-                    Spacer()
-
-                    HStack(spacing: 6) {
-                        Button {
-                            setTimelineZoomIndex(max(0, timelineZoomIndex - 1))
-                        } label: {
-                            Image(systemName: "minus.magnifyingglass")
-                                .font(.system(size: 14, weight: .semibold))
-                                .frame(width: 18, height: 18)
-                                .background(
-                                    Circle()
-                                        .fill(Color.primary.opacity(isZoomOutHovered ? 0.10 : 0.0))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Zoom Out")
-                        .onHover { hovering in
-                            withAnimation(.easeOut(duration: 0.12)) {
-                                isZoomOutHovered = hovering
-                            }
-                        }
-
-                        Slider(
-                            value: Binding(
-                                get: { Double(timelineZoomIndex) },
-                                set: { setTimelineZoomIndex(Int($0.rounded())) }
-                            ),
-                            in: 0...Double(allowedTimelineZoomLevels.count - 1),
-                            step: 1
-                        )
-                        .controlSize(.regular)
-                        .frame(width: 104)
-
-                        Button {
-                            setTimelineZoomIndex(min(allowedTimelineZoomLevels.count - 1, timelineZoomIndex + 1))
-                        } label: {
-                            Image(systemName: "plus.magnifyingglass")
-                                .font(.system(size: 14, weight: .semibold))
-                                .frame(width: 18, height: 18)
-                                .background(
-                                    Circle()
-                                        .fill(Color.primary.opacity(isZoomInHovered ? 0.10 : 0.0))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Zoom In")
-                        .onHover { hovering in
-                            withAnimation(.easeOut(duration: 0.12)) {
-                                isZoomInHovered = hovering
-                            }
-                        }
-
-                        Text(compactPlayerZoomDisplayText)
-                            .font(.caption.monospacedDigit())
-                            .frame(width: 34, alignment: .trailing)
-
-                        Button("Fit") {
-                            setTimelineZoomIndex(0)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 2)
+            ClipPlayerUtilityRow(
+                hasVideoTrack: model.hasVideoTrack,
+                playheadSeconds: displayedPlayheadSeconds,
+                totalDurationSeconds: max(playerDurationSeconds, model.sourceDurationSeconds),
+                playheadCopyFlash: playheadCopyFlash,
+                compactZoomDisplayText: compactPlayerZoomDisplayText,
+                timelineZoomLevelCount: allowedTimelineZoomLevels.count,
+                onCopyPlayheadTimecode: copyPlayheadTimecode,
+                onJumpToStart: {
+                    seekPlayer(to: model.clipStartSeconds)
+                    springAnimateVisualPlayhead(to: model.clipStartSeconds)
+                },
+                onJumpToEnd: {
+                    seekPlayer(to: model.clipEndSeconds)
+                    springAnimateVisualPlayhead(to: model.clipEndSeconds)
+                },
+                onCaptureFrame: {
+                    model.captureFrame(at: displayedPlayheadSeconds)
+                },
+                onZoomOut: {
+                    setTimelineZoomIndex(max(0, timelineZoomIndex - 1))
+                },
+                onZoomIn: {
+                    setTimelineZoomIndex(min(allowedTimelineZoomLevels.count - 1, timelineZoomIndex + 1))
+                },
+                onFit: {
+                    setTimelineZoomIndex(0)
+                },
+                timelineZoomIndexBinding: Binding(
+                    get: { Double(timelineZoomIndex) },
+                    set: { setTimelineZoomIndex(Int($0.rounded())) }
+                )
+            )
         }
         .onChange(of: isCompactLayout) { _ in
             storedPlayerHeight = Double(clampedPlayerHeight(currentPlayerHeight))
@@ -1478,86 +1364,28 @@ struct ClipToolView: View {
     }
 
     private var emptySourceImportView: some View {
-        VStack(alignment: .center, spacing: 22) {
-            Text("Open Media")
-                .font(.system(size: 32, weight: .semibold))
-
-            VStack(spacing: 10) {
-                Image(systemName: "film")
-                    .font(.system(size: 58, weight: .regular))
-                    .foregroundStyle(isEmptyDropTargeted ? Color.accentColor : Color.secondary)
-
-                Text("Drag a video or audio file here")
-                    .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(.secondary)
-
-                Button("Choose File…") {
-                    model.chooseSource()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-            }
-            .frame(maxWidth: .infinity, minHeight: 360)
-            .background(
-                RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
-                    .fill(
-                        adaptiveContainerFill(
-                            material: .thinMaterial,
-                            fallback: Color(nsColor: .controlBackgroundColor),
-                            reduceTransparency: reduceTransparency
-                        )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
-                    .stroke(
-                        isEmptyDropTargeted ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.24),
-                        style: StrokeStyle(lineWidth: isEmptyDropTargeted ? 2.4 : 1.6, dash: [8, 6])
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
-                    .stroke(isEmptyDropTargeted ? Color.accentColor.opacity(0.2) : Color.clear, lineWidth: 6)
-            )
-            .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isEmptyDropTargeted) { providers in
+        ClipEmptySourceView(
+            emptyStateURLText: $emptyStateURLText,
+            isDropTargeted: $isEmptyDropTargeted,
+            reduceTransparency: reduceTransparency,
+            isURLDownloadEnabled: model.ytDLPAvailable && model.canRequestURLDownload,
+            onChooseFile: {
+                model.chooseSource()
+            },
+            onDownload: {
+                let trimmed = emptyStateURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                model.startURLImport(
+                    urlText: trimmed,
+                    preset: model.urlDownloadPreset,
+                    saveMode: model.urlDownloadSaveLocationMode,
+                    customFolderPath: model.customURLDownloadDirectoryPath
+                )
+            },
+            onHandleDrop: { providers in
                 model.handleDrop(providers: providers)
             }
-
-            HStack(spacing: 12) {
-                Rectangle()
-                    .fill(Color.primary.opacity(0.16))
-                    .frame(height: 1)
-                    .frame(maxWidth: 260)
-                Text("or")
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.tertiary)
-                Rectangle()
-                    .fill(Color.primary.opacity(0.16))
-                    .frame(height: 1)
-                    .frame(maxWidth: 260)
-            }
-            .padding(.vertical, 2)
-
-            InitialURLDownloadControl(
-                text: $emptyStateURLText,
-                isEnabled: model.ytDLPAvailable && model.canRequestURLDownload,
-                reduceTransparency: reduceTransparency,
-                onDownload: {
-                    let trimmed = emptyStateURLText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return }
-                    model.startURLImport(
-                        urlText: trimmed,
-                        preset: model.urlDownloadPreset,
-                        saveMode: model.urlDownloadSaveLocationMode,
-                        customFolderPath: model.customURLDownloadDirectoryPath
-                    )
-                }
-            )
-            .frame(maxWidth: .infinity)
-        }
-        .frame(maxWidth: 980)
-        .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity, alignment: .center)
+        )
     }
 
     private var clipboardURLString: String? {
@@ -1592,183 +1420,29 @@ struct ClipToolView: View {
         )
     }
 
-    private var importPresetHelpText: String? {
-        switch importURLPreset {
-        case .compatibleBest:
-            return "Optimized for immediate playback in In/Out."
-        case .bestAnyToMP4:
-            return "Downloads highest available quality, then transcodes to MP4 for compatibility."
-        case .audioOnly:
-            return "Extracts audio and saves as MP3."
-        case .compatible1080:
-            return "Limits to 1080p-compatible formats."
-        case .compatible720:
-            return "Limits to 720p-compatible formats."
-        }
-    }
-
     private var urlImportSheetView: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Download from URL")
-                .font(.title3.weight(.semibold))
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("URL")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    TextField("https://example.com/video", text: $importURLText)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($isImportURLFieldFocused)
-                        .onSubmit {
-                            submitURLImportSheet()
-                        }
-                    if let clipboardURLString {
-                        Button("Paste URL") {
-                            importURLText = clipboardURLString
-                            isImportURLFieldFocused = true
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                ZStack {
-                    Rectangle()
-                        .fill(Color.clear)
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .rotationEffect(.degrees(showURLImportAdvancedOptions ? 90 : 0))
-                            .foregroundStyle(.secondary)
-                        Text("More Options")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 6)
-                }
-                .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showURLImportAdvancedOptions.toggle()
-                    }
-                }
-
-                if showURLImportAdvancedOptions {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Quality")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(URLDownloadPreset.allCases) { preset in
-                                Button {
-                                    importURLPreset = preset
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: importURLPreset == preset ? "largecircle.fill.circle" : "circle")
-                                            .font(.system(size: 13, weight: .regular))
-                                            .foregroundStyle(importURLPreset == preset ? Color.accentColor : .secondary)
-                                        Text(preset.rawValue)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.primary)
-                                        if preset == .compatibleBest {
-                                            Text("Recommended")
-                                                .font(.caption2.weight(.semibold))
-                                                .padding(.horizontal, 7)
-                                                .padding(.vertical, 3)
-                                                .background(Color.accentColor.opacity(0.16), in: Capsule())
-                                                .foregroundStyle(Color.accentColor)
-                                        }
-                                        if preset == .bestAnyToMP4 {
-                                            Text("Slow")
-                                                .font(.caption2.weight(.semibold))
-                                                .padding(.horizontal, 7)
-                                                .padding(.vertical, 3)
-                                                .background(Color.red.opacity(0.16), in: Capsule())
-                                                .foregroundStyle(.red)
-                                        }
-                                        Spacer(minLength: 0)
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        if let importPresetHelpText {
-                            Text(importPresetHelpText)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-                            .frame(height: 8)
-
-                        Text("Save Location")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Picker("Save location", selection: $importURLSaveMode) {
-                            ForEach(URLDownloadSaveLocationMode.allCases) { mode in
-                                Text(mode.rawValue).tag(mode)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if importURLSaveMode == .customFolder {
-                            HStack(spacing: 8) {
-                                Text(importCustomFolderPath.isEmpty ? "No custom folder selected" : importCustomFolderPath)
-                                    .font(.caption)
-                                    .foregroundStyle(importCustomFolderPath.isEmpty ? .secondary : .primary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Button("Choose…") {
-                                    model.chooseCustomURLDownloadDirectory()
-                                    importCustomFolderPath = model.customURLDownloadDirectoryPath
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                        }
-                    }
-                    .padding(.top, 8)
-                    .padding(.leading, 14)
-                    .transition(.opacity.combined(with: .offset(y: -6)))
-                }
-            }
-            .animation(.easeInOut(duration: 0.2), value: showURLImportAdvancedOptions)
-            .animation(.easeInOut(duration: 0.15), value: importURLPreset)
-
-            HStack {
-                Spacer()
-                Button("Cancel") {
-                    model.isURLImportSheetPresented = false
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-                Button("Download") {
-                    submitURLImportSheet()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .disabled(importURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(20)
-        .frame(width: 560)
+        ClipURLImportSheetView(
+            importURLText: $importURLText,
+            importURLPreset: $importURLPreset,
+            importURLSaveMode: $importURLSaveMode,
+            importCustomFolderPath: $importCustomFolderPath,
+            showAdvancedOptions: $showURLImportAdvancedOptions,
+            clipboardURLString: clipboardURLString,
+            onCancel: {
+                model.isURLImportSheetPresented = false
+            },
+            onSubmit: {
+                submitURLImportSheet()
+            },
+            onChooseCustomFolder: {
+                model.chooseCustomURLDownloadDirectory()
+                importCustomFolderPath = model.customURLDownloadDirectoryPath
+            },
+            isURLFieldFocused: $isImportURLFieldFocused
+        )
         .onAppear {
             if importURLText.isEmpty {
                 prepareURLImportSheetDefaults()
-            }
-            DispatchQueue.main.async {
-                isImportURLFieldFocused = true
             }
         }
     }
@@ -1865,104 +1539,3 @@ struct ClipToolView: View {
             )
     }
 }
-
-private struct InitialURLDownloadControl: View {
-    @Binding var text: String
-    let isEnabled: Bool
-    let reduceTransparency: Bool
-    let onDownload: () -> Void
-
-    @FocusState private var isFocused: Bool
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var canSubmit: Bool {
-        isEnabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var body: some View {
-        VStack(alignment: .center, spacing: 10) {
-            Text("Download from URL")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(.primary)
-
-            HStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "link")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.secondary)
-
-                    TextField("https://…", text: $text)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 17, weight: .regular))
-                        .focused($isFocused)
-                        .onSubmit {
-                            if canSubmit {
-                                onDownload()
-                            }
-                        }
-                }
-                .padding(.leading, 14)
-                .padding(.trailing, 8)
-                .frame(maxHeight: .infinity, alignment: .center)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard isEnabled else { return }
-                    isFocused = true
-                }
-
-                Button(action: onDownload) {
-                    Text("Download")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(canSubmit ? Color.white : Color.white.opacity(0.72))
-                        .frame(minWidth: 120)
-                        .frame(minHeight: 56)
-                        .frame(maxHeight: .infinity)
-                        .padding(.horizontal, 12)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contentShape(Rectangle())
-                .background(
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: 0,
-                        bottomLeadingRadius: 0,
-                        bottomTrailingRadius: UIRadius.medium,
-                        topTrailingRadius: UIRadius.medium,
-                        style: .continuous
-                    )
-                    .fill(canSubmit ? Color.accentColor : Color.white.opacity(colorScheme == .dark ? 0.10 : 0.08))
-                )
-                .disabled(!canSubmit)
-            }
-            .frame(maxWidth: 920)
-            .frame(height: 56)
-            .background(
-                adaptiveContainerFill(
-                    material: .thinMaterial,
-                    fallback: Color(nsColor: .controlBackgroundColor),
-                    reduceTransparency: reduceTransparency
-                ),
-                in: RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
-                    .stroke(
-                        isFocused ? Color.accentColor.opacity(0.55) : Color.white.opacity(0.10),
-                        lineWidth: isFocused ? 1.2 : 0.8
-                    )
-            )
-            .opacity(isEnabled ? 1.0 : 0.72)
-
-            if !isEnabled {
-                Text("yt-dlp is required for URL downloads.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .animation(.easeOut(duration: 0.14), value: isFocused)
-        .animation(.easeOut(duration: 0.14), value: canSubmit)
-    }
-}
-
