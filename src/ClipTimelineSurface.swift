@@ -41,6 +41,11 @@ final class WaveformRasterHostView: NSView {
     var highlightedClipBoundary: ClipBoundaryHighlight?
     private var livePlaybackDisplayLink: CVDisplayLink?
     private var hasPendingDisplayLinkTick = false
+    private var playbackAnchorSeconds: Double = 0
+    private var playbackAnchorHostTime: CFTimeInterval = 0
+    private var playbackAnchorRate: Float = 0
+    private var hasPlaybackAnchor = false
+    private var lastDragSampleHostTime: CFTimeInterval = 0
     var onMarkerSeek: ((Double) -> Void)?
     var onInteractiveSeek: ((Double, Bool) -> Void)?
     var onPlayheadDragStateChanged: ((Bool) -> Void)?
@@ -345,6 +350,39 @@ final class WaveformRasterHostView: NSView {
         CATransaction.commit()
     }
 
+    private func predictedPlaybackSeconds(at hostTime: CFTimeInterval) -> Double {
+        guard hasPlaybackAnchor else { return modelPlayheadSeconds }
+        let elapsed = max(0, hostTime - playbackAnchorHostTime)
+        let predicted = playbackAnchorSeconds + (Double(playbackAnchorRate) * elapsed)
+        return min(totalDurationSeconds, max(0, predicted))
+    }
+
+    private func animateDraggedPlayhead(to seconds: Double, forceDisplaySync: Bool = false) {
+        let clamped = min(totalDurationSeconds, max(0, seconds))
+        lastDragSampleHostTime = CACurrentMediaTime()
+        applyDisplayedPlayhead(clamped)
+    }
+
+    fileprivate func updatePlaybackAnchor(seconds: Double, rate: Float, forceDisplaySync: Bool = false) {
+        let clampedSeconds = min(totalDurationSeconds, max(0, seconds))
+        let now = CACurrentMediaTime()
+        let priorPrediction = predictedPlaybackSeconds(at: now)
+        let shouldResyncDisplay =
+            forceDisplaySync ||
+            !hasPlaybackAnchor ||
+            abs(priorPrediction - clampedSeconds) > (1.0 / 45.0) ||
+            abs(playbackAnchorRate - rate) > 0.001
+
+        playbackAnchorSeconds = clampedSeconds
+        playbackAnchorHostTime = now
+        playbackAnchorRate = rate
+        hasPlaybackAnchor = true
+
+        if shouldResyncDisplay {
+            applyDisplayedPlayhead(clampedSeconds)
+        }
+    }
+
     private func rulerMajorStep(for visibleDuration: Double) -> Double {
         let candidates: [Double] = [
             1.0 / 30.0, 1.0 / 15.0, 0.1, 0.2, 0.5,
@@ -624,7 +662,7 @@ final class WaveformRasterHostView: NSView {
     private func updateInteractiveDrag(at point: NSPoint, forceCommit: Bool) {
         let target = timeValue(forX: point.x)
         dragPlayheadSeconds = target
-        applyDisplayedPlayhead(target)
+        animateDraggedPlayhead(to: target, forceDisplaySync: forceCommit && lastDragSampleHostTime == 0)
         onPlayheadDragEdgePan?(point.x, bounds.width)
 
         let now = CACurrentMediaTime()
@@ -725,10 +763,12 @@ final class WaveformRasterHostView: NSView {
         if let marker = markerNear(point: point) {
             isDraggingPlayhead = true
             lastDragCommitTimestamp = 0
+            lastDragSampleHostTime = 0
             onPlayheadDragStateChanged?(true)
             dragPlayheadSeconds = marker.seconds
             applyDisplayedPlayhead(marker.seconds)
             onInteractiveSeek?(marker.seconds, true)
+            updateLivePlaybackTimerState()
             return
         }
 
@@ -755,9 +795,11 @@ final class WaveformRasterHostView: NSView {
 
         isDraggingPlayhead = true
         lastDragCommitTimestamp = 0
+        lastDragSampleHostTime = 0
         onPlayheadDragStateChanged?(true)
 
         updateInteractiveDrag(at: point, forceCommit: true)
+        updateLivePlaybackTimerState()
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -776,7 +818,7 @@ final class WaveformRasterHostView: NSView {
             super.mouseDragged(with: event)
             return
         }
-        updateInteractiveDrag(at: point, forceCommit: false)
+        onPlayheadDragEdgePan?(point.x, bounds.width)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -802,7 +844,11 @@ final class WaveformRasterHostView: NSView {
         updateInteractiveDrag(at: point, forceCommit: true)
         isDraggingPlayhead = false
         dragPlayheadSeconds = nil
+        lastDragSampleHostTime = 0
+        playheadLayer.removeAnimation(forKey: "dragPlayheadPosition")
+        playheadLayer.removeAnimation(forKey: "dragPlayheadOpacity")
         onPlayheadDragStateChanged?(false)
+        updateLivePlaybackTimerState()
     }
 
     override func layout() {
@@ -850,25 +896,36 @@ final class WaveformRasterHostView: NSView {
     }
 
     func updateLivePlaybackTimerState() {
-        guard let player else {
+        let isPlaying = (player?.rate ?? 0) != 0
+        let shouldRunDisplayLink = isDraggingPlayhead || isPlaying
+
+        guard shouldRunDisplayLink else {
             stopLivePlaybackTimer()
+            if player != nil {
+                updatePlaybackAnchor(seconds: modelPlayheadSeconds, rate: 0, forceDisplaySync: true)
+            } else {
+                hasPlaybackAnchor = false
+                playbackAnchorRate = 0
+            }
             return
         }
-        if player.rate != 0 {
-            startLivePlaybackTimerIfNeeded()
-        } else {
-            stopLivePlaybackTimer()
-        }
+
+        startLivePlaybackTimerIfNeeded()
     }
 
     private func tickLivePlayhead() {
-        guard !isDraggingPlayhead, let player, player.rate != 0 else {
+        if isDraggingPlayhead, let window {
+            let sampledPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            updateInteractiveDrag(at: sampledPoint, forceCommit: false)
+            return
+        }
+
+        guard let player, player.rate != 0 else {
             stopLivePlaybackTimer()
             return
         }
-        let current = CMTimeGetSeconds(player.currentTime())
-        guard current.isFinite else { return }
-        applyDisplayedPlayhead(current)
+        let predicted = predictedPlaybackSeconds(at: CACurrentMediaTime())
+        applyDisplayedPlayhead(predicted)
     }
 
     private func scheduleLivePlaybackTick() {
@@ -1247,6 +1304,15 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.visibleStartSeconds = visibleStartSeconds
         nsView.visibleEndSeconds = visibleEndSeconds
         nsView.playheadDisplayWidth = playheadWidth
+        let isInterpolatingPlayback = nsView.dragPlayheadSeconds == nil && player.rate != 0
+        let hostOwnsPlayheadDisplay = nsView.dragPlayheadSeconds != nil || isInterpolatingPlayback
+        if nsView.dragPlayheadSeconds == nil {
+            nsView.updatePlaybackAnchor(
+                seconds: playheadSeconds,
+                rate: player.rate,
+                forceDisplaySync: !isInterpolatingPlayback
+            )
+        }
         nsView.updateLivePlaybackTimerState()
         let playheadHeight = timelineRect.height + 8
         let targetPlayheadFrame = CGRect(
@@ -1255,7 +1321,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             width: playheadWidth,
             height: playheadHeight
         )
-        if playheadJumpAnimationToken != context.coordinator.lastPlayheadJumpAnimationToken {
+        if !hostOwnsPlayheadDisplay, playheadJumpAnimationToken != context.coordinator.lastPlayheadJumpAnimationToken {
             let fromX = xPosition(for: playheadJumpFromSeconds)
             let toX = targetPlayheadFrame.midX
             if abs(toX - fromX) > 0.5 {
@@ -1267,12 +1333,14 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                 move.isRemovedOnCompletion = true
                 nsView.playheadLayer.add(move, forKey: "playheadJump")
             }
-            context.coordinator.lastPlayheadJumpAnimationToken = playheadJumpAnimationToken
         }
+        context.coordinator.lastPlayheadJumpAnimationToken = playheadJumpAnimationToken
 
-        nsView.playheadLayer.frame = targetPlayheadFrame
-        let playheadVisible = playheadX >= -6 && playheadX <= (width + 6)
-        nsView.playheadLayer.opacity = playheadVisible ? 1.0 : 0.0
+        if !hostOwnsPlayheadDisplay {
+            nsView.playheadLayer.frame = targetPlayheadFrame
+            let playheadVisible = playheadX >= -6 && playheadX <= (width + 6)
+            nsView.playheadLayer.opacity = playheadVisible ? 1.0 : 0.0
+        }
         nsView.playheadLayer.shadowColor = NSColor.systemRed.cgColor
         let targetShadowOpacity: Float = isPlayheadCaptureFlashing ? 0.9 : 0.0
         let targetShadowRadius: CGFloat = isPlayheadCaptureFlashing ? 6 : 0

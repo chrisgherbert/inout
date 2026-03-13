@@ -63,6 +63,7 @@ struct ClipToolView: View {
     @State private var transcriptSidebarResizeStartWidth: CGFloat?
     @State private var transcriptSidebarResizeStartGlobalX: CGFloat?
     @State private var liveTranscriptSidebarWidth: CGFloat?
+    @State private var clipTranscriptSidebarTimeSeconds: Double = 0
     @State private var importURLText: String = ""
     @State private var importURLPreset: URLDownloadPreset = .compatibleBest
     @State private var importURLSaveMode: URLDownloadSaveLocationMode = .askEachTime
@@ -1205,24 +1206,27 @@ struct ClipToolView: View {
                                     }
                             )
 
-                        ClipTranscriptSidebarView(
-                            transcriptSegments: model.transcriptSegments,
-                            transcriptStatusText: model.transcriptStatusText,
-                            canGenerateTranscript: model.canGenerateTranscript,
-                            isGeneratingTranscript: model.isGeneratingTranscript,
-                            hasAudioTrack: model.hasAudioTrack,
-                            currentTimeSeconds: displayedPlayheadSeconds,
-                            reduceTransparency: reduceTransparency,
-                            generateTranscript: {
-                                model.generateTranscriptFromInspect()
-                            },
-                            seekToTranscriptTime: { seconds in
-                                seekPlayer(to: seconds)
-                                springAnimateVisualPlayhead(to: seconds)
-                            },
-                            playTranscriptFromTime: { seconds in
-                                playTranscript(from: seconds)
-                            }
+                        EquatableView(content:
+                            ClipTranscriptSidebarView(
+                                transcriptSegments: model.transcriptSegments,
+                                transcriptStatusText: model.transcriptStatusText,
+                                canGenerateTranscript: model.canGenerateTranscript,
+                                isGeneratingTranscript: model.isGeneratingTranscript,
+                                hasAudioTrack: model.hasAudioTrack,
+                                currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
+                                isScrubbing: isPlayheadDragActive,
+                                reduceTransparency: reduceTransparency,
+                                generateTranscript: {
+                                    model.generateTranscriptFromInspect()
+                                },
+                                seekToTranscriptTime: { seconds in
+                                    seekPlayer(to: seconds)
+                                    springAnimateVisualPlayhead(to: seconds)
+                                },
+                                playTranscriptFromTime: { seconds in
+                                    playTranscript(from: seconds)
+                                }
+                            )
                         )
                         .frame(width: clipTranscriptSidebarWidth, height: currentPlayerHeight)
                     }
@@ -1602,6 +1606,7 @@ struct ClipToolView: View {
             installScrollMonitor()
             installMouseDownMonitor()
             installMiddleMousePanMonitor()
+            clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
         }
 
         let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
@@ -1619,6 +1624,15 @@ struct ClipToolView: View {
         }
 
         let step4 = step3
+            .onChange(of: displayedPlayheadSeconds) { newValue in
+                guard !isPlayheadDragActive else { return }
+                clipTranscriptSidebarTimeSeconds = newValue
+            }
+            .onChange(of: isPlayheadDragActive) { active in
+                if !active {
+                    clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
+                }
+            }
             .onChange(of: model.selectedClipFormat) { format in
                 if format == .webm {
                     model.clipAdvancedVideoCodec = .h264

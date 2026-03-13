@@ -1,12 +1,13 @@
 import SwiftUI
 
-struct ClipTranscriptSidebarView: View {
+struct ClipTranscriptSidebarView: View, Equatable {
     let transcriptSegments: [TranscriptSegment]
     let transcriptStatusText: String
     let canGenerateTranscript: Bool
     let isGeneratingTranscript: Bool
     let hasAudioTrack: Bool
     let currentTimeSeconds: Double
+    let isScrubbing: Bool
     let reduceTransparency: Bool
     let generateTranscript: () -> Void
     let seekToTranscriptTime: (Double) -> Void
@@ -20,6 +21,20 @@ struct ClipTranscriptSidebarView: View {
     @State private var matchingTranscriptRowsInOrder: [TranscriptDisplayRow] = []
     @State private var transcriptRowsVersion: Int = 0
     @State private var transcriptSearchVersion: Int = 0
+    @State private var settledCurrentTimeSeconds: Double = 0
+
+    static func == (lhs: ClipTranscriptSidebarView, rhs: ClipTranscriptSidebarView) -> Bool {
+        lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
+        lhs.transcriptSegments.first?.id == rhs.transcriptSegments.first?.id &&
+        lhs.transcriptSegments.last?.id == rhs.transcriptSegments.last?.id &&
+        lhs.transcriptStatusText == rhs.transcriptStatusText &&
+        lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
+        lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
+        lhs.hasAudioTrack == rhs.hasAudioTrack &&
+        lhs.currentTimeSeconds == rhs.currentTimeSeconds &&
+        lhs.isScrubbing == rhs.isScrubbing &&
+        lhs.reduceTransparency == rhs.reduceTransparency
+    }
 
     private func makeTranscriptRows() -> [TranscriptDisplayRow] {
         transcriptSegments.map { segment in
@@ -72,27 +87,28 @@ struct ClipTranscriptSidebarView: View {
         while low <= high {
             let mid = (low + high) / 2
             let segment = transcriptSegments[mid]
-            if currentTimeSeconds < segment.start {
+            if settledCurrentTimeSeconds < segment.start {
                 high = mid - 1
-            } else if currentTimeSeconds >= segment.end {
+            } else if settledCurrentTimeSeconds >= segment.end {
                 low = mid + 1
             } else {
                 return segment.id
             }
         }
 
-        if high >= 0, high < transcriptSegments.count, currentTimeSeconds >= transcriptSegments[high].start {
+        if high >= 0, high < transcriptSegments.count, settledCurrentTimeSeconds >= transcriptSegments[high].start {
             return transcriptSegments[high].id
         }
         return nil
     }
 
-    private var transcriptChangeSignature: [UUID] {
-        transcriptSegments.map(\.id)
-    }
 
     private var hasTranscript: Bool {
         !transcriptSegments.isEmpty
+    }
+
+    private var showsPlaybackIndicator: Bool {
+        true
     }
 
     private func refreshTranscriptRows() {
@@ -220,8 +236,8 @@ struct ClipTranscriptSidebarView: View {
                     rowsVersion: transcriptRowsVersion,
                     fontSize: 13,
                     activeRowID: activeTranscriptSegmentID,
-                    followsActiveRow: true,
-                    showsPlaybackIndicator: true,
+                    followsActiveRow: !isScrubbing,
+                    showsPlaybackIndicator: showsPlaybackIndicator,
                     searchQuery: normalizedSearchText,
                     matchingRowIDs: matchingTranscriptRowIDs,
                     searchVersion: transcriptSearchVersion,
@@ -278,12 +294,22 @@ struct ClipTranscriptSidebarView: View {
         }
         .onAppear {
             refreshTranscriptRows()
+            settledCurrentTimeSeconds = currentTimeSeconds
         }
-        .onChange(of: transcriptChangeSignature) { _ in
+        .onChange(of: transcriptSegments.count) { _ in
             refreshTranscriptRows()
         }
         .onChange(of: normalizedSearchText) { _ in
             refreshSearchMatches()
+        }
+        .onChange(of: currentTimeSeconds) { newValue in
+            guard !isScrubbing else { return }
+            settledCurrentTimeSeconds = newValue
+        }
+        .onChange(of: isScrubbing) { newValue in
+            if !newValue {
+                settledCurrentTimeSeconds = currentTimeSeconds
+            }
         }
         .padding(12)
         .frame(maxHeight: .infinity, alignment: .top)

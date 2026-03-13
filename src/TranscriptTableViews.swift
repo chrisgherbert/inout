@@ -608,11 +608,22 @@ struct TranscriptTableView: NSViewRepresentable {
         let currentSearchResultChanged = context.coordinator.currentSearchResultRowID != currentSearchResultRowID
         let activeRowChanged = context.coordinator.activeRowID != activeRowID
         let playbackIndicatorChanged = context.coordinator.showsPlaybackIndicator != showsPlaybackIndicator
+        let followsActiveRowChanged = context.coordinator.followsActiveRow != followsActiveRow
+        let searchRevealChanged = context.coordinator.requestedSearchRevealRowID != requestedSearchRevealRowID
+        let selectionModeChanged = tableView.allowsMultipleSelection != allowsMultipleSelection
+        let selectionHighlightChanged = tableView.selectionHighlightStyle != (showsPlaybackIndicator ? .none : .regular)
         let shouldReload = rowsChanged || fontChanged
+        let hasMeaningfulChanges = shouldReload || searchChanged || currentSearchResultChanged || activeRowChanged || playbackIndicatorChanged || followsActiveRowChanged || searchRevealChanged || selectionModeChanged || selectionHighlightChanged
+
+        if !hasMeaningfulChanges {
+            return
+        }
 
         context.coordinator.rows = rows
+        if rowsChanged {
+            context.coordinator.rowIndexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+        }
         context.coordinator.rowsVersion = rowsVersion
-        context.coordinator.rowIndexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
         context.coordinator.fontSize = fontSize
         context.coordinator.activeRowID = activeRowID
         context.coordinator.followsActiveRow = followsActiveRow
