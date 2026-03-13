@@ -11,28 +11,53 @@ final class WaveformRasterHostView: NSView {
         let x: CGFloat
     }
 
+    let backgroundLayer = CALayer()
+    let rulerBaselineLayer = CALayer()
+    let rulerTicksLayer = CAShapeLayer()
+    let rulerLabelsLayer = CALayer()
+    let selectionFillLayer = CALayer()
+    let selectionOutlineLayer = CAShapeLayer()
+    let selectionFlashLayer = CALayer()
+    let startEdgeGlowLayer = CAGradientLayer()
+    let endEdgeGlowLayer = CAGradientLayer()
+    let startBoundaryPulseLayer = CAGradientLayer()
+    let endBoundaryPulseLayer = CAGradientLayer()
     let waveformClipLayer = CALayer()
     let waveformLayer = CALayer()
     let markerContainerLayer = CALayer()
     let playheadLayer = CALayer()
     weak var player: AVPlayer?
+    var clipStartSeconds: Double = 0
+    var clipEndSeconds: Double = 0
     var totalDurationSeconds: Double = 0
     var visibleStartSeconds: Double = 0
     var visibleEndSeconds: Double = 1
     var modelPlayheadSeconds: Double = 0
     var playheadDisplayWidth: CGFloat = 2
+    var isDarkAppearance = false
+    var highlightedClipBoundary: ClipBoundaryHighlight?
     private var livePlaybackDisplayLink: CVDisplayLink?
     private var hasPendingDisplayLinkTick = false
     var onMarkerSeek: ((Double) -> Void)?
     var onInteractiveSeek: ((Double, Bool) -> Void)?
     var onPlayheadDragStateChanged: ((Bool) -> Void)?
     var onPlayheadDragEdgePan: ((CGFloat, CGFloat) -> Void)?
+    var onSetStart: ((Double) -> Void)?
+    var onSetEnd: ((Double) -> Void)?
+    var onHoverChanged: ((Bool) -> Void)?
+    var onPointerTimeChanged: ((Double?) -> Void)?
     var markerHotspots: [MarkerHotspot] = []
     var markerLayersByID: [UUID: CALayer] = [:]
     private var trackingAreaRef: NSTrackingArea?
     private var markerCursorActive = false
     private let markerHitTolerance: CGFloat = 12
     private var isDraggingPlayhead = false
+    private var isDraggingStartEdge = false
+    private var isDraggingEndEdge = false
+    private var isPointerInside = false
+    private var isStartEdgeHovered = false
+    private var isEndEdgeHovered = false
+    private var lastDecorationSignature: Int?
     var dragPlayheadSeconds: Double?
     private var lastDragCommitTimestamp: CFTimeInterval = 0
     private var hoveredMarkerID: UUID? {
@@ -45,6 +70,78 @@ final class WaveformRasterHostView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = false
+        backgroundLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "backgroundColor": NSNull()
+        ]
+        backgroundLayer.isGeometryFlipped = true
+        backgroundLayer.cornerCurve = .continuous
+        backgroundLayer.cornerRadius = UIRadius.small
+        layer?.addSublayer(backgroundLayer)
+        rulerBaselineLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "backgroundColor": NSNull()
+        ]
+        rulerBaselineLayer.isGeometryFlipped = true
+        layer?.addSublayer(rulerBaselineLayer)
+        rulerTicksLayer.actions = [
+            "path": NSNull(),
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "strokeColor": NSNull()
+        ]
+        rulerTicksLayer.isGeometryFlipped = true
+        rulerTicksLayer.fillColor = nil
+        rulerTicksLayer.lineCap = .square
+        layer?.addSublayer(rulerTicksLayer)
+        rulerLabelsLayer.actions = [
+            "sublayers": NSNull(),
+            "bounds": NSNull(),
+            "position": NSNull()
+        ]
+        rulerLabelsLayer.isGeometryFlipped = true
+        layer?.addSublayer(rulerLabelsLayer)
+        selectionFillLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "backgroundColor": NSNull(),
+            "opacity": NSNull(),
+            "cornerRadius": NSNull()
+        ]
+        selectionFillLayer.isGeometryFlipped = true
+        layer?.addSublayer(selectionFillLayer)
+        selectionOutlineLayer.actions = [
+            "path": NSNull(),
+            "strokeColor": NSNull(),
+            "lineWidth": NSNull(),
+            "opacity": NSNull()
+        ]
+        selectionOutlineLayer.isGeometryFlipped = true
+        selectionOutlineLayer.fillColor = nil
+        layer?.addSublayer(selectionOutlineLayer)
+        selectionFlashLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "backgroundColor": NSNull(),
+            "opacity": NSNull(),
+            "cornerRadius": NSNull()
+        ]
+        selectionFlashLayer.isGeometryFlipped = true
+        layer?.addSublayer(selectionFlashLayer)
+        for edgeLayer in [startEdgeGlowLayer, endEdgeGlowLayer, startBoundaryPulseLayer, endBoundaryPulseLayer] {
+            edgeLayer.actions = [
+                "bounds": NSNull(),
+                "position": NSNull(),
+                "colors": NSNull(),
+                "opacity": NSNull()
+            ]
+            edgeLayer.isGeometryFlipped = true
+            edgeLayer.startPoint = CGPoint(x: 0, y: 0.5)
+            edgeLayer.endPoint = CGPoint(x: 1, y: 0.5)
+            layer?.addSublayer(edgeLayer)
+        }
         waveformClipLayer.masksToBounds = true
         waveformClipLayer.cornerCurve = .continuous
         waveformClipLayer.cornerRadius = UIRadius.small
@@ -112,21 +209,92 @@ final class WaveformRasterHostView: NSView {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
     }
 
+    private var rulerHeight: CGFloat { 16 }
+    private var rulerGap: CGFloat { 2 }
+    private var markerTopGutter: CGFloat { 8 }
+    private var markerBottomGutter: CGFloat { 8 }
+    private var timelineVerticalOffset: CGFloat { rulerHeight + rulerGap + markerTopGutter }
+    private var timelineHeight: CGFloat {
+        max(1, bounds.height - rulerHeight - rulerGap - markerTopGutter - markerBottomGutter)
+    }
+    private var edgeHoverProximity: CGFloat { 22 }
+    private var edgeGlowWidth: CGFloat {
+        let selectionWidth = abs(xPosition(for: clipEndSeconds) - xPosition(for: clipStartSeconds))
+        return min(max(selectionWidth * 0.18, 18), 44)
+    }
+
+    private func xPosition(for seconds: Double) -> CGFloat {
+        let local = (seconds - visibleStartSeconds) / visibleDuration
+        return CGFloat(local) * bounds.width
+    }
+
     private func timeValue(forX x: CGFloat) -> Double {
         guard bounds.width > 0 else { return modelPlayheadSeconds }
         let ratio = min(max(0, x / bounds.width), 1.0)
         return min(totalDurationSeconds, max(0, visibleStartSeconds + (Double(ratio) * visibleDuration)))
     }
 
+    func timelineRect() -> CGRect {
+        CGRect(x: 0, y: timelineVerticalOffset, width: bounds.width, height: timelineHeight)
+    }
+
+    private func updateCursorForInteraction() {
+        if hoveredMarkerID != nil {
+            if !markerCursorActive {
+                NSCursor.pointingHand.set()
+                markerCursorActive = true
+            }
+            return
+        }
+        if markerCursorActive {
+            markerCursorActive = false
+        }
+        if isDraggingStartEdge || isDraggingEndEdge {
+            NSCursor.closedHand.set()
+        } else if isStartEdgeHovered || isEndEdgeHovered {
+            NSCursor.resizeLeftRight.set()
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
+    private func updateHoverState(at point: NSPoint) {
+        guard !isDraggingStartEdge, !isDraggingEndEdge else { return }
+        onPointerTimeChanged?(timeValue(forX: point.x))
+        if let marker = markerNear(point: point) {
+            hoveredMarkerID = marker.id
+            isStartEdgeHovered = false
+            isEndEdgeHovered = false
+            updateTimelineDecorationLayers()
+            updateCursorForInteraction()
+            return
+        }
+        hoveredMarkerID = nil
+        let startDistance = abs(point.x - xPosition(for: clipStartSeconds))
+        let endDistance = abs(point.x - xPosition(for: clipEndSeconds))
+        let nearStart = startDistance <= edgeHoverProximity
+        let nearEnd = endDistance <= edgeHoverProximity
+        if nearStart && nearEnd {
+            isStartEdgeHovered = startDistance <= endDistance
+            isEndEdgeHovered = !isStartEdgeHovered
+        } else {
+            isStartEdgeHovered = nearStart
+            isEndEdgeHovered = nearEnd
+        }
+        updateTimelineDecorationLayers()
+        updateCursorForInteraction()
+    }
+
     private func snappedPlayheadFrame(for seconds: Double) -> CGRect {
+        let timelineRect = timelineRect()
         let local = (seconds - visibleStartSeconds) / visibleDuration
-        let x = CGFloat(local) * bounds.width
+        let x = CGFloat(local) * timelineRect.width
         let snappedX = x.rounded()
         return CGRect(
             x: snappedX - (playheadDisplayWidth / 2.0),
-            y: -4,
+            y: timelineRect.minY - 4,
             width: playheadDisplayWidth,
-            height: bounds.height + 8
+            height: timelineRect.height + 8
         )
     }
 
@@ -138,6 +306,205 @@ final class WaveformRasterHostView: NSView {
         let visible = targetFrame.midX >= -6 && targetFrame.midX <= (bounds.width + 6)
         playheadLayer.opacity = visible ? 1.0 : 0.0
         CATransaction.commit()
+    }
+
+    private func rulerMajorStep(for visibleDuration: Double) -> Double {
+        let candidates: [Double] = [
+            1.0 / 30.0, 1.0 / 15.0, 0.1, 0.2, 0.5,
+            1, 2, 5, 10, 15, 30, 60, 120, 300, 600
+        ]
+        for step in candidates where (visibleDuration / step) <= 10 {
+            return step
+        }
+        return candidates.last ?? 600
+    }
+
+    private func rulerMinorDivisions(for majorStep: Double) -> Int {
+        if majorStep >= 60 { return 6 }
+        if majorStep >= 1 { return 5 }
+        return 2
+    }
+
+    private func rulerLabel(for seconds: Double, majorStep: Double) -> String {
+        let clamped = max(0, seconds)
+        let whole = Int(clamped)
+        let hours = whole / 3600
+        let minutes = (whole % 3600) / 60
+        let secs = whole % 60
+        if majorStep < 1 {
+            let centiseconds = Int(((clamped - floor(clamped)) * 100).rounded())
+            if hours > 0 {
+                return String(format: "%d:%02d:%02d.%02d", hours, minutes, secs, centiseconds)
+            }
+            return String(format: "%02d:%02d.%02d", minutes, secs, centiseconds)
+        }
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    private func makeRulerTicks(majorStep: Double, minorStep: Double) -> (minor: [CGFloat], major: [(CGFloat, Double)]) {
+        var minorTicks: [CGFloat] = []
+        var majorTicks: [(CGFloat, Double)] = []
+        let epsilon = minorStep * 0.001
+        var t = floor(visibleStartSeconds / minorStep) * minorStep
+        var guardCount = 0
+        while t <= (visibleEndSeconds + minorStep) && guardCount < 10_000 {
+            let x = xPosition(for: t)
+            if x >= -1 && x <= bounds.width + 1 {
+                let majorRatio = t / majorStep
+                if abs(majorRatio - majorRatio.rounded()) <= epsilon {
+                    majorTicks.append((x, t))
+                } else {
+                    minorTicks.append(x)
+                }
+            }
+            t += minorStep
+            guardCount += 1
+        }
+        return (minorTicks, majorTicks)
+    }
+
+    private func filterLabeledMajorTicks(_ majorTicks: [(CGFloat, Double)], minLabelSpacing: CGFloat = 72) -> [(CGFloat, Double)] {
+        var labeled: [(CGFloat, Double)] = []
+        var lastX = -CGFloat.greatestFiniteMagnitude
+        for tick in majorTicks where tick.0 - lastX >= minLabelSpacing {
+            labeled.append(tick)
+            lastX = tick.0
+        }
+        return labeled
+    }
+
+    func updateTimelineDecorationLayers() {
+        var hasher = Hasher()
+        hasher.combine(Int((bounds.width * 10).rounded()))
+        hasher.combine(Int((bounds.height * 10).rounded()))
+        hasher.combine(Int((visibleStartSeconds * 1000).rounded()))
+        hasher.combine(Int((visibleEndSeconds * 1000).rounded()))
+        hasher.combine(Int((clipStartSeconds * 1000).rounded()))
+        hasher.combine(Int((clipEndSeconds * 1000).rounded()))
+        hasher.combine(isDarkAppearance)
+        hasher.combine(isPointerInside)
+        hasher.combine(isStartEdgeHovered)
+        hasher.combine(isEndEdgeHovered)
+        hasher.combine(isDraggingStartEdge)
+        hasher.combine(isDraggingEndEdge)
+        hasher.combine(highlightedClipBoundary)
+        let decorationSignature = hasher.finalize()
+        guard decorationSignature != lastDecorationSignature else { return }
+        lastDecorationSignature = decorationSignature
+
+        let timelineRect = timelineRect()
+        backgroundLayer.frame = bounds
+        backgroundLayer.backgroundColor = NSColor.black.withAlphaComponent(isPointerInside ? 0.16 : 0.12).cgColor
+
+        rulerBaselineLayer.frame = CGRect(x: 0, y: rulerHeight - 0.8, width: bounds.width, height: 0.8)
+        rulerBaselineLayer.backgroundColor = NSColor.labelColor.withAlphaComponent(0.10).cgColor
+
+        let majorStep = rulerMajorStep(for: visibleDuration)
+        let minorStep = majorStep / Double(max(1, rulerMinorDivisions(for: majorStep)))
+        let ticks = makeRulerTicks(majorStep: majorStep, minorStep: minorStep)
+        let path = CGMutablePath()
+        for tick in ticks.minor {
+            path.move(to: CGPoint(x: tick, y: rulerHeight - 4))
+            path.addLine(to: CGPoint(x: tick, y: rulerHeight - 1))
+        }
+        for tick in ticks.major {
+            path.move(to: CGPoint(x: tick.0, y: rulerHeight - 7))
+            path.addLine(to: CGPoint(x: tick.0, y: rulerHeight - 1))
+        }
+        rulerTicksLayer.frame = bounds
+        rulerTicksLayer.path = path
+        rulerTicksLayer.strokeColor = NSColor.labelColor.withAlphaComponent(0.18).cgColor
+        rulerTicksLayer.lineWidth = 1
+
+        let labeledTicks = filterLabeledMajorTicks(ticks.major)
+        rulerLabelsLayer.sublayers = labeledTicks.map { tick in
+            let label = CATextLayer()
+            label.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            label.string = NSAttributedString(
+                string: rulerLabel(for: tick.1, majorStep: majorStep),
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .mini), weight: .regular),
+                    .foregroundColor: NSColor.labelColor.withAlphaComponent(0.55)
+                ]
+            )
+            label.alignmentMode = .left
+            label.truncationMode = .none
+            label.frame = CGRect(x: tick.0 + 2, y: 0, width: 80, height: rulerHeight)
+            return label
+        }
+
+        let selectionStartX = min(xPosition(for: clipStartSeconds), xPosition(for: clipEndSeconds))
+        let selectionEndX = max(xPosition(for: clipStartSeconds), xPosition(for: clipEndSeconds))
+        let drawSelectionStartX = max(0, selectionStartX)
+        let drawSelectionEndX = min(bounds.width, selectionEndX)
+        let drawSelectionWidth = max(0, drawSelectionEndX - drawSelectionStartX)
+        let hasSelection = drawSelectionWidth > 0.5
+        let selectionFrame = CGRect(x: drawSelectionStartX, y: timelineRect.minY, width: drawSelectionWidth, height: timelineRect.height)
+        selectionFillLayer.frame = selectionFrame
+        selectionFillLayer.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.38).cgColor
+        selectionFillLayer.cornerRadius = UIRadius.small
+        selectionFillLayer.opacity = hasSelection ? 1.0 : 0.0
+
+        selectionOutlineLayer.frame = bounds
+        selectionOutlineLayer.opacity = hasSelection ? 1.0 : 0.0
+        selectionOutlineLayer.lineWidth = (isStartEdgeHovered || isEndEdgeHovered || isDraggingStartEdge || isDraggingEndEdge) ? 3.4 : 3.0
+        selectionOutlineLayer.strokeColor = NSColor.controlAccentColor.withAlphaComponent(isPointerInside ? 0.98 : 0.92).cgColor
+        if hasSelection {
+            selectionOutlineLayer.path = CGPath(roundedRect: selectionFrame, cornerWidth: UIRadius.small, cornerHeight: UIRadius.small, transform: nil)
+        } else {
+            selectionOutlineLayer.path = nil
+        }
+
+        selectionFlashLayer.frame = selectionFrame
+        selectionFlashLayer.cornerRadius = UIRadius.small
+        selectionFlashLayer.backgroundColor = NSColor.white.withAlphaComponent(1.0).cgColor
+        selectionFlashLayer.opacity = hasSelection ? selectionFlashLayer.opacity : 0.0
+
+        let startX = xPosition(for: clipStartSeconds)
+        let endX = xPosition(for: clipEndSeconds)
+        let edgeWidth = edgeGlowWidth
+        let edgeHeight = timelineRect.height
+        let startGlowOpacity: Float = isDraggingStartEdge ? 1.0 : (isStartEdgeHovered ? 0.78 : 0.0)
+        let endGlowOpacity: Float = isDraggingEndEdge ? 1.0 : (isEndEdgeHovered ? 0.78 : 0.0)
+        startEdgeGlowLayer.frame = CGRect(x: startX, y: timelineRect.minY, width: edgeWidth, height: edgeHeight)
+        startEdgeGlowLayer.colors = [NSColor.controlAccentColor.withAlphaComponent(CGFloat(startGlowOpacity)).cgColor, NSColor.clear.cgColor]
+        startEdgeGlowLayer.opacity = hasSelection ? startGlowOpacity : 0
+        endEdgeGlowLayer.frame = CGRect(x: max(startX, endX - edgeWidth), y: timelineRect.minY, width: edgeWidth, height: edgeHeight)
+        endEdgeGlowLayer.colors = [NSColor.clear.cgColor, NSColor.controlAccentColor.withAlphaComponent(CGFloat(endGlowOpacity)).cgColor]
+        endEdgeGlowLayer.opacity = hasSelection ? endGlowOpacity : 0
+
+        let startPulseOpacity: Float = highlightedClipBoundary == .start ? 0.95 : 0
+        let endPulseOpacity: Float = highlightedClipBoundary == .end ? 0.95 : 0
+        startBoundaryPulseLayer.frame = CGRect(x: startX, y: timelineRect.minY, width: edgeWidth, height: edgeHeight)
+        startBoundaryPulseLayer.colors = [NSColor.controlAccentColor.withAlphaComponent(CGFloat(startPulseOpacity)).cgColor, NSColor.clear.cgColor]
+        startBoundaryPulseLayer.opacity = hasSelection ? startPulseOpacity : 0
+        endBoundaryPulseLayer.frame = CGRect(x: max(startX, endX - edgeWidth), y: timelineRect.minY, width: edgeWidth, height: edgeHeight)
+        endBoundaryPulseLayer.colors = [NSColor.clear.cgColor, NSColor.controlAccentColor.withAlphaComponent(CGFloat(endPulseOpacity)).cgColor]
+        endBoundaryPulseLayer.opacity = hasSelection ? endPulseOpacity : 0
+    }
+
+    func triggerSelectionFlash() {
+        let flashIn = CABasicAnimation(keyPath: "opacity")
+        flashIn.fromValue = 0.0
+        flashIn.toValue = 0.52
+        flashIn.duration = 0.14
+        flashIn.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        flashIn.autoreverses = false
+        flashIn.isRemovedOnCompletion = true
+        selectionFlashLayer.add(flashIn, forKey: "selectionFlashIn")
+
+        let flashOut = CABasicAnimation(keyPath: "opacity")
+        flashOut.beginTime = CACurrentMediaTime() + 0.26
+        flashOut.fromValue = 0.52
+        flashOut.toValue = 0.0
+        flashOut.duration = 0.34
+        flashOut.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        flashOut.fillMode = .both
+        flashOut.isRemovedOnCompletion = true
+        selectionFlashLayer.add(flashOut, forKey: "selectionFlashOut")
     }
 
     private func updateInteractiveDrag(at point: NSPoint, forceCommit: Bool) {
@@ -215,60 +582,109 @@ final class WaveformRasterHostView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let marker = markerNear(point: point) {
-            hoveredMarkerID = marker.id
-            if !markerCursorActive {
-                NSCursor.pointingHand.set()
-                markerCursorActive = true
-            }
-        } else if markerCursorActive {
-            hoveredMarkerID = nil
-            NSCursor.arrow.set()
-            markerCursorActive = false
-        }
+        updateHoverState(at: point)
         super.mouseMoved(with: event)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isPointerInside = true
+        onHoverChanged?(true)
+        updateTimelineDecorationLayers()
+        updateHoverState(at: convert(event.locationInWindow, from: nil))
+        super.mouseEntered(with: event)
     }
 
     override func mouseExited(with event: NSEvent) {
         hoveredMarkerID = nil
-        if markerCursorActive {
-            NSCursor.arrow.set()
-            markerCursorActive = false
-        }
+        isPointerInside = false
+        isStartEdgeHovered = false
+        isEndEdgeHovered = false
+        onHoverChanged?(false)
+        onPointerTimeChanged?(nil)
+        updateTimelineDecorationLayers()
+        updateCursorForInteraction()
         super.mouseExited(with: event)
     }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        isDraggingPlayhead = true
-        lastDragCommitTimestamp = 0
-        onPlayheadDragStateChanged?(true)
-
         if let marker = markerNear(point: point) {
+            isDraggingPlayhead = true
+            lastDragCommitTimestamp = 0
+            onPlayheadDragStateChanged?(true)
             dragPlayheadSeconds = marker.seconds
             applyDisplayedPlayhead(marker.seconds)
             onInteractiveSeek?(marker.seconds, true)
             return
         }
 
+        let startDistance = abs(point.x - xPosition(for: clipStartSeconds))
+        let endDistance = abs(point.x - xPosition(for: clipEndSeconds))
+        if startDistance <= edgeHoverProximity && startDistance <= endDistance {
+            isDraggingStartEdge = true
+            isStartEdgeHovered = true
+            isEndEdgeHovered = false
+            updateTimelineDecorationLayers()
+            updateCursorForInteraction()
+            onSetStart?(min(max(0, timeValue(forX: point.x)), clipEndSeconds))
+            return
+        }
+        if endDistance <= edgeHoverProximity {
+            isDraggingEndEdge = true
+            isEndEdgeHovered = true
+            isStartEdgeHovered = false
+            updateTimelineDecorationLayers()
+            updateCursorForInteraction()
+            onSetEnd?(max(min(totalDurationSeconds, timeValue(forX: point.x)), clipStartSeconds))
+            return
+        }
+
+        isDraggingPlayhead = true
+        lastDragCommitTimestamp = 0
+        onPlayheadDragStateChanged?(true)
+
         updateInteractiveDrag(at: point, forceCommit: true)
     }
 
     override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if isDraggingStartEdge {
+            onSetStart?(min(max(0, timeValue(forX: point.x)), clipEndSeconds))
+            onPointerTimeChanged?(timeValue(forX: point.x))
+            return
+        }
+        if isDraggingEndEdge {
+            onSetEnd?(max(min(totalDurationSeconds, timeValue(forX: point.x)), clipStartSeconds))
+            onPointerTimeChanged?(timeValue(forX: point.x))
+            return
+        }
         guard isDraggingPlayhead else {
             super.mouseDragged(with: event)
             return
         }
-        let point = convert(event.locationInWindow, from: nil)
         updateInteractiveDrag(at: point, forceCommit: false)
     }
 
     override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if isDraggingStartEdge {
+            onSetStart?(min(max(0, timeValue(forX: point.x)), clipEndSeconds))
+            isDraggingStartEdge = false
+            updateHoverState(at: point)
+            updateTimelineDecorationLayers()
+            return
+        }
+        if isDraggingEndEdge {
+            onSetEnd?(max(min(totalDurationSeconds, timeValue(forX: point.x)), clipStartSeconds))
+            isDraggingEndEdge = false
+            updateHoverState(at: point)
+            updateTimelineDecorationLayers()
+            return
+        }
         guard isDraggingPlayhead else {
             super.mouseUp(with: event)
             return
         }
-        let point = convert(event.locationInWindow, from: nil)
         updateInteractiveDrag(at: point, forceCommit: true)
         isDraggingPlayhead = false
         dragPlayheadSeconds = nil
@@ -277,9 +693,11 @@ final class WaveformRasterHostView: NSView {
 
     override func layout() {
         super.layout()
-        waveformClipLayer.frame = bounds
+        backgroundLayer.frame = bounds
+        waveformClipLayer.frame = timelineRect()
         waveformLayer.frame = waveformClipLayer.bounds
         markerContainerLayer.frame = bounds
+        updateTimelineDecorationLayers()
     }
 
     private func startLivePlaybackTimerIfNeeded() {
@@ -363,6 +781,7 @@ final class WaveformRasterCoordinator {
     var lastPlayheadCaptureFlashing: Bool = false
     var lastHighlightedMarkerID: UUID?
     var lastMarkerLayoutSignature: Int?
+    var lastQuickExportFlashToken: Int = 0
 
     func setZoomRenderBuckets(_ buckets: [Double]) {
         let normalized = Array(Set(buckets.map { max(1, $0) })).sorted()
@@ -518,6 +937,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let samples: [Double]
     let zoomLevel: Double
     let renderBuckets: [Double]
+    let clipStartSeconds: Double
+    let clipEndSeconds: Double
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
@@ -528,10 +949,16 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let isPlayheadCaptureFlashing: Bool
     let captureMarkers: [CaptureTimelineMarker]
     let highlightedMarkerID: UUID?
+    let highlightedClipBoundary: ClipBoundaryHighlight?
+    let quickExportFlashToken: Int
     let onMarkerSeek: (Double) -> Void
     let onInteractiveSeek: (Double, Bool) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
     let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
+    let onSetStart: (Double) -> Void
+    let onSetEnd: (Double) -> Void
+    let onHoverChanged: (Bool) -> Void
+    let onPointerTimeChanged: (Double?) -> Void
 
     static func == (lhs: WaveformRasterLayerView, rhs: WaveformRasterLayerView) -> Bool {
         lhs.sourceSessionID == rhs.sourceSessionID &&
@@ -539,6 +966,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         lhs.samples.count == rhs.samples.count &&
         abs(lhs.zoomLevel - rhs.zoomLevel) < 0.0001 &&
         lhs.renderBuckets == rhs.renderBuckets &&
+        abs(lhs.clipStartSeconds - rhs.clipStartSeconds) < 0.0001 &&
+        abs(lhs.clipEndSeconds - rhs.clipEndSeconds) < 0.0001 &&
         abs(lhs.totalDurationSeconds - rhs.totalDurationSeconds) < 0.0001 &&
         abs(lhs.visibleStartSeconds - rhs.visibleStartSeconds) < 0.0001 &&
         abs(lhs.visibleEndSeconds - rhs.visibleEndSeconds) < 0.0001 &&
@@ -548,7 +977,9 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         lhs.playheadJumpAnimationToken == rhs.playheadJumpAnimationToken &&
         lhs.isPlayheadCaptureFlashing == rhs.isPlayheadCaptureFlashing &&
         lhs.captureMarkers == rhs.captureMarkers &&
-        lhs.highlightedMarkerID == rhs.highlightedMarkerID
+        lhs.highlightedMarkerID == rhs.highlightedMarkerID &&
+        lhs.highlightedClipBoundary == rhs.highlightedClipBoundary &&
+        lhs.quickExportFlashToken == rhs.quickExportFlashToken
     }
 
     func makeCoordinator() -> WaveformRasterCoordinator {
@@ -561,6 +992,10 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         view.onInteractiveSeek = onInteractiveSeek
         view.onPlayheadDragStateChanged = onPlayheadDragStateChanged
         view.onPlayheadDragEdgePan = onPlayheadDragEdgePan
+        view.onSetStart = onSetStart
+        view.onSetEnd = onSetEnd
+        view.onHoverChanged = onHoverChanged
+        view.onPointerTimeChanged = onPointerTimeChanged
         return view
     }
 
@@ -569,8 +1004,16 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.onInteractiveSeek = onInteractiveSeek
         nsView.onPlayheadDragStateChanged = onPlayheadDragStateChanged
         nsView.onPlayheadDragEdgePan = onPlayheadDragEdgePan
+        nsView.onSetStart = onSetStart
+        nsView.onSetEnd = onSetEnd
+        nsView.onHoverChanged = onHoverChanged
+        nsView.onPointerTimeChanged = onPointerTimeChanged
         nsView.player = player
+        nsView.clipStartSeconds = clipStartSeconds
+        nsView.clipEndSeconds = clipEndSeconds
         nsView.modelPlayheadSeconds = playheadSeconds
+        nsView.isDarkAppearance = isDarkAppearance
+        nsView.highlightedClipBoundary = highlightedClipBoundary
         context.coordinator.setZoomRenderBuckets(renderBuckets)
 
         let didRebuildImage = context.coordinator.rebuildImageIfNeeded(
@@ -578,6 +1021,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             samples: samples,
             isDarkAppearance: isDarkAppearance
         )
+
+        nsView.updateTimelineDecorationLayers()
 
         guard !context.coordinator.cachedSamples.isEmpty else {
             nsView.waveformLayer.contents = nil
@@ -664,9 +1109,10 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
         let visibleDuration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
         let width = nsView.bounds.width
+        let timelineRect = nsView.timelineRect()
         func xPosition(for seconds: Double) -> CGFloat {
             let local = seconds - visibleStartSeconds
-            return CGFloat(local / visibleDuration) * width
+            return CGFloat(local / visibleDuration) * timelineRect.width
         }
         let backingScale = nsView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         let pixel = CGFloat(1.0 / backingScale)
@@ -684,9 +1130,9 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.updateLivePlaybackTimerState()
         let targetPlayheadFrame = CGRect(
             x: playheadX - (playheadWidth / 2.0),
-            y: -4,
+            y: timelineRect.minY - 4,
             width: playheadWidth,
-            height: nsView.bounds.height + 8
+            height: timelineRect.height + 8
         )
         if playheadJumpAnimationToken != context.coordinator.lastPlayheadJumpAnimationToken {
             let fromX = xPosition(for: playheadJumpFromSeconds)
@@ -730,6 +1176,11 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.playheadLayer.shadowRadius = targetShadowRadius
         context.coordinator.lastPlayheadCaptureFlashing = isPlayheadCaptureFlashing
 
+        if quickExportFlashToken != context.coordinator.lastQuickExportFlashToken {
+            nsView.triggerSelectionFlash()
+            context.coordinator.lastQuickExportFlashToken = quickExportFlashToken
+        }
+
         let markerContainer = nsView.markerContainerLayer
         let visibleMarkers = captureMarkers.enumerated().filter { _, marker in
             marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
@@ -756,7 +1207,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
 
                 let pin = CALayer()
                 // Keep pinhead visually above timeline while leaving most of it inside hit-testable bounds.
-                pin.frame = CGRect(x: markerX - (isHighlighted ? 4.5 : 4.0), y: -2, width: isHighlighted ? 9 : 8, height: nsView.bounds.height + 6)
+                pin.frame = CGRect(x: markerX - (isHighlighted ? 4.5 : 4.0), y: timelineRect.minY - 2, width: isHighlighted ? 9 : 8, height: timelineRect.height + 6)
                 pin.setValue(isHighlighted, forKey: "isHighlighted")
 
                 let head = CALayer()
@@ -768,7 +1219,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                 let stem = CALayer()
                 stem.backgroundColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 0.96 : 0.8).cgColor
                 let stemWidth: CGFloat = isHighlighted ? 2.6 : 2.0
-                stem.frame = CGRect(x: (head.bounds.width - stemWidth) / 2.0, y: head.frame.maxY, width: stemWidth, height: nsView.bounds.height + 4)
+                stem.frame = CGRect(x: (head.bounds.width - stemWidth) / 2.0, y: head.frame.maxY, width: stemWidth, height: timelineRect.height + 4)
                 pin.addSublayer(stem)
 
                 pin.shadowColor = NSColor.systemOrange.cgColor
