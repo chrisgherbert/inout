@@ -29,17 +29,18 @@ struct InspectToolView: View {
                 id: segment.id,
                 start: segment.start,
                 startLabel: formatSeconds(segment.start),
-                text: segment.text
+                text: segment.text,
+                normalizedText: normalizedTranscriptSearchText(segment.text)
             )
         }
     }
 
     private var filteredTranscriptRows: [TranscriptDisplayRow] {
-        let query = transcriptSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = normalizedTranscriptSearchText(transcriptSearchText.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !query.isEmpty else {
             return allTranscriptRows
         }
-        return allTranscriptRows.filter { $0.text.localizedCaseInsensitiveContains(query) }
+        return allTranscriptRows.filter { $0.normalizedText.contains(query) }
     }
 
     private func fileIcon(for url: URL) -> NSImage {
@@ -219,6 +220,7 @@ struct InspectToolView: View {
 
                             TranscriptTableView(
                                 rows: filteredTranscriptRows,
+                                rowsVersion: filteredTranscriptRows.count ^ Int(transcriptFontSize * 100),
                                 fontSize: transcriptFontSize
                             )
                             .frame(minHeight: 120, maxHeight: 220)
