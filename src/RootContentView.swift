@@ -203,20 +203,20 @@ private struct URLDownloadSetupSheet: View {
                     .foregroundStyle(Color.accentColor)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Set Up URL Downloads")
+                    Text("Install Web Download Tools")
                         .font(.title2.weight(.semibold))
-                    Text("In/Out can download media from supported sites using a managed Python runtime and yt-dlp. This is downloaded and maintained automatically by the app.")
+                    Text("To download videos from supported sites, In/Out needs to install helper tools the first time you use this feature.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Local files already work without setup.", systemImage: "checkmark.circle.fill")
+                Label("Local media files will work without these tools.", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.secondary)
-                Label("URL downloads need one-time downloader support.", systemImage: "gearshape.2.fill")
+                Label("In/Out will manage these tools for you automatically.", systemImage: "gearshape.2.fill")
                     .foregroundStyle(.secondary)
-                Label("You can repair or update this later in Settings.", systemImage: "wrench.and.screwdriver.fill")
+                Label("You can manage this later in Settings.", systemImage: "wrench.and.screwdriver.fill")
                     .foregroundStyle(.secondary)
             }
             .font(.body)
@@ -247,7 +247,7 @@ private struct URLDownloadSetupSheet: View {
 
                 Spacer()
 
-                Button(model.isUpdatingDownloader ? "Setting Up…" : "Set Up URL Downloads") {
+                Button(model.isUpdatingDownloader ? "Installing…" : "Install Web Download Tools") {
                     model.repairDownloaderSupport()
                 }
                 .buttonStyle(.borderedProminent)
