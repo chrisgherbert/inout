@@ -204,6 +204,10 @@ struct TranscriptTableView: NSViewRepresentable {
         var cachedTranscriptTextWidth: CGFloat = 320
         var lastMeasuredRowsVersion: Int = -1
         var lastMeasuredFontSize: CGFloat = -1
+        var attributedTextCache: [UUID: NSAttributedString] = [:]
+        var lastAttributedCacheRowsVersion: Int = -1
+        var lastAttributedCacheSearchVersion: Int = -1
+        var lastAttributedCacheFontSize: CGFloat = -1
 
         private enum Column {
             static let time = NSUserInterfaceItemIdentifier("transcript_time")
@@ -261,7 +265,7 @@ struct TranscriptTableView: NSViewRepresentable {
             } else {
                 cell.textField?.font = NSFont.systemFont(ofSize: fontSize)
                 cell.textField?.alignment = .left
-                cell.textField?.attributedStringValue = attributedTranscriptText(for: item.text)
+                cell.textField?.attributedStringValue = attributedTranscriptText(for: item)
             }
             return cell
         }
@@ -327,11 +331,17 @@ struct TranscriptTableView: NSViewRepresentable {
 
             for rowIndex in visibleRows.location..<upperBound {
                 guard let textCell = tableView.view(atColumn: 1, row: rowIndex, makeIfNecessary: false) as? NSTableCellView else { continue }
-                textCell.textField?.attributedStringValue = attributedTranscriptText(for: rows[rowIndex].text)
+                textCell.textField?.attributedStringValue = attributedTranscriptText(for: rows[rowIndex])
             }
         }
 
-        private func attributedTranscriptText(for text: String) -> NSAttributedString {
+        private func attributedTranscriptText(for row: TranscriptDisplayRow) -> NSAttributedString {
+            ensureAttributedTextCache()
+            if let cached = attributedTextCache[row.id] {
+                return cached
+            }
+
+            let text = row.text
             let attributed = NSMutableAttributedString(
                 string: text,
                 attributes: [
@@ -341,7 +351,11 @@ struct TranscriptTableView: NSViewRepresentable {
             )
 
             let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !query.isEmpty else { return attributed }
+            guard !query.isEmpty else {
+                let result = NSAttributedString(attributedString: attributed)
+                attributedTextCache[row.id] = result
+                return result
+            }
 
             let nsText = text as NSString
             var searchRange = NSRange(location: 0, length: nsText.length)
@@ -357,7 +371,21 @@ struct TranscriptTableView: NSViewRepresentable {
                 searchRange = NSRange(location: nextLocation, length: nsText.length - nextLocation)
             }
 
-            return attributed
+            let result = NSAttributedString(attributedString: attributed)
+            attributedTextCache[row.id] = result
+            return result
+        }
+
+        private func ensureAttributedTextCache() {
+            guard lastAttributedCacheRowsVersion != rowsVersion ||
+                    lastAttributedCacheSearchVersion != searchVersion ||
+                    abs(lastAttributedCacheFontSize - fontSize) > 0.001 else {
+                return
+            }
+            attributedTextCache.removeAll(keepingCapacity: true)
+            lastAttributedCacheRowsVersion = rowsVersion
+            lastAttributedCacheSearchVersion = searchVersion
+            lastAttributedCacheFontSize = fontSize
         }
 
         func copySelection() {
@@ -604,7 +632,6 @@ struct TranscriptTableView: NSViewRepresentable {
         } else {
             if searchChanged {
                 context.coordinator.refreshVisibleCellContent()
-                tableView.needsDisplay = true
             }
             if searchChanged || currentSearchResultChanged || activeRowChanged || playbackIndicatorChanged {
                 context.coordinator.refreshVisibleRowStates()

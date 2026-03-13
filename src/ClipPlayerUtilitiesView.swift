@@ -79,9 +79,7 @@ struct ClipPlayerUtilityRow: View {
                     .foregroundStyle(.secondary)
             }
             .onHover { hovering in
-                withAnimation(.easeOut(duration: 0.12)) {
-                    isPlayerTimecodeHovered = hovering
-                }
+                isPlayerTimecodeHovered = hovering
             }
 
             HStack {
@@ -101,9 +99,7 @@ struct ClipPlayerUtilityRow: View {
                     .foregroundStyle(.secondary)
                     .help("Zoom Out")
                     .onHover { hovering in
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            isZoomOutHovered = hovering
-                        }
+                        isZoomOutHovered = hovering
                     }
 
                     Slider(
@@ -127,9 +123,7 @@ struct ClipPlayerUtilityRow: View {
                     .foregroundStyle(.secondary)
                     .help("Zoom In")
                     .onHover { hovering in
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            isZoomInHovered = hovering
-                        }
+                        isZoomInHovered = hovering
                     }
 
                     Text(compactZoomDisplayText)

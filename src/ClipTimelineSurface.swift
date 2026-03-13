@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreVideo
 import Foundation
 import SwiftUI
 
@@ -20,7 +21,8 @@ final class WaveformRasterHostView: NSView {
     var visibleEndSeconds: Double = 1
     var modelPlayheadSeconds: Double = 0
     var playheadDisplayWidth: CGFloat = 2
-    private var livePlaybackTimer: Timer?
+    private var livePlaybackDisplayLink: CVDisplayLink?
+    private var hasPendingDisplayLinkTick = false
     var onMarkerSeek: ((Double) -> Void)?
     var onInteractiveSeek: ((Double, Bool) -> Void)?
     var onPlayheadDragStateChanged: ((Bool) -> Void)?
@@ -147,7 +149,7 @@ final class WaveformRasterHostView: NSView {
         let now = CACurrentMediaTime()
         // Keep the visible line immediate, but reduce actual seek pressure while dragging.
         // Lower seek cadence generally feels smoother than trying to seek on every drag event.
-        let commitInterval = 1.0 / 24.0
+        let commitInterval = 1.0 / 30.0
         guard forceCommit || (now - lastDragCommitTimestamp) >= commitInterval else { return }
         lastDragCommitTimestamp = now
         onInteractiveSeek?(target, forceCommit)
@@ -281,17 +283,37 @@ final class WaveformRasterHostView: NSView {
     }
 
     private func startLivePlaybackTimerIfNeeded() {
-        guard livePlaybackTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.tickLivePlayhead()
+        guard livePlaybackDisplayLink == nil else { return }
+
+        var displayLink: CVDisplayLink?
+        let createStatus = CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
+        guard createStatus == kCVReturnSuccess, let displayLink else { return }
+
+        let callbackStatus = CVDisplayLinkSetOutputCallback(
+            displayLink,
+            { _, _, _, _, _, userInfo in
+                guard let userInfo else { return kCVReturnSuccess }
+                let hostView = Unmanaged<WaveformRasterHostView>.fromOpaque(userInfo).takeUnretainedValue()
+                hostView.scheduleLivePlaybackTick()
+                return kCVReturnSuccess
+            },
+            Unmanaged.passUnretained(self).toOpaque()
+        )
+
+        guard callbackStatus == kCVReturnSuccess else {
+            return
         }
-        livePlaybackTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
+
+        livePlaybackDisplayLink = displayLink
+        CVDisplayLinkStart(displayLink)
     }
 
     private func stopLivePlaybackTimer() {
-        livePlaybackTimer?.invalidate()
-        livePlaybackTimer = nil
+        if let livePlaybackDisplayLink {
+            CVDisplayLinkStop(livePlaybackDisplayLink)
+            self.livePlaybackDisplayLink = nil
+        }
+        hasPendingDisplayLinkTick = false
     }
 
     func updateLivePlaybackTimerState() {
@@ -314,6 +336,16 @@ final class WaveformRasterHostView: NSView {
         let current = CMTimeGetSeconds(player.currentTime())
         guard current.isFinite else { return }
         applyDisplayedPlayhead(current)
+    }
+
+    private func scheduleLivePlaybackTick() {
+        guard !hasPendingDisplayLinkTick else { return }
+        hasPendingDisplayLinkTick = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hasPendingDisplayLinkTick = false
+            self.tickLivePlayhead()
+        }
     }
 }
 

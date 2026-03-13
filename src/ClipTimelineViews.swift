@@ -200,7 +200,7 @@ struct ClipToolView: View {
                 if didMove {
                     let now = CACurrentMediaTime()
                     let isPlaying = player.rate != 0
-                    let uiUpdateInterval = isPlaying ? (1.0 / 24.0) : (1.0 / 60.0)
+                    let uiUpdateInterval = isPlaying ? (1.0 / 30.0) : (1.0 / 60.0)
                     if !isPlaying || (now - lastPlaybackUIUpdateTimestamp) >= uiUpdateInterval {
                         playheadSeconds = newPlayhead
                         if Date() >= suppressVisualPlayheadSyncUntil {
@@ -222,7 +222,7 @@ struct ClipToolView: View {
                     let shouldFollow = !isViewportManuallyControlled
                     if shouldFollow {
                         let now = CACurrentMediaTime()
-                        if (now - lastPlaybackFollowUpdateTimestamp) >= (1.0 / 15.0) {
+                        if (now - lastPlaybackFollowUpdateTimestamp) >= (1.0 / 20.0) {
                             updateViewportForPlayhead(shouldFollow: true)
                             lastPlaybackFollowUpdateTimestamp = now
                         }
@@ -349,14 +349,14 @@ struct ClipToolView: View {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
 
         let now = CACurrentMediaTime()
-        let readoutInterval = 1.0 / 24.0
+        let readoutInterval = 1.0 / 30.0
         if forceCommit || (now - lastInteractiveReadoutSyncTimestamp) >= readoutInterval {
             dragVisualPlayheadSeconds = clamped
             playheadVisualSeconds = clamped
             lastInteractiveReadoutSyncTimestamp = now
         }
 
-        let commitInterval = 1.0 / 24.0
+        let commitInterval = 1.0 / 30.0
         guard forceCommit || (now - lastInteractiveSeekCommitTimestamp) >= commitInterval else { return }
         lastInteractiveSeekCommitTimestamp = now
         commitInteractiveSeek(to: clamped)
@@ -714,7 +714,7 @@ struct ClipToolView: View {
 
     private func syncSharedPlayheadStateIfNeeded(_ seconds: Double, force: Bool, updateAlignment: Bool = true) {
         let now = CACurrentMediaTime()
-        let syncInterval = 1.0 / 12.0
+        let syncInterval = 1.0 / 20.0
         guard force || (now - lastSharedPlayheadSyncTimestamp) >= syncInterval else { return }
         if abs(model.clipPlayheadSeconds - seconds) > (1.0 / 240.0) {
             model.clipPlayheadSeconds = seconds
