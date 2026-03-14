@@ -217,6 +217,14 @@ struct CheckBlackFramesApp: App {
             }
 
             CommandMenu("View") {
+                Button("Find in Transcript") {
+                    NotificationCenter.default.post(name: .clipFocusTranscriptSearch, object: focusedModel)
+                }
+                .keyboardShortcut("f", modifiers: [.command])
+                .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil || focusedModel?.hasAudioTrack != true)
+
+                Divider()
+
                 Button("Zoom In Timeline") {
                     NotificationCenter.default.post(name: .clipTimelineZoomIn, object: focusedModel)
                 }

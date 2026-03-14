@@ -64,6 +64,7 @@ struct ClipToolView: View {
     @State private var transcriptSidebarResizeStartGlobalX: CGFloat?
     @State private var liveTranscriptSidebarWidth: CGFloat?
     @State private var clipTranscriptSidebarTimeSeconds: Double = 0
+    @State private var clipTranscriptSearchFocusToken: Int = 0
     @State private var importURLText: String = ""
     @State private var importURLPreset: URLDownloadPreset = .compatibleBest
     @State private var importURLSaveMode: URLDownloadSaveLocationMode = .askEachTime
@@ -1114,7 +1115,7 @@ struct ClipToolView: View {
     }
 
     private func playTranscript(from seconds: Double) {
-        seekPlayer(to: seconds)
+        seekPlayerAndFocusViewport(to: seconds, focusViewport: true)
         springAnimateVisualPlayhead(to: seconds)
         player.playImmediately(atRate: 1.0)
     }
@@ -1216,11 +1217,12 @@ struct ClipToolView: View {
                                 currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
                                 isScrubbing: isPlayheadDragActive,
                                 reduceTransparency: reduceTransparency,
+                                focusSearchFieldToken: clipTranscriptSearchFocusToken,
                                 generateTranscript: {
                                     model.generateTranscriptFromInspect()
                                 },
                                 seekToTranscriptTime: { seconds in
-                                    seekPlayer(to: seconds)
+                                    seekPlayerAndFocusViewport(to: seconds, focusViewport: true)
                                     springAnimateVisualPlayhead(to: seconds)
                                 },
                                 playTranscriptFromTime: { seconds in
@@ -1670,6 +1672,10 @@ struct ClipToolView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomReset, object: model)) { _ in
                 resetTimelineZoom()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipFocusTranscriptSearch, object: model)) { _ in
+                guard showsClipTranscriptSidebar else { return }
+                clipTranscriptSearchFocusToken &+= 1
             }
 
         return step5.onDisappear {

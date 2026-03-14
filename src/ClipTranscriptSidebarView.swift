@@ -9,6 +9,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let currentTimeSeconds: Double
     let isScrubbing: Bool
     let reduceTransparency: Bool
+    let focusSearchFieldToken: Int
     let generateTranscript: () -> Void
     let seekToTranscriptTime: (Double) -> Void
     let playTranscriptFromTime: (Double) -> Void
@@ -22,6 +23,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     @State private var transcriptRowsVersion: Int = 0
     @State private var transcriptSearchVersion: Int = 0
     @State private var settledCurrentTimeSeconds: Double = 0
+    @FocusState private var isSearchFieldFocused: Bool
 
     static func == (lhs: ClipTranscriptSidebarView, rhs: ClipTranscriptSidebarView) -> Bool {
         lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
@@ -33,6 +35,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.hasAudioTrack == rhs.hasAudioTrack &&
         lhs.currentTimeSeconds == rhs.currentTimeSeconds &&
         lhs.isScrubbing == rhs.isScrubbing &&
+        lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.reduceTransparency == rhs.reduceTransparency
     }
 
@@ -197,6 +200,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     TextField("Search transcript", text: $searchText)
                         .textFieldStyle(.roundedBorder)
                         .controlSize(.small)
+                        .focused($isSearchFieldFocused)
                         .onSubmit {
                             navigateSearchMatch(direction: 1)
                         }
@@ -295,6 +299,9 @@ struct ClipTranscriptSidebarView: View, Equatable {
         .onAppear {
             refreshTranscriptRows()
             settledCurrentTimeSeconds = currentTimeSeconds
+        }
+        .onChange(of: focusSearchFieldToken) { _ in
+            isSearchFieldFocused = true
         }
         .onChange(of: transcriptSegments.count) { _ in
             refreshTranscriptRows()

@@ -30,6 +30,15 @@ final class TranscriptNSTableView: NSTableView {
 final class TranscriptNSTableRowView: NSTableRowView {
     private let playbackIndicatorLayer = CALayer()
     private let currentMatchOutlineLayer = CAShapeLayer()
+    private var hoverTrackingArea: NSTrackingArea?
+
+    var isHovered = false {
+        didSet {
+            if oldValue != isHovered {
+                needsDisplay = true
+            }
+        }
+    }
 
     var isSearchMatch = false {
         didSet {
@@ -74,8 +83,39 @@ final class TranscriptNSTableRowView: NSTableRowView {
         updateCurrentMatchOutlineFrame()
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        hoverTrackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        super.mouseEntered(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        super.mouseExited(with: event)
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
+        if isHovered, !isSelected {
+            let hoverRect = bounds.insetBy(dx: 3, dy: 1)
+            let hoverPath = NSBezierPath(roundedRect: hoverRect, xRadius: 6, yRadius: 6)
+            NSColor.labelColor.withAlphaComponent(0.055).setFill()
+            hoverPath.fill()
+        }
         guard isSearchMatch, !isSelected else { return }
         let highlightRect = bounds.insetBy(dx: 3, dy: 1)
         let path = NSBezierPath(roundedRect: highlightRect, xRadius: 6, yRadius: 6)
