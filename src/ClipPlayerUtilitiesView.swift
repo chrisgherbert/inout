@@ -49,6 +49,7 @@ struct ClipPlayerUtilityRow: View {
                     .accessibilityLabel("Capture Frame")
                 }
 
+
                 Spacer()
             }
 

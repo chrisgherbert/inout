@@ -16,6 +16,7 @@ extension Notification.Name {
     static let clipTimelineZoomOut = Notification.Name("clipTimelineZoomOut")
     static let clipTimelineZoomReset = Notification.Name("clipTimelineZoomReset")
     static let clipFocusTranscriptSearch = Notification.Name("clipFocusTranscriptSearch")
+    static let clipToggleTranscriptSidebar = Notification.Name("clipToggleTranscriptSidebar")
 }
 
 private struct WorkspaceModelFocusedValueKey: FocusedValueKey {
