@@ -57,6 +57,7 @@ struct ClipToolView: View {
     @State private var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
     @SceneStorage("clip.playerHeight") private var storedPlayerHeight: Double = 0
     @SceneStorage("clip.transcriptSidebarWidth") private var storedTranscriptSidebarWidth: Double = 380
+    @SceneStorage("clip.transcriptSidebarVisible") private var storedTranscriptSidebarVisible = true
     @State private var playerResizeStartHeight: CGFloat?
     @State private var playerResizeStartGlobalY: CGFloat?
     @State private var livePlayerHeight: CGFloat?
@@ -1091,8 +1092,12 @@ struct ClipToolView: View {
         dragVisualPlayheadSeconds ?? playheadVisualSeconds
     }
 
-    private var showsClipTranscriptSidebar: Bool {
+    private var canShowClipTranscriptSidebar: Bool {
         !isCompactLayout && model.hasAudioTrack
+    }
+
+    private var showsClipTranscriptSidebar: Bool {
+        canShowClipTranscriptSidebar && storedTranscriptSidebarVisible
     }
 
     private var clipTranscriptSidebarMinWidth: CGFloat {
@@ -1221,12 +1226,18 @@ struct ClipToolView: View {
                                 generateTranscript: {
                                     model.generateTranscriptFromInspect()
                                 },
+                                exportTranscript: {
+                                    model.exportTranscriptFromInspect()
+                                },
                                 seekToTranscriptTime: { seconds in
                                     seekPlayerAndFocusViewport(to: seconds, focusViewport: true)
                                     springAnimateVisualPlayhead(to: seconds)
                                 },
                                 playTranscriptFromTime: { seconds in
                                     playTranscript(from: seconds)
+                                },
+                                onCloseTranscript: {
+                                    storedTranscriptSidebarVisible = false
                                 }
                             )
                         )
@@ -1234,16 +1245,32 @@ struct ClipToolView: View {
                     }
                     .frame(width: geometry.size.width, height: currentPlayerHeight, alignment: .topLeading)
                 } else {
-                    InlinePlayerView(player: player)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: currentPlayerHeight)
-                        .transaction { transaction in
-                            transaction.animation = nil
+                    ZStack(alignment: .topTrailing) {
+                        InlinePlayerView(player: player)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: currentPlayerHeight)
+                            .transaction { transaction in
+                                transaction.animation = nil
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+                            .onTapGesture {
+                                dismissTimecodeFieldFocus()
+                            }
+
+                        if canShowClipTranscriptSidebar {
+                            Button {
+                                storedTranscriptSidebarVisible = true
+                            } label: {
+                                Label("Show Transcript", systemImage: "captions.bubble")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .padding(.top, 10)
+                            .padding(.trailing, 10)
+                            .help("Show Transcript")
+                            .accessibilityLabel("Show Transcript")
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-                        .onTapGesture {
-                            dismissTimecodeFieldFocus()
-                        }
+                    }
                 }
             }
             .frame(height: currentPlayerHeight)
@@ -1676,6 +1703,10 @@ struct ClipToolView: View {
             .onReceive(NotificationCenter.default.publisher(for: .clipFocusTranscriptSearch, object: model)) { _ in
                 guard showsClipTranscriptSidebar else { return }
                 clipTranscriptSearchFocusToken &+= 1
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipToggleTranscriptSidebar, object: model)) { _ in
+                guard canShowClipTranscriptSidebar else { return }
+                storedTranscriptSidebarVisible.toggle()
             }
 
         return step5.onDisappear {

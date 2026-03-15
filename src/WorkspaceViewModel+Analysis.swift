@@ -389,6 +389,8 @@ extension WorkspaceViewModel {
             notifyCompletion("Transcript Complete", message: transcriptStatusText)
             completeQueuedJobIfNeeded(nil, status: .completed, message: transcriptStatusText)
         case .failure(.cancelled):
+            transcriptSegments = []
+            hasCachedTranscript = false
             transcriptStatusText = "Transcript generation stopped."
             analyzeStatusText = transcriptStatusText
             uiMessage = transcriptStatusText
@@ -396,6 +398,8 @@ extension WorkspaceViewModel {
             notifyCompletion("Transcript Stopped", message: transcriptStatusText)
             completeQueuedJobIfNeeded(nil, status: .cancelled, message: transcriptStatusText)
         case .failure(.failed(let reason)):
+            transcriptSegments = []
+            hasCachedTranscript = false
             transcriptStatusText = "Transcript failed: \(reason)"
             analyzeStatusText = "Transcript generation failed"
             uiMessage = transcriptStatusText

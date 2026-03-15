@@ -11,8 +11,10 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let generateTranscript: () -> Void
+    let exportTranscript: () -> Void
     let seekToTranscriptTime: (Double) -> Void
     let playTranscriptFromTime: (Double) -> Void
+    let onCloseTranscript: () -> Void
 
     @State private var searchText = ""
     @State private var currentSearchMatchID: UUID?
@@ -80,6 +82,15 @@ struct ClipTranscriptSidebarView: View, Equatable {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return resolvedTranscriptRows }
         return resolvedTranscriptRows
+    }
+
+    private var transcriptRefreshToken: Int {
+        var hasher = Hasher()
+        hasher.combine(transcriptSegments.count)
+        hasher.combine(transcriptSegments.first?.id)
+        hasher.combine(transcriptSegments.last?.id)
+        hasher.combine(transcriptStatusText)
+        return hasher.finalize()
     }
 
     private var activeTranscriptSegmentID: UUID? {
@@ -193,6 +204,14 @@ struct ClipTranscriptSidebarView: View, Equatable {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+                Button(action: onCloseTranscript) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Hide Transcript")
+                .accessibilityLabel("Hide Transcript")
             }
 
             if hasTranscript {
@@ -204,6 +223,12 @@ struct ClipTranscriptSidebarView: View, Equatable {
                         .onSubmit {
                             navigateSearchMatch(direction: 1)
                         }
+
+                    Button("Export…") {
+                        exportTranscript()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
 
                     if !normalizedSearchText.isEmpty {
                         Text(currentSearchMatchDisplayText ?? "0 of \(matchingTranscriptRowCount)")
@@ -303,7 +328,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         .onChange(of: focusSearchFieldToken) { _ in
             isSearchFieldFocused = true
         }
-        .onChange(of: transcriptSegments.count) { _ in
+        .onChange(of: transcriptRefreshToken) { _ in
             refreshTranscriptRows()
         }
         .onChange(of: normalizedSearchText) { _ in

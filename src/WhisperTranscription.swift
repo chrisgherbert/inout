@@ -289,6 +289,45 @@ private func parseTranscriptionSegments(_ jsonData: Data) -> [TranscriptSegment]
     return segmentsOut
 }
 
+private func parseStreamingTranscriptTimestamp(_ raw: String) -> Double? {
+    let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let parts = cleaned.split(separator: ":")
+    guard parts.count == 3,
+          let hours = Double(parts[0]),
+          let minutes = Double(parts[1]),
+          let seconds = Double(parts[2]) else {
+        return nil
+    }
+    return (hours * 3600.0) + (minutes * 60.0) + seconds
+}
+
+private func parseStreamingTranscriptSegment(from line: String) -> TranscriptSegment? {
+    let pattern = #"^\s*\[?(\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*-->\s*(\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\]?\s*(.+?)\s*$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let range = NSRange(line.startIndex..<line.endIndex, in: line)
+    guard let match = regex.firstMatch(in: line, range: range),
+          let startRange = Range(match.range(at: 1), in: line),
+          let endRange = Range(match.range(at: 2), in: line),
+          let textRange = Range(match.range(at: 3), in: line) else {
+        return nil
+    }
+
+    let startText = line[startRange].replacingOccurrences(of: ",", with: ".")
+    let endText = line[endRange].replacingOccurrences(of: ",", with: ".")
+    let text = line[textRange].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty,
+          let start = parseStreamingTranscriptTimestamp(String(startText)),
+          let end = parseStreamingTranscriptTimestamp(String(endText)) else {
+        return nil
+    }
+
+    return TranscriptSegment(
+        start: max(0, start),
+        end: max(start + 0.05, end),
+        text: text
+    )
+}
+
 func computeProfanityHits(
     in transcriptSegments: [TranscriptSegment],
     profanityWords: Set<String>
@@ -314,7 +353,8 @@ func transcribeAudioWithWhisper(
     file: URL,
     shouldCancel: @escaping @Sendable () -> Bool = { false },
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
-    onConsoleOutput: @escaping @Sendable (String, String) -> Void = { _, _ in }
+    onConsoleOutput: @escaping @Sendable (String, String) -> Void = { _, _ in },
+    onTranscriptSegment: @escaping @Sendable (TranscriptSegment) -> Void = { _ in }
 ) -> Result<[TranscriptSegment], DetectionError> {
     if shouldCancel() {
         return .failure(.cancelled)
@@ -366,6 +406,15 @@ func transcribeAudioWithWhisper(
         break
     }
 
+    let whisperOutputHandler: @Sendable (String, String) -> Void = { line, source in
+        onConsoleOutput(line, source)
+        guard source == "whisper",
+              let segment = parseStreamingTranscriptSegment(from: line) else {
+            return
+        }
+        onTranscriptSegment(segment)
+    }
+
     let whisperResult = runSynchronousProcessWithProgress(
         executableURL: whisperURL,
         arguments: [
@@ -378,7 +427,7 @@ func transcribeAudioWithWhisper(
         shouldCancel: shouldCancel,
         progressHandler: progressHandler,
         source: "whisper",
-        onOutputLine: onConsoleOutput
+        onOutputLine: whisperOutputHandler
     )
     switch whisperResult {
     case .success:
@@ -400,7 +449,7 @@ func transcribeAudioWithWhisper(
             shouldCancel: shouldCancel,
             progressHandler: progressHandler,
             source: "whisper",
-            onOutputLine: onConsoleOutput
+            onOutputLine: whisperOutputHandler
         )
 
         switch cpuRetry {

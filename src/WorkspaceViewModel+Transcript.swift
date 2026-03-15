@@ -25,6 +25,8 @@ extension WorkspaceViewModel {
         isAnalyzing = true
         lastActivityState = .running
         wasCancelled = false
+        transcriptSegments = []
+        hasCachedTranscript = false
         analyzeProgress = 0
         clearActivityConsole()
         appendActivityConsole("Transcript generation started", source: "analysis")
@@ -52,6 +54,11 @@ extension WorkspaceViewModel {
                         Task { @MainActor [weak self] in
                             self?.appendActivityConsole(line, source: source)
                         }
+                    },
+                    onTranscriptSegment: { segment in
+                        Task { @MainActor [weak self] in
+                            self?.appendGeneratedTranscriptPreviewSegment(segment)
+                        }
                     }
                 )
             }.value
@@ -60,6 +67,31 @@ extension WorkspaceViewModel {
                 self.applyTranscriptGenerationResult(result)
             }
         }
+    }
+
+    private func appendGeneratedTranscriptPreviewSegment(_ segment: TranscriptSegment) {
+        guard isGeneratingTranscript else { return }
+
+        let alreadyPresent = transcriptSegments.contains {
+            abs($0.start - segment.start) < 0.03 &&
+            abs($0.end - segment.end) < 0.03 &&
+            $0.text == segment.text
+        }
+        guard !alreadyPresent else { return }
+
+        transcriptSegments.append(segment)
+        transcriptSegments.sort { lhs, rhs in
+            if abs(lhs.start - rhs.start) > 0.0001 {
+                return lhs.start < rhs.start
+            }
+            return lhs.end < rhs.end
+        }
+
+        let count = transcriptSegments.count
+        let noun = count == 1 ? "segment" : "segments"
+        transcriptStatusText = "Generating transcript… (\(count) \(noun))"
+        analyzeStatusText = transcriptStatusText
+        uiMessage = transcriptStatusText
     }
 
     private func transcriptPlainText() -> String {
