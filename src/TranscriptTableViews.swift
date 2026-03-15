@@ -81,6 +81,7 @@ final class TranscriptNSTableRowView: NSTableRowView {
         super.layout()
         updatePlaybackIndicatorFrame()
         updateCurrentMatchOutlineFrame()
+        updateHoverStateForCurrentMousePosition()
     }
 
     override func updateTrackingAreas() {
@@ -96,6 +97,7 @@ final class TranscriptNSTableRowView: NSTableRowView {
         )
         addTrackingArea(trackingArea)
         hoverTrackingArea = trackingArea
+        updateHoverStateForCurrentMousePosition()
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -106,6 +108,11 @@ final class TranscriptNSTableRowView: NSTableRowView {
     override func mouseExited(with event: NSEvent) {
         isHovered = false
         super.mouseExited(with: event)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateHoverStateForCurrentMousePosition()
     }
 
     override func drawBackground(in dirtyRect: NSRect) {
@@ -154,6 +161,21 @@ final class TranscriptNSTableRowView: NSTableRowView {
         layer?.addSublayer(currentMatchOutlineLayer)
         updatePlaybackIndicatorFrame()
         updateCurrentMatchOutlineFrame()
+    }
+
+    func updateHoverStateForCurrentMousePosition() {
+        guard let window else {
+            if isHovered {
+                isHovered = false
+            }
+            return
+        }
+
+        let mouseLocation = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let shouldHover = bounds.contains(mouseLocation)
+        if isHovered != shouldHover {
+            isHovered = shouldHover
+        }
     }
 
     private func updatePlaybackIndicatorFrame() {
@@ -218,6 +240,7 @@ struct TranscriptTableView: NSViewRepresentable {
     var currentSearchResultRowID: UUID? = nil
     var requestedSearchRevealRowID: UUID? = nil
     var allowsMultipleSelection = true
+    var onUserScrollActivityChanged: ((Bool) -> Void)? = nil
     var onActivateRow: ((TranscriptDisplayRow) -> Void)? = nil
     var onDoubleActivateRow: ((TranscriptDisplayRow) -> Void)? = nil
 
@@ -248,10 +271,67 @@ struct TranscriptTableView: NSViewRepresentable {
         var lastAttributedCacheRowsVersion: Int = -1
         var lastAttributedCacheSearchVersion: Int = -1
         var lastAttributedCacheFontSize: CGFloat = -1
+        var onUserScrollActivityChanged: ((Bool) -> Void)?
+        weak var observedScrollView: NSScrollView?
+        var boundsDidChangeObserver: NSObjectProtocol?
+        var scrollEndWorkItem: DispatchWorkItem?
+        var isUserScrolling = false
 
         private enum Column {
             static let time = NSUserInterfaceItemIdentifier("transcript_time")
             static let text = NSUserInterfaceItemIdentifier("transcript_text")
+        }
+
+        deinit {
+            if let boundsDidChangeObserver {
+                NotificationCenter.default.removeObserver(boundsDidChangeObserver)
+            }
+            scrollEndWorkItem?.cancel()
+        }
+
+        func configureScrollObservation(for scrollView: NSScrollView) {
+            guard observedScrollView !== scrollView else { return }
+            if let boundsDidChangeObserver {
+                NotificationCenter.default.removeObserver(boundsDidChangeObserver)
+            }
+
+            observedScrollView = scrollView
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            boundsDidChangeObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.handleScrollBoundsChange()
+            }
+        }
+
+        private func handleScrollBoundsChange() {
+            guard isLikelyUserInitiatedScroll else { return }
+
+            if !isUserScrolling {
+                isUserScrolling = true
+                onUserScrollActivityChanged?(true)
+            }
+
+            scrollEndWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.isUserScrolling = false
+                self.onUserScrollActivityChanged?(false)
+            }
+            scrollEndWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: workItem)
+        }
+
+        private var isLikelyUserInitiatedScroll: Bool {
+            guard let event = NSApp.currentEvent else { return false }
+            switch event.type {
+            case .scrollWheel, .leftMouseDragged, .otherMouseDragged:
+                return true
+            default:
+                return false
+            }
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int {
@@ -316,6 +396,7 @@ struct TranscriptTableView: NSViewRepresentable {
                 rowView.isSearchMatch = matchingRowIDs.contains(rows[row].id)
                 rowView.isActivePlaybackRow = showsPlaybackIndicator && rows[row].id == activeRowID
                 rowView.isCurrentSearchResult = rows[row].id == currentSearchResultRowID
+                rowView.updateHoverStateForCurrentMousePosition()
             }
             return rowView
         }
@@ -358,6 +439,7 @@ struct TranscriptTableView: NSViewRepresentable {
                 rowView.isSearchMatch = matchingRowIDs.contains(rows[rowIndex].id)
                 rowView.isActivePlaybackRow = showsPlaybackIndicator && rows[rowIndex].id == activeRowID
                 rowView.isCurrentSearchResult = rows[rowIndex].id == currentSearchResultRowID
+                rowView.updateHoverStateForCurrentMousePosition()
             }
         }
 
@@ -625,6 +707,7 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.searchVersion = searchVersion
         context.coordinator.currentSearchResultRowID = currentSearchResultRowID
         context.coordinator.requestedSearchRevealRowID = requestedSearchRevealRowID
+        context.coordinator.onUserScrollActivityChanged = onUserScrollActivityChanged
         context.coordinator.onActivateRow = onActivateRow
         context.coordinator.onDoubleActivateRow = onDoubleActivateRow
         tableView.target = context.coordinator
@@ -634,6 +717,7 @@ struct TranscriptTableView: NSViewRepresentable {
         clipView.drawsBackground = false
         clipView.documentView = tableView
         scrollView.contentView = clipView
+        context.coordinator.configureScrollObservation(for: scrollView)
         context.coordinator.updateColumnWidths(in: scrollView)
 
         context.coordinator.applyActiveSelectionIfNeeded(forceScroll: true)
@@ -673,6 +757,7 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.searchVersion = searchVersion
         context.coordinator.currentSearchResultRowID = currentSearchResultRowID
         context.coordinator.requestedSearchRevealRowID = requestedSearchRevealRowID
+        context.coordinator.onUserScrollActivityChanged = onUserScrollActivityChanged
         context.coordinator.onActivateRow = onActivateRow
         context.coordinator.onDoubleActivateRow = onDoubleActivateRow
         tableView.allowsMultipleSelection = allowsMultipleSelection

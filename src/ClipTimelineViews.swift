@@ -56,7 +56,7 @@ struct ClipToolView: View {
     @State private var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
     @State private var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
     @SceneStorage("clip.playerHeight") private var storedPlayerHeight: Double = 0
-    @SceneStorage("clip.transcriptSidebarWidth") private var storedTranscriptSidebarWidth: Double = 380
+    @SceneStorage("clip.transcriptSidebarWidth") private var storedTranscriptSidebarWidth: Double = 440
     @SceneStorage("clip.transcriptSidebarVisible") private var storedTranscriptSidebarVisible = true
     @State private var playerResizeStartHeight: CGFloat?
     @State private var playerResizeStartGlobalY: CGFloat?

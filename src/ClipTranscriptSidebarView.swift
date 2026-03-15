@@ -25,6 +25,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     @State private var transcriptRowsVersion: Int = 0
     @State private var transcriptSearchVersion: Int = 0
     @State private var settledCurrentTimeSeconds: Double = 0
+    @State private var isUserScrollingTranscript = false
     @FocusState private var isSearchFieldFocused: Bool
 
     static func == (lhs: ClipTranscriptSidebarView, rhs: ClipTranscriptSidebarView) -> Bool {
@@ -84,6 +85,10 @@ struct ClipTranscriptSidebarView: View, Equatable {
         return resolvedTranscriptRows
     }
 
+    private var suspendsPlaybackHighlightDuringScroll: Bool {
+        isUserScrollingTranscript && !normalizedSearchText.isEmpty
+    }
+
     private var transcriptRefreshToken: Int {
         var hasher = Hasher()
         hasher.combine(transcriptSegments.count)
@@ -93,8 +98,24 @@ struct ClipTranscriptSidebarView: View, Equatable {
         return hasher.finalize()
     }
 
+    private func resolvedRowID(for segment: TranscriptSegment) -> UUID? {
+        if let exactMatch = resolvedTranscriptRows.first(where: { $0.id == segment.id }) {
+            return exactMatch.id
+        }
+
+        if let matchedRow = resolvedTranscriptRows.first(where: {
+            abs($0.start - segment.start) < 0.03 && $0.text == segment.text
+        }) {
+            return matchedRow.id
+        }
+
+        return nil
+    }
+
     private var activeTranscriptSegmentID: UUID? {
         guard !transcriptSegments.isEmpty else { return nil }
+        let trailingGrace: Double = 0.55
+        let leadingGrace: Double = 0.12
         var low = 0
         var high = transcriptSegments.count - 1
 
@@ -106,13 +127,26 @@ struct ClipTranscriptSidebarView: View, Equatable {
             } else if settledCurrentTimeSeconds >= segment.end {
                 low = mid + 1
             } else {
-                return segment.id
+                return resolvedRowID(for: segment)
             }
         }
 
-        if high >= 0, high < transcriptSegments.count, settledCurrentTimeSeconds >= transcriptSegments[high].start {
-            return transcriptSegments[high].id
+        if high >= 0, high < transcriptSegments.count {
+            let previous = transcriptSegments[high]
+            if settledCurrentTimeSeconds >= previous.start,
+               settledCurrentTimeSeconds <= previous.end + trailingGrace {
+                return resolvedRowID(for: previous)
+            }
         }
+
+        if low >= 0, low < transcriptSegments.count {
+            let upcoming = transcriptSegments[low]
+            if settledCurrentTimeSeconds < upcoming.start,
+               upcoming.start - settledCurrentTimeSeconds <= leadingGrace {
+                return resolvedRowID(for: upcoming)
+            }
+        }
+
         return nil
     }
 
@@ -215,47 +249,72 @@ struct ClipTranscriptSidebarView: View, Equatable {
             }
 
             if hasTranscript {
-                HStack(spacing: 8) {
-                    TextField("Search transcript", text: $searchText)
-                        .textFieldStyle(.roundedBorder)
-                        .controlSize(.small)
-                        .focused($isSearchFieldFocused)
-                        .onSubmit {
-                            navigateSearchMatch(direction: 1)
-                        }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        TextField("Search transcript", text: $searchText)
+                            .textFieldStyle(.roundedBorder)
+                            .controlSize(.small)
+                            .focused($isSearchFieldFocused)
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                            .layoutPriority(1)
+                            .padding(.trailing, normalizedSearchText.isEmpty ? 0 : 22)
+                            .overlay(alignment: .trailing) {
+                                if !normalizedSearchText.isEmpty {
+                                    Button {
+                                        searchText = ""
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.trailing, 8)
+                                    .help("Clear Search")
+                                    .accessibilityLabel("Clear Search")
+                                }
+                            }
+                            .onSubmit {
+                                navigateSearchMatch(direction: 1)
+                            }
 
-                    Button("Export…") {
-                        exportTranscript()
+                        Button("Export…") {
+                            exportTranscript()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
 
                     if !normalizedSearchText.isEmpty {
-                        Text(currentSearchMatchDisplayText ?? "0 of \(matchingTranscriptRowCount)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(minWidth: 54, alignment: .trailing)
+                        HStack(spacing: 8) {
+                            Text(currentSearchMatchDisplayText ?? "0 of \(matchingTranscriptRowCount)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
 
-                        HStack(spacing: 4) {
-                            Button {
-                                navigateSearchMatch(direction: -1)
-                            } label: {
-                                Image(systemName: "chevron.up")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(matchingTranscriptRowsInOrder.isEmpty)
-                            .help("Previous match")
+                            HStack(spacing: 4) {
+                                Button {
+                                    navigateSearchMatch(direction: -1)
+                                } label: {
+                                    Image(systemName: "chevron.up")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(matchingTranscriptRowsInOrder.isEmpty)
+                                .help("Previous match")
 
-                            Button {
-                                navigateSearchMatch(direction: 1)
-                            } label: {
-                                Image(systemName: "chevron.down")
+                                Button {
+                                    navigateSearchMatch(direction: 1)
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(matchingTranscriptRowsInOrder.isEmpty)
+                                .help("Next match")
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(matchingTranscriptRowsInOrder.isEmpty)
-                            .help("Next match")
+
+                            Spacer(minLength: 0)
                         }
                     }
                 }
@@ -264,15 +323,18 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     rows: displayedTranscriptRows,
                     rowsVersion: transcriptRowsVersion,
                     fontSize: 13,
-                    activeRowID: activeTranscriptSegmentID,
-                    followsActiveRow: !isScrubbing,
-                    showsPlaybackIndicator: showsPlaybackIndicator,
+                    activeRowID: suspendsPlaybackHighlightDuringScroll ? nil : activeTranscriptSegmentID,
+                    followsActiveRow: !isScrubbing && !isUserScrollingTranscript,
+                    showsPlaybackIndicator: showsPlaybackIndicator && !suspendsPlaybackHighlightDuringScroll,
                     searchQuery: normalizedSearchText,
                     matchingRowIDs: matchingTranscriptRowIDs,
                     searchVersion: transcriptSearchVersion,
                     currentSearchResultRowID: currentSearchMatchID,
                     requestedSearchRevealRowID: requestedSearchRevealRowID,
                     allowsMultipleSelection: false,
+                    onUserScrollActivityChanged: { active in
+                        isUserScrollingTranscript = active
+                    },
                     onActivateRow: { row in
                         if matchingTranscriptRowIDs.contains(row.id) {
                             currentSearchMatchID = row.id
@@ -335,11 +397,16 @@ struct ClipTranscriptSidebarView: View, Equatable {
             refreshSearchMatches()
         }
         .onChange(of: currentTimeSeconds) { newValue in
-            guard !isScrubbing else { return }
+            guard !isScrubbing, !suspendsPlaybackHighlightDuringScroll else { return }
             settledCurrentTimeSeconds = newValue
         }
         .onChange(of: isScrubbing) { newValue in
             if !newValue {
+                settledCurrentTimeSeconds = currentTimeSeconds
+            }
+        }
+        .onChange(of: suspendsPlaybackHighlightDuringScroll) { suspended in
+            if !suspended, !isScrubbing {
                 settledCurrentTimeSeconds = currentTimeSeconds
             }
         }
