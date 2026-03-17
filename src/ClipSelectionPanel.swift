@@ -79,12 +79,24 @@ struct ClipSelectionPanel: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if isWaveformLoading {
-                HStack {
-                    ProgressView()
-                    Text("Generating waveform…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                WaveformLoadingPlaceholder(
+                    isCompactLayout: isCompactLayout,
+                    reduceTransparency: reduceTransparency
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: isCompactLayout ? 68 : 82)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .padding(.bottom, -6)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { onTimelineWidthChanged(geo.size.width) }
+                            .onChange(of: geo.size.width) { width in
+                                onTimelineWidthChanged(width)
+                            }
+                    }
+                )
             } else if !waveformSamples.isEmpty {
                 WaveformView(
                     player: player,
@@ -197,5 +209,71 @@ struct ClipSelectionPanel: View, Equatable {
 
         }
         .onHover(perform: onTimelineHoverChanged)
+    }
+}
+
+private struct WaveformLoadingPlaceholder: View {
+    let isCompactLayout: Bool
+    let reduceTransparency: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .center) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(reduceTransparency ? 0.045 : 0.04),
+                                Color.white.opacity(reduceTransparency ? 0.03 : 0.022)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.05), lineWidth: 0.6)
+                    )
+
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: isCompactLayout ? 15 : 17, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.95))
+                    Text("Generating waveform…")
+                        .font(.system(size: isCompactLayout ? 12.5 : 13.5, weight: .semibold))
+                        .foregroundStyle(.primary.opacity(0.88))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.black.opacity(reduceTransparency ? 0.16 : 0.22))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.06), lineWidth: 0.6)
+                )
+            }
+            .frame(height: geo.size.height)
+            .overlay {
+                TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+                    let elapsed = context.date.timeIntervalSinceReferenceDate
+                    let pulse = 0.5 + (0.5 * sin(elapsed * .pi * 1.45))
+                    let backgroundOpacity = reduceTransparency ? (0.024 + (pulse * 0.024)) : (0.02 + (pulse * 0.032))
+                    let borderOpacity = reduceTransparency ? (0.12 + (pulse * 0.11)) : (0.1 + (pulse * 0.16))
+
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.white.opacity(backgroundOpacity))
+
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(borderOpacity), lineWidth: 1.1)
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .drawingGroup(opaque: false, colorMode: .linear)
+        .allowsHitTesting(false)
     }
 }
