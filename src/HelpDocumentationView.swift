@@ -15,6 +15,13 @@ struct HelpDocumentationView: View {
 
     private let sections: [HelpSection] = [
         HelpSection(
+            title: "System Requirements",
+            items: [
+                "In/Out requires macOS 13 Ventura or later.",
+                "Apple Silicon is required for the current app build."
+            ]
+        ),
+        HelpSection(
             title: "Getting Started",
             items: [
                 "Choose a media file with Choose Media, or drag a file into the main window.",
@@ -29,6 +36,7 @@ struct HelpDocumentationView: View {
                 "Create new clips by setting In/Out points on the timeline.",
                 "Set points with drag handles, direct timecode entry, keyboard shortcuts, or playhead actions.",
                 "Add timeline markers with M, then use Up/Down arrows to jump to previous/next marker (In/Out points are included).",
+                "If a transcript is available, you can use the transcript sidebar to search, follow playback, and jump directly to spoken moments.",
                 "Choose Fast, Advanced, or Audio Only export modes depending on speed and compatibility needs.",
                 "In Advanced mode, enable Auto-generate and burn captions (Whisper) to add hardcoded subtitles.",
                 "When caption burn-in is enabled, a per-export caption style picker appears next to the toggle.",
@@ -55,6 +63,7 @@ struct HelpDocumentationView: View {
             title: "Inspect Tab",
             items: [
                 "Review source metadata such as duration, bitrate, codec, frame rate, and resolution.",
+                "Generate, search, and export transcripts from the Inspect workflow.",
                 "Use Show in Finder to jump to the current source file.",
                 "Use this tab as a quick technical snapshot before export or analysis."
             ]
@@ -66,10 +75,11 @@ struct HelpDocumentationView: View {
         HelpSection(
             title: "Bundled Components",
             items: [
-                "ffmpeg is bundled for conversion/export workflows.",
+                "ffmpeg and ffprobe are bundled for export, conversion, and media inspection workflows.",
                 "yt-dlp is bundled for URL import/download workflows.",
-                "whisper-cli + bundled model are used for profanity detection and caption generation.",
-                "If Whisper resources are missing, rebuild with bundled resources."
+                "A managed Python runtime is installed automatically when URL download support is set up.",
+                "whisper-cli plus a bundled model are used for transcripts, profanity detection, and caption generation.",
+                "If bundled transcription resources are missing, transcript and caption features will be unavailable."
             ]
         )
     ]

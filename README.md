@@ -7,6 +7,11 @@ Simple clipping, converting, and QA testing of video/audio files on macOS.
 - Website: [https://chrisgherbert.github.io/inout/](https://chrisgherbert.github.io/inout/)
 - Releases: [GitHub Releases](https://github.com/chrisgherbert/inout/releases)
 
+### System Requirements
+
+- macOS 13 Ventura or later
+- Apple Silicon Mac
+
 ### What It Does
 
 - Clip media with In/Out points and marker navigation
@@ -47,7 +52,10 @@ Simple clipping, converting, and QA testing of video/audio files on macOS.
 - Xcode Command Line Tools (`xcode-select --install`)
 - Bundled runtime tools for release:
   - `ffmpeg`
+  - `ffprobe`
+  - `yt-dlp`
   - `whisper-cli` + model
+  - managed Python runtime release asset for downloader support
 
 ### Local Build
 
