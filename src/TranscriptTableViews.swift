@@ -274,8 +274,11 @@ struct TranscriptTableView: NSViewRepresentable {
         var onUserScrollActivityChanged: ((Bool) -> Void)?
         weak var observedScrollView: NSScrollView?
         var boundsDidChangeObserver: NSObjectProtocol?
+        var liveScrollStartObserver: NSObjectProtocol?
+        var liveScrollEndObserver: NSObjectProtocol?
         var scrollEndWorkItem: DispatchWorkItem?
         var isUserScrolling = false
+        var lastObservedClipBounds: NSRect = .zero
 
         private enum Column {
             static let time = NSUserInterfaceItemIdentifier("transcript_time")
@@ -286,6 +289,12 @@ struct TranscriptTableView: NSViewRepresentable {
             if let boundsDidChangeObserver {
                 NotificationCenter.default.removeObserver(boundsDidChangeObserver)
             }
+            if let liveScrollStartObserver {
+                NotificationCenter.default.removeObserver(liveScrollStartObserver)
+            }
+            if let liveScrollEndObserver {
+                NotificationCenter.default.removeObserver(liveScrollEndObserver)
+            }
             scrollEndWorkItem?.cancel()
         }
 
@@ -294,9 +303,16 @@ struct TranscriptTableView: NSViewRepresentable {
             if let boundsDidChangeObserver {
                 NotificationCenter.default.removeObserver(boundsDidChangeObserver)
             }
+            if let liveScrollStartObserver {
+                NotificationCenter.default.removeObserver(liveScrollStartObserver)
+            }
+            if let liveScrollEndObserver {
+                NotificationCenter.default.removeObserver(liveScrollEndObserver)
+            }
 
             observedScrollView = scrollView
             scrollView.contentView.postsBoundsChangedNotifications = true
+            lastObservedClipBounds = scrollView.contentView.bounds
             boundsDidChangeObserver = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: scrollView.contentView,
@@ -304,24 +320,33 @@ struct TranscriptTableView: NSViewRepresentable {
             ) { [weak self] _ in
                 self?.handleScrollBoundsChange()
             }
+            liveScrollStartObserver = NotificationCenter.default.addObserver(
+                forName: NSScrollView.willStartLiveScrollNotification,
+                object: scrollView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.beginUserScroll()
+            }
+            liveScrollEndObserver = NotificationCenter.default.addObserver(
+                forName: NSScrollView.didEndLiveScrollNotification,
+                object: scrollView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.endUserScroll()
+            }
         }
 
         private func handleScrollBoundsChange() {
-            guard isLikelyUserInitiatedScroll else { return }
+            guard let scrollView = observedScrollView else { return }
+            let newBounds = scrollView.contentView.bounds
+            defer { lastObservedClipBounds = newBounds }
 
-            if !isUserScrolling {
-                isUserScrolling = true
-                onUserScrollActivityChanged?(true)
-            }
-
-            scrollEndWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.isUserScrolling = false
-                self.onUserScrollActivityChanged?(false)
-            }
-            scrollEndWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: workItem)
+            let originDeltaY = abs(newBounds.origin.y - lastObservedClipBounds.origin.y)
+            let originDeltaX = abs(newBounds.origin.x - lastObservedClipBounds.origin.x)
+            guard originDeltaY > 0.5 || originDeltaX > 0.5 else { return }
+            guard isUserScrolling || isLikelyUserInitiatedScroll else { return }
+            beginUserScroll()
+            scheduleUserScrollEnd()
         }
 
         private var isLikelyUserInitiatedScroll: Bool {
@@ -332,6 +357,31 @@ struct TranscriptTableView: NSViewRepresentable {
             default:
                 return false
             }
+        }
+
+        private func beginUserScroll() {
+            scrollEndWorkItem?.cancel()
+            if !isUserScrolling {
+                isUserScrolling = true
+                onUserScrollActivityChanged?(true)
+            }
+        }
+
+        private func scheduleUserScrollEnd() {
+            scrollEndWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.endUserScroll()
+            }
+            scrollEndWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: workItem)
+        }
+
+        private func endUserScroll() {
+            scrollEndWorkItem?.cancel()
+            scrollEndWorkItem = nil
+            guard isUserScrolling else { return }
+            isUserScrolling = false
+            onUserScrollActivityChanged?(false)
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int {
@@ -585,7 +635,8 @@ struct TranscriptTableView: NSViewRepresentable {
 
             if let requestedSearchRevealRowID,
                let searchRowIndex = rowIndexByID[requestedSearchRevealRowID],
-               (searchRevealChanged || forceScroll) {
+               (searchRevealChanged || forceScroll),
+               !isUserScrolling {
                 smoothlyRevealRow(searchRowIndex, in: tableView)
             }
             lastAppliedActiveRowID = activeRowID

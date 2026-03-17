@@ -1126,12 +1126,6 @@ struct ClipToolView: View {
     }
 
     private var currentPlayerAspectRatio: CGFloat {
-        if let item = player.currentItem {
-            let presentationSize = item.presentationSize
-            if presentationSize.width > 0, presentationSize.height > 0 {
-                return max(0.25, presentationSize.width / presentationSize.height)
-            }
-        }
         if let resolution = model.sourceInfo?.resolution {
             let sanitized = resolution
                 .replacingOccurrences(of: "×", with: "x")
@@ -1142,6 +1136,12 @@ struct ClipToolView: View {
                let height = Double(components[1]),
                width > 0, height > 0 {
                 return max(0.25, CGFloat(width / height))
+            }
+        }
+        if let item = player.currentItem {
+            let presentationSize = item.presentationSize
+            if presentationSize.width > 0, presentationSize.height > 0 {
+                return max(0.25, presentationSize.width / presentationSize.height)
             }
         }
         return 16.0 / 9.0
@@ -1220,6 +1220,7 @@ struct ClipToolView: View {
                                 isGeneratingTranscript: model.isGeneratingTranscript,
                                 hasAudioTrack: model.hasAudioTrack,
                                 currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
+                                isPlaying: player.rate != 0,
                                 isScrubbing: isPlayheadDragActive,
                                 reduceTransparency: reduceTransparency,
                                 focusSearchFieldToken: clipTranscriptSearchFocusToken,

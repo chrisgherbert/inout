@@ -7,6 +7,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let isGeneratingTranscript: Bool
     let hasAudioTrack: Bool
     let currentTimeSeconds: Double
+    let isPlaying: Bool
     let isScrubbing: Bool
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
@@ -37,6 +38,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
         lhs.hasAudioTrack == rhs.hasAudioTrack &&
         lhs.currentTimeSeconds == rhs.currentTimeSeconds &&
+        lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.reduceTransparency == rhs.reduceTransparency
@@ -87,6 +89,10 @@ struct ClipTranscriptSidebarView: View, Equatable {
 
     private var suspendsPlaybackHighlightDuringScroll: Bool {
         isUserScrollingTranscript && !normalizedSearchText.isEmpty
+    }
+
+    private var followsPlaybackRow: Bool {
+        !isScrubbing && !isUserScrollingTranscript && (normalizedSearchText.isEmpty || isPlaying)
     }
 
     private var transcriptRefreshToken: Int {
@@ -223,8 +229,17 @@ struct ClipTranscriptSidebarView: View, Equatable {
 
         let targetRow = matchingTranscriptRowsInOrder[targetIndex]
         currentSearchMatchID = targetRow.id
-        requestedSearchRevealRowID = targetRow.id
+        requestSearchReveal(for: targetRow.id)
         seekToTranscriptTime(targetRow.start)
+    }
+
+    private func requestSearchReveal(for rowID: UUID) {
+        requestedSearchRevealRowID = rowID
+        DispatchQueue.main.async {
+            if requestedSearchRevealRowID == rowID {
+                requestedSearchRevealRowID = nil
+            }
+        }
     }
 
     var body: some View {
@@ -324,7 +339,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     rowsVersion: transcriptRowsVersion,
                     fontSize: 13,
                     activeRowID: suspendsPlaybackHighlightDuringScroll ? nil : activeTranscriptSegmentID,
-                    followsActiveRow: !isScrubbing && !isUserScrollingTranscript,
+                    followsActiveRow: followsPlaybackRow,
                     showsPlaybackIndicator: showsPlaybackIndicator && !suspendsPlaybackHighlightDuringScroll,
                     searchQuery: normalizedSearchText,
                     matchingRowIDs: matchingTranscriptRowIDs,
@@ -338,14 +353,14 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     onActivateRow: { row in
                         if matchingTranscriptRowIDs.contains(row.id) {
                             currentSearchMatchID = row.id
-                            requestedSearchRevealRowID = row.id
+                            requestSearchReveal(for: row.id)
                         }
                         seekToTranscriptTime(row.start)
                     },
                     onDoubleActivateRow: { row in
                         if matchingTranscriptRowIDs.contains(row.id) {
                             currentSearchMatchID = row.id
-                            requestedSearchRevealRowID = row.id
+                            requestSearchReveal(for: row.id)
                         }
                         playTranscriptFromTime(row.start)
                     }
