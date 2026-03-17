@@ -8,6 +8,7 @@ extension WorkspaceViewModel {
 
     func runProcess(executableURL: URL, arguments: [String]) async -> String? {
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: arguments)
+        let captureConsoleOutput = showActivityConsole
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -18,11 +19,14 @@ extension WorkspaceViewModel {
             process.standardError = stderr
             process.standardOutput = stdout
 
-            Task { @MainActor [weak self] in
-                self?.appendActivityConsole("$ \(commandLine)", source: executableURL.lastPathComponent)
+            if captureConsoleOutput {
+                Task { @MainActor [weak self] in
+                    self?.appendActivityConsole("$ \(commandLine)", source: executableURL.lastPathComponent)
+                }
             }
 
             let streamToConsole: (Data, String) -> Void = { data, source in
+                guard captureConsoleOutput else { return }
                 guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
                 for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
                     let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -85,6 +89,7 @@ extension WorkspaceViewModel {
         progressRange: ClosedRange<Double>
     ) async -> String? {
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: arguments)
+        let captureConsoleOutput = showActivityConsole
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -95,8 +100,10 @@ extension WorkspaceViewModel {
             process.standardError = stderr
             process.standardOutput = stdout
 
-            Task { @MainActor [weak self] in
-                self?.appendActivityConsole("$ \(commandLine)", source: "whisper")
+            if captureConsoleOutput {
+                Task { @MainActor [weak self] in
+                    self?.appendActivityConsole("$ \(commandLine)", source: "whisper")
+                }
             }
 
             func emitProgress(_ progress: Double) {
@@ -114,8 +121,10 @@ extension WorkspaceViewModel {
                 for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
                     let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !line.isEmpty else { continue }
-                    Task { @MainActor [weak self] in
-                        self?.appendActivityConsole(line, source: source)
+                    if captureConsoleOutput {
+                        Task { @MainActor [weak self] in
+                            self?.appendActivityConsole(line, source: source)
+                        }
                     }
                     if let progress = extractPercentProgress(from: line) {
                         emitProgress(progress)
@@ -178,6 +187,7 @@ extension WorkspaceViewModel {
     ) async -> String? {
         let ffmpegArguments = arguments + ["-progress", "pipe:1", "-nostats"]
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: ffmpegArguments)
+        let captureConsoleOutput = showActivityConsole
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -193,8 +203,10 @@ extension WorkspaceViewModel {
             var stderrBuffer = Data()
             var stderrLines: [String] = []
 
-            Task { @MainActor [weak self] in
-                self?.appendActivityConsole("$ \(commandLine)", source: "ffmpeg")
+            if captureConsoleOutput {
+                Task { @MainActor [weak self] in
+                    self?.appendActivityConsole("$ \(commandLine)", source: "ffmpeg")
+                }
             }
 
             let emitProgress: (_ progress: Double, _ allowComplete: Bool) -> Void = { [weak self] progress, allowComplete in
@@ -214,6 +226,7 @@ extension WorkspaceViewModel {
             }
 
             let emitConsoleLine: (String, String) -> Void = { line, source in
+                guard captureConsoleOutput else { return }
                 Task { @MainActor [weak self] in
                     self?.appendActivityConsole(line, source: source)
                 }
@@ -357,6 +370,7 @@ extension WorkspaceViewModel {
     ) async -> (downloadedPath: String?, error: String?) {
         let finalArguments = preArguments + arguments
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: finalArguments)
+        let captureConsoleOutput = showActivityConsole
         return await withCheckedContinuation { (continuation: CheckedContinuation<(downloadedPath: String?, error: String?), Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -385,8 +399,10 @@ extension WorkspaceViewModel {
                 return upper.hasPrefix("WARNING:") || upper.hasPrefix("[WARNING]")
             }
 
-            Task { @MainActor [weak self] in
-                self?.appendActivityConsole("$ \(commandLine)", source: "yt-dlp")
+            if captureConsoleOutput {
+                Task { @MainActor [weak self] in
+                    self?.appendActivityConsole("$ \(commandLine)", source: "yt-dlp")
+                }
             }
 
             let emitProgress: (Double) -> Void = { [weak self] progress in
@@ -401,6 +417,7 @@ extension WorkspaceViewModel {
             }
 
             let emitConsoleLine: (String, String) -> Void = { line, source in
+                guard captureConsoleOutput else { return }
                 Task { @MainActor [weak self] in
                     self?.appendActivityConsole(line, source: source)
                 }

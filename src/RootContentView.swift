@@ -21,6 +21,14 @@ struct EmptyToolView: View {
 struct WindowAccessor: NSViewRepresentable {
     let onResolve: (NSWindow) -> Void
 
+    final class Coordinator {
+        var lastResolvedWindowID: ObjectIdentifier?
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> NSView {
         NSView()
     }
@@ -28,6 +36,11 @@ struct WindowAccessor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             guard let window = nsView.window else { return }
+            let windowID = ObjectIdentifier(window)
+            if context.coordinator.lastResolvedWindowID == windowID {
+                return
+            }
+            context.coordinator.lastResolvedWindowID = windowID
             onResolve(window)
         }
     }

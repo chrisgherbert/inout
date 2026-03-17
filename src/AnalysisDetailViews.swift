@@ -95,7 +95,9 @@ struct InlinePlayerView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: AVPlayerView, context: Context) {
-        nsView.player = player
+        if nsView.player !== player {
+            nsView.player = player
+        }
     }
 }
 

@@ -1385,6 +1385,10 @@ struct ClipToolView: View {
         }
     }
 
+    private var shouldDriveClipTranscriptSidebarTime: Bool {
+        showsClipTranscriptSidebar && model.hasAudioTrack
+    }
+
     private var timelineControlsSection: some View {
         ClipTimelineControlsPanel(
             reduceTransparency: reduceTransparency,
@@ -1636,7 +1640,9 @@ struct ClipToolView: View {
             installScrollMonitor()
             installMouseDownMonitor()
             installMiddleMousePanMonitor()
-            clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
+            if shouldDriveClipTranscriptSidebarTime {
+                clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
+            }
         }
 
         let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
@@ -1655,11 +1661,16 @@ struct ClipToolView: View {
 
         let step4 = step3
             .onChange(of: displayedPlayheadSeconds) { newValue in
-                guard !isPlayheadDragActive else { return }
+                guard shouldDriveClipTranscriptSidebarTime, !isPlayheadDragActive else { return }
                 clipTranscriptSidebarTimeSeconds = newValue
             }
             .onChange(of: isPlayheadDragActive) { active in
-                if !active {
+                if shouldDriveClipTranscriptSidebarTime, !active {
+                    clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
+                }
+            }
+            .onChange(of: storedTranscriptSidebarVisible) { isVisible in
+                if isVisible && model.hasAudioTrack {
                     clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
                 }
             }

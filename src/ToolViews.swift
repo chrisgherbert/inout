@@ -2,6 +2,22 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+private struct LazyToolTabContent<Content: View>: View {
+    let isActive: Bool
+    let content: () -> Content
+
+    var body: some View {
+        Group {
+            if isActive {
+                content()
+            } else {
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
 struct SourceHeaderView: View {
     @ObservedObject var model: WorkspaceViewModel
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -82,66 +98,74 @@ struct ToolContentView: View {
 
     var body: some View {
         TabView(selection: $model.selectedTool) {
-            Group {
-                if model.sourceURL != nil {
-                    ScrollView {
+            LazyToolTabContent(isActive: model.selectedTool == .clip) {
+                Group {
+                    if model.sourceURL != nil {
+                        ScrollView {
+                            ClipToolView(model: model, isCompactLayout: isCompactLayout)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id("clip-\(model.sourceSessionID.uuidString)")
+                        }
+                        .scrollIndicators(.automatic)
+                    } else {
                         ClipToolView(model: model, isCompactLayout: isCompactLayout)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                             .id("clip-\(model.sourceSessionID.uuidString)")
                     }
-                    .scrollIndicators(.automatic)
-                } else {
-                    ClipToolView(model: model, isCompactLayout: isCompactLayout)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .id("clip-\(model.sourceSessionID.uuidString)")
                 }
             }
             .padding(10)
             .tabItem { Text(WorkspaceTool.clip.rawValue) }
             .tag(WorkspaceTool.clip)
 
-            ScrollView {
-                AnalyzeToolView(model: model, isCompactLayout: isCompactLayout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .id("analyze-\(model.sourceSessionID.uuidString)")
+            LazyToolTabContent(isActive: model.selectedTool == .analyze) {
+                ScrollView {
+                    AnalyzeToolView(model: model, isCompactLayout: isCompactLayout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id("analyze-\(model.sourceSessionID.uuidString)")
+                }
             }
             .padding(10)
             .scrollIndicators(.automatic)
             .tabItem { Text(WorkspaceTool.analyze.rawValue) }
             .tag(WorkspaceTool.analyze)
 
-            ScrollView {
-                ConvertToolView(model: model, isCompactLayout: isCompactLayout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .id("convert-\(model.sourceSessionID.uuidString)")
+            LazyToolTabContent(isActive: model.selectedTool == .convert) {
+                ScrollView {
+                    ConvertToolView(model: model, isCompactLayout: isCompactLayout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id("convert-\(model.sourceSessionID.uuidString)")
+                }
             }
             .padding(10)
             .scrollIndicators(.automatic)
             .tabItem { Text(WorkspaceTool.convert.rawValue) }
             .tag(WorkspaceTool.convert)
 
-            ScrollView {
-                InspectToolView(
-                    sourceURL: model.sourceURL,
-                    analysis: model.analysis,
-                    sourceInfo: model.sourceInfo,
-                    transcriptSegments: model.transcriptSegments,
-                    transcriptStatusText: model.transcriptStatusText,
-                    canGenerateTranscript: model.canGenerateTranscript,
-                    isGeneratingTranscript: model.isGeneratingTranscript,
-                    whisperTranscriptionAvailable: model.whisperTranscriptionAvailable,
-                    hasAudioTrack: model.hasAudioTrack,
-                    generateTranscript: { model.generateTranscriptFromInspect() },
-                    exportTranscript: { model.exportTranscriptFromInspect() },
-                    showActivityConsole: model.showActivityConsole,
-                    activityConsoleText: model.activityConsoleText,
-                    toggleActivityConsole: { model.showActivityConsole.toggle() },
-                    copyActivityConsole: { model.copyActivityConsole() },
-                    clearActivityConsole: { model.clearActivityConsole() },
-                    isCompactLayout: isCompactLayout
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .id("inspect-\(model.sourceSessionID.uuidString)")
+            LazyToolTabContent(isActive: model.selectedTool == .inspect) {
+                ScrollView {
+                    InspectToolView(
+                        sourceURL: model.sourceURL,
+                        analysis: model.analysis,
+                        sourceInfo: model.sourceInfo,
+                        transcriptSegments: model.transcriptSegments,
+                        transcriptStatusText: model.transcriptStatusText,
+                        canGenerateTranscript: model.canGenerateTranscript,
+                        isGeneratingTranscript: model.isGeneratingTranscript,
+                        whisperTranscriptionAvailable: model.whisperTranscriptionAvailable,
+                        hasAudioTrack: model.hasAudioTrack,
+                        generateTranscript: { model.generateTranscriptFromInspect() },
+                        exportTranscript: { model.exportTranscriptFromInspect() },
+                        showActivityConsole: model.showActivityConsole,
+                        activityConsoleText: model.activityConsoleText,
+                        toggleActivityConsole: { model.showActivityConsole.toggle() },
+                        copyActivityConsole: { model.copyActivityConsole() },
+                        clearActivityConsole: { model.clearActivityConsole() },
+                        isCompactLayout: isCompactLayout
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .id("inspect-\(model.sourceSessionID.uuidString)")
+                }
             }
             .padding(10)
             .scrollIndicators(.automatic)

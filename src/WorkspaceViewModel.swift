@@ -707,6 +707,8 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func appendActivityConsole(_ line: String, source: String? = nil) {
+        guard showActivityConsole else { return }
+
         let cleaned = line.replacingOccurrences(of: "\r", with: "").trimmingCharacters(in: .newlines)
         guard !cleaned.isEmpty else { return }
 

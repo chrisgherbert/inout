@@ -136,6 +136,7 @@ extension WorkspaceViewModel {
             let detectProfanity = runProfanity
             let silenceMinDuration = self.silenceMinDurationSeconds
             let profanityWords = requestedProfanityWordsSet
+            let captureConsoleOutput = self.showActivityConsole
             let result = await Task.detached(priority: .userInitiated) {
                 runDetection(
                     file: url,
@@ -166,6 +167,7 @@ extension WorkspaceViewModel {
                         }
                     },
                     onConsoleOutput: { line, source in
+                        guard captureConsoleOutput else { return }
                         Task { @MainActor [weak self] in
                             self?.appendActivityConsole(line, source: source)
                         }

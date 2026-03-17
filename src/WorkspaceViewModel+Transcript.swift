@@ -35,6 +35,7 @@ extension WorkspaceViewModel {
         transcriptStatusText = "Generating transcript…"
         uiMessage = transcriptStatusText
         cancelFlag.reset()
+        let captureConsoleOutput = showActivityConsole
 
         analyzeTask = Task { [weak self] in
             guard let self else { return }
@@ -51,6 +52,7 @@ extension WorkspaceViewModel {
                         }
                     },
                     onConsoleOutput: { line, source in
+                        guard captureConsoleOutput else { return }
                         Task { @MainActor [weak self] in
                             self?.appendActivityConsole(line, source: source)
                         }

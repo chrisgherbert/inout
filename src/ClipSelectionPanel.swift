@@ -273,7 +273,6 @@ private struct WaveformLoadingPlaceholder: View {
                 .allowsHitTesting(false)
             }
         }
-        .drawingGroup(opaque: false, colorMode: .linear)
         .allowsHitTesting(false)
     }
 }
