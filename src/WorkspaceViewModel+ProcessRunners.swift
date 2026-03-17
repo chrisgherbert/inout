@@ -1,5 +1,112 @@
 import Foundation
 
+private final class ConsoleLineBatcher {
+    private let isEnabled: Bool
+    private let flushInterval: TimeInterval
+    private let sink: @Sendable (String) -> Void
+    private let queue = DispatchQueue(label: "inout.process.console-batcher")
+    private var pendingChunk = ""
+    private var flushScheduled = false
+
+    init(
+        isEnabled: Bool,
+        flushInterval: TimeInterval = 0.1,
+        sink: @escaping @Sendable (String) -> Void
+    ) {
+        self.isEnabled = isEnabled
+        self.flushInterval = flushInterval
+        self.sink = sink
+    }
+
+    func enqueue(line: String, source: String) {
+        guard isEnabled else { return }
+        let cleaned = line.replacingOccurrences(of: "\r", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        let rendered = source.isEmpty ? cleaned : "[\(source)] \(cleaned)"
+        queue.async {
+            if self.pendingChunk.isEmpty {
+                self.pendingChunk = rendered
+            } else {
+                self.pendingChunk += "\n" + rendered
+            }
+
+            guard !self.flushScheduled else { return }
+            self.flushScheduled = true
+            self.queue.asyncAfter(deadline: .now() + self.flushInterval) {
+                self.flushLocked()
+            }
+        }
+    }
+
+    func flushNow() {
+        guard isEnabled else { return }
+        let chunk = queue.sync {
+            let chunk = pendingChunk
+            pendingChunk = ""
+            flushScheduled = false
+            return chunk
+        }
+        guard !chunk.isEmpty else { return }
+        sink(chunk)
+    }
+
+    private func flushLocked() {
+        let chunk = pendingChunk
+        pendingChunk = ""
+        flushScheduled = false
+        guard !chunk.isEmpty else { return }
+        sink(chunk)
+    }
+}
+
+private final class ProgressUpdateBatcher {
+    private let flushInterval: TimeInterval
+    private let sink: @Sendable (Double) -> Void
+    private let queue = DispatchQueue(label: "inout.process.progress-batcher")
+    private var latestProgress: Double?
+    private var flushScheduled = false
+
+    init(flushInterval: TimeInterval = 0.08, sink: @escaping @Sendable (Double) -> Void) {
+        self.flushInterval = flushInterval
+        self.sink = sink
+    }
+
+    func enqueue(_ progress: Double, immediate: Bool = false) {
+        queue.async {
+            self.latestProgress = progress
+            if immediate {
+                self.flushLocked()
+                return
+            }
+
+            guard !self.flushScheduled else { return }
+            self.flushScheduled = true
+            self.queue.asyncAfter(deadline: .now() + self.flushInterval) {
+                self.flushLocked()
+            }
+        }
+    }
+
+    func flushNow() {
+        let progress = queue.sync {
+            let progress = latestProgress
+            latestProgress = nil
+            flushScheduled = false
+            return progress
+        }
+        guard let progress else { return }
+        sink(progress)
+    }
+
+    private func flushLocked() {
+        let progress = latestProgress
+        latestProgress = nil
+        flushScheduled = false
+        guard let progress else { return }
+        sink(progress)
+    }
+}
+
 @MainActor
 extension WorkspaceViewModel {
     func countSRTCues(at url: URL) -> Int {
@@ -9,6 +116,11 @@ extension WorkspaceViewModel {
     func runProcess(executableURL: URL, arguments: [String]) async -> String? {
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: arguments)
         let captureConsoleOutput = showActivityConsole
+        let consoleBatcher = ConsoleLineBatcher(isEnabled: captureConsoleOutput) { [weak self] chunk in
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsoleChunk(chunk)
+            }
+        }
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -20,9 +132,7 @@ extension WorkspaceViewModel {
             process.standardOutput = stdout
 
             if captureConsoleOutput {
-                Task { @MainActor [weak self] in
-                    self?.appendActivityConsole("$ \(commandLine)", source: executableURL.lastPathComponent)
-                }
+                consoleBatcher.enqueue(line: "$ \(commandLine)", source: executableURL.lastPathComponent)
             }
 
             let streamToConsole: (Data, String) -> Void = { data, source in
@@ -31,9 +141,7 @@ extension WorkspaceViewModel {
                 for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
                     let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !line.isEmpty else { continue }
-                    Task { @MainActor [weak self] in
-                        self?.appendActivityConsole(line, source: source)
-                    }
+                    consoleBatcher.enqueue(line: line, source: source)
                 }
             }
 
@@ -68,6 +176,7 @@ extension WorkspaceViewModel {
                 let trailingStderr = stderr.fileHandleForReading.readDataToEndOfFile()
                 streamToConsole(trailingStdout, "stdout")
                 streamToConsole(trailingStderr, "stderr")
+                consoleBatcher.flushNow()
 
                 let errorText = String(decoding: trailingStderr, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -90,6 +199,21 @@ extension WorkspaceViewModel {
     ) async -> String? {
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: arguments)
         let captureConsoleOutput = showActivityConsole
+        let consoleBatcher = ConsoleLineBatcher(isEnabled: captureConsoleOutput) { [weak self] chunk in
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsoleChunk(chunk)
+            }
+        }
+        let progressBatcher = ProgressUpdateBatcher { [weak self] progress in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.isExporting else { return }
+                let clamped = min(max(progress, 0), 1)
+                let mapped = progressRange.lowerBound + ((progressRange.upperBound - progressRange.lowerBound) * clamped)
+                self.exportProgress = min(max(mapped, 0), 1)
+                self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
+            }
+        }
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -101,19 +225,7 @@ extension WorkspaceViewModel {
             process.standardOutput = stdout
 
             if captureConsoleOutput {
-                Task { @MainActor [weak self] in
-                    self?.appendActivityConsole("$ \(commandLine)", source: "whisper")
-                }
-            }
-
-            func emitProgress(_ progress: Double) {
-                Task { @MainActor in
-                    guard self.isExporting else { return }
-                    let clamped = min(max(progress, 0), 1)
-                    let mapped = progressRange.lowerBound + ((progressRange.upperBound - progressRange.lowerBound) * clamped)
-                    self.exportProgress = min(max(mapped, 0), 1)
-                    self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
-                }
+                consoleBatcher.enqueue(line: "$ \(commandLine)", source: "whisper")
             }
 
             let parseChunk: (Data, String) -> Void = { data, source in
@@ -122,12 +234,10 @@ extension WorkspaceViewModel {
                     let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !line.isEmpty else { continue }
                     if captureConsoleOutput {
-                        Task { @MainActor [weak self] in
-                            self?.appendActivityConsole(line, source: source)
-                        }
+                        consoleBatcher.enqueue(line: line, source: source)
                     }
                     if let progress = extractPercentProgress(from: line) {
-                        emitProgress(progress)
+                        progressBatcher.enqueue(progress)
                     }
                 }
             }
@@ -164,10 +274,11 @@ extension WorkspaceViewModel {
                 let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
                 parseChunk(stdoutData, "whisper")
                 parseChunk(stderrData, "whisper")
+                consoleBatcher.flushNow()
 
                 let stderrText = String(decoding: stderrData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                 if proc.terminationStatus == 0 {
-                    emitProgress(1.0)
+                    progressBatcher.enqueue(1.0, immediate: true)
                     continuation.resume(returning: nil)
                 } else if stderrText.isEmpty {
                     continuation.resume(returning: "\(executableURL.lastPathComponent) exited with status \(proc.terminationStatus)")
@@ -188,6 +299,26 @@ extension WorkspaceViewModel {
         let ffmpegArguments = arguments + ["-progress", "pipe:1", "-nostats"]
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: ffmpegArguments)
         let captureConsoleOutput = showActivityConsole
+        let consoleBatcher = ConsoleLineBatcher(isEnabled: captureConsoleOutput) { [weak self] chunk in
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsoleChunk(chunk)
+            }
+        }
+        let progressBatcher = ProgressUpdateBatcher { [weak self] progress in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.isExporting else { return }
+                let clamped = min(max(progress, 0), 1)
+                let visualProgress = min(clamped, 0.99)
+                if let range = progressRange {
+                    let mapped = range.lowerBound + ((range.upperBound - range.lowerBound) * visualProgress)
+                    self.exportProgress = min(max(mapped, 0), 1)
+                } else {
+                    self.exportProgress = visualProgress
+                }
+                self.exportStatusText = "\(statusPrefix)… \(Int((visualProgress * 100).rounded()))%"
+            }
+        }
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -204,32 +335,7 @@ extension WorkspaceViewModel {
             var stderrLines: [String] = []
 
             if captureConsoleOutput {
-                Task { @MainActor [weak self] in
-                    self?.appendActivityConsole("$ \(commandLine)", source: "ffmpeg")
-                }
-            }
-
-            let emitProgress: (_ progress: Double, _ allowComplete: Bool) -> Void = { [weak self] progress, allowComplete in
-                Task { @MainActor in
-                    guard let self else { return }
-                    guard self.isExporting else { return }
-                    let clamped = min(max(progress, 0), 1)
-                    let visualProgress = allowComplete ? clamped : min(clamped, 0.99)
-                    if let range = progressRange {
-                        let mapped = range.lowerBound + ((range.upperBound - range.lowerBound) * visualProgress)
-                        self.exportProgress = min(max(mapped, 0), 1)
-                    } else {
-                        self.exportProgress = visualProgress
-                    }
-                    self.exportStatusText = "\(statusPrefix)… \(Int((visualProgress * 100).rounded()))%"
-                }
-            }
-
-            let emitConsoleLine: (String, String) -> Void = { line, source in
-                guard captureConsoleOutput else { return }
-                Task { @MainActor [weak self] in
-                    self?.appendActivityConsole(line, source: source)
-                }
+                consoleBatcher.enqueue(line: "$ \(commandLine)", source: "ffmpeg")
             }
 
             func consumeLines(buffer: inout Data, source: String, processLine: (String) -> Void) {
@@ -239,7 +345,7 @@ extension WorkspaceViewModel {
                     guard let line = String(data: lineData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines),
                           !line.isEmpty else { continue }
-                    emitConsoleLine(line, source)
+                    consoleBatcher.enqueue(line: line, source: source)
                     processLine(line)
                 }
             }
@@ -250,25 +356,25 @@ extension WorkspaceViewModel {
                 stdoutBuffer.append(chunk)
                 consumeLines(buffer: &stdoutBuffer, source: "ffmpeg") { rawLine in
                     if rawLine == "progress=end" {
-                        emitProgress(1.0, true)
+                        progressBatcher.enqueue(1.0, immediate: true)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time_us="),
                        let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
-                        emitProgress((microseconds / 1_000_000.0) / safeDuration, false)
+                        progressBatcher.enqueue((microseconds / 1_000_000.0) / safeDuration)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time_ms="),
                        let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
-                        emitProgress((value / 1_000_000.0) / safeDuration, false)
+                        progressBatcher.enqueue((value / 1_000_000.0) / safeDuration)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time="),
                        let seconds = parseTimecode(String(rawLine.dropFirst("out_time=".count))) {
-                        emitProgress(seconds / safeDuration, false)
+                        progressBatcher.enqueue(seconds / safeDuration)
                     }
                 }
             }
@@ -314,30 +420,32 @@ extension WorkspaceViewModel {
 
                 consumeLines(buffer: &stdoutBuffer, source: "ffmpeg") { rawLine in
                     if rawLine == "progress=end" {
-                        emitProgress(1.0, true)
+                        progressBatcher.enqueue(1.0, immediate: true)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time_us="),
                        let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
-                        emitProgress((microseconds / 1_000_000.0) / safeDuration, false)
+                        progressBatcher.enqueue((microseconds / 1_000_000.0) / safeDuration)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time_ms="),
                        let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
-                        emitProgress((value / 1_000_000.0) / safeDuration, false)
+                        progressBatcher.enqueue((value / 1_000_000.0) / safeDuration)
                         return
                     }
 
                     if rawLine.hasPrefix("out_time="),
                        let seconds = parseTimecode(String(rawLine.dropFirst("out_time=".count))) {
-                        emitProgress(seconds / safeDuration, false)
+                        progressBatcher.enqueue(seconds / safeDuration)
                     }
                 }
                 consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { rawLine in
                     stderrLines.append(rawLine)
                 }
+                consoleBatcher.flushNow()
+                progressBatcher.flushNow()
 
                 let stderrText = String(decoding: stderrData, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -371,6 +479,21 @@ extension WorkspaceViewModel {
         let finalArguments = preArguments + arguments
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: finalArguments)
         let captureConsoleOutput = showActivityConsole
+        let consoleBatcher = ConsoleLineBatcher(isEnabled: captureConsoleOutput) { [weak self] chunk in
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsoleChunk(chunk)
+            }
+        }
+        let progressBatcher = ProgressUpdateBatcher { [weak self] progress in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.isExporting else { return }
+                let clamped = min(max(progress, 0), 1)
+                let mapped = progressRange.lowerBound + ((progressRange.upperBound - progressRange.lowerBound) * clamped)
+                self.exportProgress = min(max(mapped, 0), 1)
+                self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
+            }
+        }
         return await withCheckedContinuation { (continuation: CheckedContinuation<(downloadedPath: String?, error: String?), Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -400,32 +523,12 @@ extension WorkspaceViewModel {
             }
 
             if captureConsoleOutput {
-                Task { @MainActor [weak self] in
-                    self?.appendActivityConsole("$ \(commandLine)", source: "yt-dlp")
-                }
-            }
-
-            let emitProgress: (Double) -> Void = { [weak self] progress in
-                Task { @MainActor in
-                    guard let self else { return }
-                    guard self.isExporting else { return }
-                    let clamped = min(max(progress, 0), 1)
-                    let mapped = progressRange.lowerBound + ((progressRange.upperBound - progressRange.lowerBound) * clamped)
-                    self.exportProgress = min(max(mapped, 0), 1)
-                    self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
-                }
-            }
-
-            let emitConsoleLine: (String, String) -> Void = { line, source in
-                guard captureConsoleOutput else { return }
-                Task { @MainActor [weak self] in
-                    self?.appendActivityConsole(line, source: source)
-                }
+                consoleBatcher.enqueue(line: "$ \(commandLine)", source: "yt-dlp")
             }
 
             let parseLine: (String) -> Void = { rawLine in
                 if let progress = extractPercentProgress(from: rawLine) {
-                    emitProgress(progress)
+                    progressBatcher.enqueue(progress)
                 }
 
                 if rawLine.hasPrefix("after_move:") {
@@ -448,7 +551,7 @@ extension WorkspaceViewModel {
                     guard let line = String(data: lineData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines),
                           !line.isEmpty else { continue }
-                    emitConsoleLine(line, source)
+                    consoleBatcher.enqueue(line: line, source: source)
                     parseLine(line)
                     if source == "stderr" {
                         stderrLines.append(line)
@@ -497,6 +600,8 @@ extension WorkspaceViewModel {
                 if !trailingStderr.isEmpty { stderrBuffer.append(trailingStderr) }
                 consumeLines(buffer: &stdoutBuffer, source: "yt-dlp")
                 consumeLines(buffer: &stderrBuffer, source: "stderr")
+                consoleBatcher.flushNow()
+                progressBatcher.flushNow()
 
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: (outputPath, nil))

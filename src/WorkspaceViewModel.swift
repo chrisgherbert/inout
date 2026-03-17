@@ -708,6 +708,20 @@ final class WorkspaceViewModel: ObservableObject {
         copyToClipboard(activityConsoleText)
     }
 
+    func appendActivityConsoleChunk(_ chunk: String) {
+        guard showActivityConsole else { return }
+        let cleanedChunk = chunk.trimmingCharacters(in: .newlines)
+        guard !cleanedChunk.isEmpty else { return }
+
+        if pendingActivityConsoleText.isEmpty {
+            pendingActivityConsoleText = cleanedChunk
+        } else {
+            pendingActivityConsoleText += "\n" + cleanedChunk
+        }
+
+        scheduleActivityConsoleFlush()
+    }
+
     func appendActivityConsole(_ line: String, source: String? = nil) {
         guard showActivityConsole else { return }
 
@@ -721,13 +735,7 @@ final class WorkspaceViewModel: ObservableObject {
             renderedLine = cleaned
         }
 
-        if pendingActivityConsoleText.isEmpty {
-            pendingActivityConsoleText = renderedLine
-        } else {
-            pendingActivityConsoleText += "\n" + renderedLine
-        }
-
-        scheduleActivityConsoleFlush()
+        appendActivityConsoleChunk(renderedLine)
     }
 
     private func scheduleActivityConsoleFlush() {
