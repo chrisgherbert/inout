@@ -265,40 +265,31 @@ struct ClipTranscriptSidebarView: View, Equatable {
 
             if hasTranscript {
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        TextField("Search transcript", text: $searchText)
-                            .textFieldStyle(.roundedBorder)
-                            .controlSize(.small)
-                            .focused($isSearchFieldFocused)
-                            .frame(minWidth: 0, maxWidth: .infinity)
-                            .layoutPriority(1)
-                            .padding(.trailing, normalizedSearchText.isEmpty ? 0 : 22)
-                            .overlay(alignment: .trailing) {
-                                if !normalizedSearchText.isEmpty {
-                                    Button {
-                                        searchText = ""
-                                    } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .padding(.trailing, 8)
-                                    .help("Clear Search")
-                                    .accessibilityLabel("Clear Search")
-                                }
-                            }
-                            .onSubmit {
-                                navigateSearchMatch(direction: 1)
-                            }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            transcriptSearchField
 
-                        Button("Export…") {
-                            exportTranscript()
+                            Button("Export…") {
+                                exportTranscript()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .fixedSize(horizontal: true, vertical: false)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(2)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            transcriptSearchField
+
+                            HStack(spacing: 0) {
+                                Spacer(minLength: 0)
+                                Button("Export…") {
+                                    exportTranscript()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .fixedSize(horizontal: true, vertical: false)
+                            }
+                        }
                     }
 
                     if !normalizedSearchText.isEmpty {
@@ -470,6 +461,36 @@ struct ClipTranscriptSidebarView: View, Equatable {
             RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
         )
+    }
+}
+
+private extension ClipTranscriptSidebarView {
+    var transcriptSearchField: some View {
+        TextField("Search transcript", text: $searchText)
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .focused($isSearchFieldFocused)
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .layoutPriority(1)
+            .padding(.trailing, normalizedSearchText.isEmpty ? 0 : 22)
+            .overlay(alignment: .trailing) {
+                if !normalizedSearchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 8)
+                    .help("Clear Search")
+                    .accessibilityLabel("Clear Search")
+                }
+            }
+            .onSubmit {
+                navigateSearchMatch(direction: 1)
+            }
     }
 }
 
