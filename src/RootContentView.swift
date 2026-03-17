@@ -85,7 +85,16 @@ struct ContentView: View {
                 .padding(.horizontal, contentPadding)
                 .padding(.bottom, contentPadding)
 
-                StatusFooterStripView(model: model)
+                StatusFooterStripView(
+                    activity: model.activityPresentation,
+                    queuedJobs: model.queuedJobs,
+                    isAnalyzing: model.isAnalyzing,
+                    isExporting: model.isExporting,
+                    isActivityRunning: model.isActivityRunning,
+                    outputURL: model.outputURL,
+                    stopCurrentActivity: { model.stopCurrentActivity() },
+                    revealOutput: { model.revealOutput() }
+                )
                     .padding(.horizontal, 0)
                     .padding(.bottom, contentPadding / 2)
             }

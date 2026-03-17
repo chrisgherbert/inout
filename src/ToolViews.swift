@@ -145,6 +145,7 @@ struct ToolContentView: View {
             LazyToolTabContent(isActive: model.selectedTool == .inspect) {
                 ScrollView {
                     InspectToolView(
+                        activity: model.activityPresentation,
                         sourceURL: model.sourceURL,
                         analysis: model.analysis,
                         sourceInfo: model.sourceInfo,
@@ -156,8 +157,6 @@ struct ToolContentView: View {
                         hasAudioTrack: model.hasAudioTrack,
                         generateTranscript: { model.generateTranscriptFromInspect() },
                         exportTranscript: { model.exportTranscriptFromInspect() },
-                        showActivityConsole: model.showActivityConsole,
-                        activityConsoleText: model.activityConsoleText,
                         toggleActivityConsole: { model.showActivityConsole.toggle() },
                         copyActivityConsole: { model.copyActivityConsole() },
                         clearActivityConsole: { model.clearActivityConsole() },
@@ -245,7 +244,12 @@ struct AnalyzeToolView: View {
 
                 Group {
                     if let analysis = model.analysis {
-                        DetailView(file: analysis, isCompactLayout: isCompactLayout, model: model)
+                        DetailView(
+                            file: analysis,
+                            isCompactLayout: isCompactLayout,
+                            model: model,
+                            activity: model.activityPresentation
+                        )
                     } else {
                         Text("Ready to analyze")
                             .font(.caption)

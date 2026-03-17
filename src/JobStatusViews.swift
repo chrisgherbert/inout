@@ -2,12 +2,19 @@ import SwiftUI
 import AppKit
 
 struct StatusFooterStripView: View {
-    @ObservedObject var model: WorkspaceViewModel
+    @ObservedObject var activity: ActivityPresentationModel
+    let queuedJobs: [QueuedClipExport]
+    let isAnalyzing: Bool
+    let isExporting: Bool
+    let isActivityRunning: Bool
+    let outputURL: URL?
+    let stopCurrentActivity: () -> Void
+    let revealOutput: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private var stateColor: Color {
-        switch model.lastActivityState {
+        switch activity.lastActivityState {
         case .idle:
             return .secondary
         case .running:
@@ -22,12 +29,12 @@ struct StatusFooterStripView: View {
     }
 
     private var footerStateLabel: String {
-        guard model.lastActivityState == .running else {
-            return model.lastResultLabel
+        guard activity.lastActivityState == .running else {
+            return activity.lastResultLabel
         }
 
-        let orderedJobs = model.queuedJobs.sorted(by: { $0.createdAt < $1.createdAt })
-        guard !orderedJobs.isEmpty else { return model.lastResultLabel }
+        let orderedJobs = queuedJobs.sorted(by: { $0.createdAt < $1.createdAt })
+        guard !orderedJobs.isEmpty else { return activity.lastResultLabel }
 
         if let runningIndex = orderedJobs.firstIndex(where: { $0.status == .running }) {
             return "Running (\(runningIndex + 1)/\(orderedJobs.count) tasks)"
@@ -39,11 +46,11 @@ struct StatusFooterStripView: View {
     @ViewBuilder
     private var stateIconView: some View {
         if #available(macOS 14.0, *), !reduceMotion {
-            Image(systemName: model.lastResultIconName)
+            Image(systemName: activity.lastResultIconName)
                 .symbolRenderingMode(.hierarchical)
-                .symbolEffect(.pulse, options: model.isActivityRunning ? .repeating : .default, value: model.isActivityRunning)
+                .symbolEffect(.pulse, options: isActivityRunning ? .repeating : .default, value: isActivityRunning)
         } else {
-            Image(systemName: model.lastResultIconName)
+            Image(systemName: activity.lastResultIconName)
         }
     }
 
@@ -61,12 +68,12 @@ struct StatusFooterStripView: View {
             .frame(width: 140, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.activityText)
+                Text(activityText)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
-                if let progress = model.activityProgress {
+                if let progress = activityProgress {
                     ProgressView(value: progress)
                         .progressViewStyle(.linear)
                         .controlSize(.small)
@@ -76,18 +83,18 @@ struct StatusFooterStripView: View {
 
             HStack(spacing: 8) {
                 Group {
-                    if model.isActivityRunning {
+                    if isActivityRunning {
                         Button(role: .destructive) {
-                            model.stopCurrentActivity()
+                            stopCurrentActivity()
                         } label: {
                             Label("Stop", systemImage: "stop.fill")
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.red)
                         .controlSize(.small)
-                    } else if model.outputURL != nil {
+                    } else if outputURL != nil {
                         Button("Show in Finder") {
-                            model.revealOutput()
+                            revealOutput()
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -111,8 +118,20 @@ struct StatusFooterStripView: View {
                 .fill(Color.primary.opacity(0.14))
                 .frame(height: 0.5)
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.lastActivityState)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isActivityRunning)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: activity.lastActivityState)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isActivityRunning)
+    }
+
+    private var activityProgress: Double? {
+        if isAnalyzing { return activity.analyzeProgress }
+        if isExporting { return activity.exportProgress }
+        return nil
+    }
+
+    private var activityText: String {
+        if isAnalyzing { return activity.analyzeStatusText }
+        if isExporting { return activity.exportStatusText }
+        return activity.uiMessage
     }
 }
 
@@ -274,4 +293,3 @@ struct JobsPopoverView: View {
         .frame(width: 560, height: 320, alignment: .topLeading)
     }
 }
-

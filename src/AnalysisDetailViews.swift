@@ -105,6 +105,7 @@ struct DetailView: View {
     let file: FileAnalysis
     let isCompactLayout: Bool
     @ObservedObject var model: WorkspaceViewModel
+    @ObservedObject var activity: ActivityPresentationModel
 
     @State private var player = AVPlayer()
     @State private var isPlaying = false
@@ -445,7 +446,7 @@ struct DetailView: View {
                         Spacer()
                         VStack(spacing: 8) {
                             ProgressView()
-                            Text(model.analyzeStatusText.isEmpty ? "Preparing analysis…" : model.analyzeStatusText)
+                            Text(activity.analyzeStatusText.isEmpty ? "Preparing analysis…" : activity.analyzeStatusText)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                         }

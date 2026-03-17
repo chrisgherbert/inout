@@ -3,6 +3,7 @@ import AppKit
 import AVKit
 
 struct InspectToolView: View {
+    @ObservedObject var activity: ActivityPresentationModel
     let sourceURL: URL?
     let analysis: FileAnalysis?
     let sourceInfo: SourceMediaInfo?
@@ -14,8 +15,6 @@ struct InspectToolView: View {
     let hasAudioTrack: Bool
     let generateTranscript: () -> Void
     let exportTranscript: () -> Void
-    let showActivityConsole: Bool
-    let activityConsoleText: String
     let toggleActivityConsole: () -> Void
     let copyActivityConsole: () -> Void
     let clearActivityConsole: () -> Void
@@ -245,7 +244,7 @@ struct InspectToolView: View {
                 GroupBox("Console") {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
-                            Button(showActivityConsole ? "Hide Console" : "Show Console") {
+                            Button(activity.showActivityConsole ? "Hide Console" : "Show Console") {
                                 toggleActivityConsole()
                             }
                             .buttonStyle(.bordered)
@@ -256,22 +255,22 @@ struct InspectToolView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .disabled(activityConsoleText.isEmpty)
+                            .disabled(activity.activityConsoleText.isEmpty)
 
                             Button("Clear") {
                                 clearActivityConsole()
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .disabled(activityConsoleText.isEmpty)
+                            .disabled(activity.activityConsoleText.isEmpty)
                             Spacer(minLength: 0)
                         }
 
-                        if showActivityConsole {
+                        if activity.showActivityConsole {
                             ScrollViewReader { proxy in
                                 ScrollView {
                                     VStack(alignment: .leading, spacing: 0) {
-                                        Text(activityConsoleText.isEmpty ? "Console output will appear here while tools run." : activityConsoleText)
+                                        Text(activity.activityConsoleText.isEmpty ? "Console output will appear here while tools run." : activity.activityConsoleText)
                                             .font(.system(size: 12, weight: .regular, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                             .textSelection(.enabled)
@@ -282,7 +281,7 @@ struct InspectToolView: View {
                                     }
                                 }
                                 .frame(minHeight: 110, maxHeight: 180)
-                                .onChange(of: activityConsoleText) { _ in
+                                .onChange(of: activity.activityConsoleText) { _ in
                                     proxy.scrollTo("inspect-console-end", anchor: .bottom)
                                 }
                                 .onAppear {

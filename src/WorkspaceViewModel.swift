@@ -71,10 +71,7 @@ final class WorkspaceViewModel: ObservableObject {
             }
         }
     }
-    @Published var analyzeProgress = 0.0 {
-        didSet { updateDockProgressIndicator() }
-    }
-    @Published var analyzeStatusText = ""
+    let activityPresentation = ActivityPresentationModel()
     @Published var analyzePhaseText = "Preparing analysis"
     @Published var wasCancelled = false
 
@@ -99,10 +96,6 @@ final class WorkspaceViewModel: ObservableObject {
             }
         }
     }
-    @Published var exportProgress = 0.0 {
-        didSet { updateDockProgressIndicator() }
-    }
-    @Published var exportStatusText = "No export yet"
     @Published var outputURL: URL?
     @Published var queuedJobs: [QueuedClipExport] = []
     @Published var activeQueuedJobID: UUID?
@@ -260,10 +253,6 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    @Published var uiMessage = "Ready"
-    @Published var lastActivityState: ActivityState = .idle
-    @Published var showActivityConsole = false
-    @Published var activityConsoleText = ""
     @Published var isURLImportSheetPresented = false
     @Published var downloaderStatusText = "Bundled fallback"
     @Published var downloaderVersionText = "Unavailable"
@@ -327,6 +316,9 @@ final class WorkspaceViewModel: ObservableObject {
     private let maxWaveformCacheEntries = 6
     private let maxActivityConsoleCharacters = 200_000
     private let activityConsoleTrimCharacters = 150_000
+    private let activityConsoleFlushIntervalNanos: UInt64 = 100_000_000
+    private var pendingActivityConsoleText = ""
+    private var activityConsoleFlushTask: Task<Void, Never>?
     let downloaderManager = DownloaderManager.shared
     var cachedFFmpegAvailable = false
     var cachedFFprobeAvailable = false
@@ -341,7 +333,9 @@ final class WorkspaceViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.stopCurrentActivity()
+            Task { @MainActor [weak self] in
+                self?.stopCurrentActivity()
+            }
         }
 
         loadPreferences()
@@ -569,6 +563,52 @@ final class WorkspaceViewModel: ObservableObject {
         cachedYTDLPAvailable
     }
 
+    var analyzeProgress: Double {
+        get { activityPresentation.analyzeProgress }
+        set {
+            activityPresentation.analyzeProgress = newValue
+            updateDockProgressIndicator()
+        }
+    }
+
+    var analyzeStatusText: String {
+        get { activityPresentation.analyzeStatusText }
+        set { activityPresentation.analyzeStatusText = newValue }
+    }
+
+    var exportProgress: Double {
+        get { activityPresentation.exportProgress }
+        set {
+            activityPresentation.exportProgress = newValue
+            updateDockProgressIndicator()
+        }
+    }
+
+    var exportStatusText: String {
+        get { activityPresentation.exportStatusText }
+        set { activityPresentation.exportStatusText = newValue }
+    }
+
+    var uiMessage: String {
+        get { activityPresentation.uiMessage }
+        set { activityPresentation.uiMessage = newValue }
+    }
+
+    var lastActivityState: ActivityState {
+        get { activityPresentation.lastActivityState }
+        set { activityPresentation.lastActivityState = newValue }
+    }
+
+    var showActivityConsole: Bool {
+        get { activityPresentation.showActivityConsole }
+        set { activityPresentation.showActivityConsole = newValue }
+    }
+
+    var activityConsoleText: String {
+        get { activityPresentation.activityConsoleText }
+        set { activityPresentation.activityConsoleText = newValue }
+    }
+
     var urlDownloadSetupComplete: Bool {
         managedPythonVersionText != "Unavailable" && ytDLPToolAvailable
     }
@@ -647,50 +687,8 @@ final class WorkspaceViewModel: ObservableObject {
         )
     }
 
-    var activityProgress: Double? {
-        if isAnalyzing { return analyzeProgress }
-        if isExporting { return exportProgress }
-        return nil
-    }
-
-    var activityText: String {
-        if isAnalyzing { return analyzeStatusText }
-        if isExporting { return exportStatusText }
-        return uiMessage
-    }
-
     var isActivityRunning: Bool {
         isAnalyzing || isExporting
-    }
-
-    var lastResultIconName: String {
-        switch lastActivityState {
-        case .idle:
-            return "circle.dashed"
-        case .running:
-            return "hourglass"
-        case .success:
-            return "checkmark.circle.fill"
-        case .failed:
-            return "xmark.octagon.fill"
-        case .cancelled:
-            return "stop.circle.fill"
-        }
-    }
-
-    var lastResultLabel: String {
-        switch lastActivityState {
-        case .idle:
-            return "Idle"
-        case .running:
-            return "Running"
-        case .success:
-            return "Success"
-        case .failed:
-            return "Failed"
-        case .cancelled:
-            return "Cancelled"
-        }
     }
 
     var hasQueuedJobs: Bool {
@@ -698,10 +696,14 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func clearActivityConsole() {
+        activityConsoleFlushTask?.cancel()
+        activityConsoleFlushTask = nil
+        pendingActivityConsoleText = ""
         activityConsoleText = ""
     }
 
     func copyActivityConsole() {
+        flushPendingActivityConsole()
         guard !activityConsoleText.isEmpty else { return }
         copyToClipboard(activityConsoleText)
     }
@@ -719,10 +721,35 @@ final class WorkspaceViewModel: ObservableObject {
             renderedLine = cleaned
         }
 
-        if activityConsoleText.isEmpty {
-            activityConsoleText = renderedLine
+        if pendingActivityConsoleText.isEmpty {
+            pendingActivityConsoleText = renderedLine
         } else {
-            activityConsoleText += "\n" + renderedLine
+            pendingActivityConsoleText += "\n" + renderedLine
+        }
+
+        scheduleActivityConsoleFlush()
+    }
+
+    private func scheduleActivityConsoleFlush() {
+        guard activityConsoleFlushTask == nil else { return }
+        activityConsoleFlushTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let flushDelay = self.activityConsoleFlushIntervalNanos
+            try? await Task.sleep(nanoseconds: flushDelay)
+            self.activityConsoleFlushTask = nil
+            self.flushPendingActivityConsole()
+        }
+    }
+
+    private func flushPendingActivityConsole() {
+        guard !pendingActivityConsoleText.isEmpty else { return }
+        let pendingChunk = pendingActivityConsoleText
+        pendingActivityConsoleText = ""
+
+        if activityConsoleText.isEmpty {
+            activityConsoleText = pendingChunk
+        } else {
+            activityConsoleText += "\n" + pendingChunk
         }
 
         if activityConsoleText.count > maxActivityConsoleCharacters {
