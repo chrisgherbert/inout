@@ -107,6 +107,83 @@ private final class ProgressUpdateBatcher {
     }
 }
 
+private final class LockedBox<Value> {
+    private let lock = NSLock()
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    @discardableResult
+    func withValue<Result>(_ body: (inout Value) -> Result) -> Result {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&value)
+    }
+
+    func snapshot() -> Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+private final class BufferedLineProcessor {
+    private let buffer = LockedBox(Data())
+    private let handleLine: @Sendable (String) -> Void
+
+    init(handleLine: @escaping @Sendable (String) -> Void) {
+        self.handleLine = handleLine
+    }
+
+    func append(_ chunk: Data) {
+        guard !chunk.isEmpty else { return }
+        buffer.withValue { buffer in
+            buffer.append(chunk)
+            Self.consumeLines(from: &buffer, flushPartial: false, handleLine: handleLine)
+        }
+    }
+
+    func finish(with trailingChunk: Data = Data()) {
+        buffer.withValue { buffer in
+            if !trailingChunk.isEmpty {
+                buffer.append(trailingChunk)
+            }
+            Self.consumeLines(from: &buffer, flushPartial: true, handleLine: handleLine)
+        }
+    }
+
+    private static func consumeLines(
+        from buffer: inout Data,
+        flushPartial: Bool,
+        handleLine: @Sendable (String) -> Void
+    ) {
+        while let separatorIndex = buffer.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
+            let lineData = buffer.subdata(in: 0..<separatorIndex)
+            buffer.removeSubrange(0...separatorIndex)
+            guard let line = String(data: lineData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !line.isEmpty else { continue }
+            handleLine(line)
+        }
+
+        guard flushPartial, !buffer.isEmpty else { return }
+        let trailingData = buffer
+        buffer.removeAll(keepingCapacity: true)
+        guard let line = String(data: trailingData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !line.isEmpty else { return }
+        handleLine(line)
+    }
+}
+
+private func isYTDLPWarningLine(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+    let upper = trimmed.uppercased()
+    return upper.hasPrefix("WARNING:") || upper.hasPrefix("[WARNING]")
+}
+
 @MainActor
 extension WorkspaceViewModel {
     func countSRTCues(at url: URL) -> Int {
@@ -130,26 +207,24 @@ extension WorkspaceViewModel {
             let stdout = Pipe()
             process.standardError = stderr
             process.standardOutput = stdout
+            let stderrLines = LockedBox<[String]>([])
+            let stdoutProcessor = BufferedLineProcessor { line in
+                consoleBatcher.enqueue(line: line, source: "stdout")
+            }
+            let stderrProcessor = BufferedLineProcessor { line in
+                consoleBatcher.enqueue(line: line, source: "stderr")
+                stderrLines.withValue { $0.append(line) }
+            }
 
             if captureConsoleOutput {
                 consoleBatcher.enqueue(line: "$ \(commandLine)", source: executableURL.lastPathComponent)
             }
 
-            let streamToConsole: (Data, String) -> Void = { data, source in
-                guard captureConsoleOutput else { return }
-                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
-                    let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !line.isEmpty else { continue }
-                    consoleBatcher.enqueue(line: line, source: source)
-                }
-            }
-
             stdout.fileHandleForReading.readabilityHandler = { handle in
-                streamToConsole(handle.availableData, "stdout")
+                stdoutProcessor.append(handle.availableData)
             }
             stderr.fileHandleForReading.readabilityHandler = { handle in
-                streamToConsole(handle.availableData, "stderr")
+                stderrProcessor.append(handle.availableData)
             }
 
             do {
@@ -174,11 +249,11 @@ extension WorkspaceViewModel {
                 }
                 let trailingStdout = stdout.fileHandleForReading.readDataToEndOfFile()
                 let trailingStderr = stderr.fileHandleForReading.readDataToEndOfFile()
-                streamToConsole(trailingStdout, "stdout")
-                streamToConsole(trailingStderr, "stderr")
+                stdoutProcessor.finish(with: trailingStdout)
+                stderrProcessor.finish(with: trailingStderr)
                 consoleBatcher.flushNow()
 
-                let errorText = String(decoding: trailingStderr, as: UTF8.self)
+                let errorText = stderrLines.snapshot().joined(separator: "\n")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: nil)
@@ -223,30 +298,34 @@ extension WorkspaceViewModel {
             let stdout = Pipe()
             process.standardError = stderr
             process.standardOutput = stdout
+            let stderrLines = LockedBox<[String]>([])
+            let stdoutProcessor = BufferedLineProcessor { line in
+                if captureConsoleOutput {
+                    consoleBatcher.enqueue(line: line, source: "whisper")
+                }
+                if let progress = extractPercentProgress(from: line) {
+                    progressBatcher.enqueue(progress)
+                }
+            }
+            let stderrProcessor = BufferedLineProcessor { line in
+                if captureConsoleOutput {
+                    consoleBatcher.enqueue(line: line, source: "whisper")
+                }
+                stderrLines.withValue { $0.append(line) }
+                if let progress = extractPercentProgress(from: line) {
+                    progressBatcher.enqueue(progress)
+                }
+            }
 
             if captureConsoleOutput {
                 consoleBatcher.enqueue(line: "$ \(commandLine)", source: "whisper")
             }
 
-            let parseChunk: (Data, String) -> Void = { data, source in
-                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
-                    let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !line.isEmpty else { continue }
-                    if captureConsoleOutput {
-                        consoleBatcher.enqueue(line: line, source: source)
-                    }
-                    if let progress = extractPercentProgress(from: line) {
-                        progressBatcher.enqueue(progress)
-                    }
-                }
-            }
-
             stdout.fileHandleForReading.readabilityHandler = { handle in
-                parseChunk(handle.availableData, "whisper")
+                stdoutProcessor.append(handle.availableData)
             }
             stderr.fileHandleForReading.readabilityHandler = { handle in
-                parseChunk(handle.availableData, "whisper")
+                stderrProcessor.append(handle.availableData)
             }
 
             do {
@@ -272,11 +351,11 @@ extension WorkspaceViewModel {
 
                 let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
                 let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-                parseChunk(stdoutData, "whisper")
-                parseChunk(stderrData, "whisper")
+                stdoutProcessor.finish(with: stdoutData)
+                stderrProcessor.finish(with: stderrData)
                 consoleBatcher.flushNow()
 
-                let stderrText = String(decoding: stderrData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                let stderrText = stderrLines.snapshot().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                 if proc.terminationStatus == 0 {
                     progressBatcher.enqueue(1.0, immediate: true)
                     continuation.resume(returning: nil)
@@ -330,62 +409,51 @@ extension WorkspaceViewModel {
             process.standardOutput = stdout
 
             let safeDuration = max(0.001, durationSeconds)
-            var stdoutBuffer = Data()
-            var stderrBuffer = Data()
-            var stderrLines: [String] = []
+            let stdoutLines = LockedBox<[String]>([])
+            let stderrLines = LockedBox<[String]>([])
 
             if captureConsoleOutput {
                 consoleBatcher.enqueue(line: "$ \(commandLine)", source: "ffmpeg")
             }
 
-            func consumeLines(buffer: inout Data, source: String, processLine: (String) -> Void) {
-                while let separatorIndex = buffer.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
-                    let lineData = buffer.subdata(in: 0..<separatorIndex)
-                    buffer.removeSubrange(0...separatorIndex)
-                    guard let line = String(data: lineData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines),
-                          !line.isEmpty else { continue }
-                    consoleBatcher.enqueue(line: line, source: source)
-                    processLine(line)
+            let stdoutProcessor = BufferedLineProcessor { line in
+                consoleBatcher.enqueue(line: line, source: "ffmpeg")
+                stdoutLines.withValue { $0.append(line) }
+
+                if line == "progress=end" {
+                    progressBatcher.enqueue(1.0, immediate: true)
+                    return
                 }
+
+                if line.hasPrefix("out_time_us="),
+                   let microseconds = Double(line.dropFirst("out_time_us=".count)) {
+                    progressBatcher.enqueue((microseconds / 1_000_000.0) / safeDuration)
+                    return
+                }
+
+                if line.hasPrefix("out_time_ms="),
+                   let value = Double(line.dropFirst("out_time_ms=".count)) {
+                    progressBatcher.enqueue((value / 1_000_000.0) / safeDuration)
+                    return
+                }
+
+                if line.hasPrefix("out_time="),
+                   let seconds = parseTimecode(String(line.dropFirst("out_time=".count))) {
+                    progressBatcher.enqueue(seconds / safeDuration)
+                }
+            }
+
+            let stderrProcessor = BufferedLineProcessor { line in
+                consoleBatcher.enqueue(line: line, source: "ffmpeg")
+                stderrLines.withValue { $0.append(line) }
             }
 
             stdout.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                guard !chunk.isEmpty else { return }
-                stdoutBuffer.append(chunk)
-                consumeLines(buffer: &stdoutBuffer, source: "ffmpeg") { rawLine in
-                    if rawLine == "progress=end" {
-                        progressBatcher.enqueue(1.0, immediate: true)
-                        return
-                    }
-
-                    if rawLine.hasPrefix("out_time_us="),
-                       let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
-                        progressBatcher.enqueue((microseconds / 1_000_000.0) / safeDuration)
-                        return
-                    }
-
-                    if rawLine.hasPrefix("out_time_ms="),
-                       let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
-                        progressBatcher.enqueue((value / 1_000_000.0) / safeDuration)
-                        return
-                    }
-
-                    if rawLine.hasPrefix("out_time="),
-                       let seconds = parseTimecode(String(rawLine.dropFirst("out_time=".count))) {
-                        progressBatcher.enqueue(seconds / safeDuration)
-                    }
-                }
+                stdoutProcessor.append(handle.availableData)
             }
 
             stderr.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                guard !chunk.isEmpty else { return }
-                stderrBuffer.append(chunk)
-                consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { rawLine in
-                    stderrLines.append(rawLine)
-                }
+                stderrProcessor.append(handle.availableData)
             }
 
             do {
@@ -411,47 +479,18 @@ extension WorkspaceViewModel {
 
                 let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
                 let trailingStdout = stdout.fileHandleForReading.readDataToEndOfFile()
-                if !trailingStdout.isEmpty {
-                    stdoutBuffer.append(trailingStdout)
-                }
-                if !stderrData.isEmpty {
-                    stderrBuffer.append(stderrData)
-                }
-
-                consumeLines(buffer: &stdoutBuffer, source: "ffmpeg") { rawLine in
-                    if rawLine == "progress=end" {
-                        progressBatcher.enqueue(1.0, immediate: true)
-                        return
-                    }
-
-                    if rawLine.hasPrefix("out_time_us="),
-                       let microseconds = Double(rawLine.dropFirst("out_time_us=".count)) {
-                        progressBatcher.enqueue((microseconds / 1_000_000.0) / safeDuration)
-                        return
-                    }
-
-                    if rawLine.hasPrefix("out_time_ms="),
-                       let value = Double(rawLine.dropFirst("out_time_ms=".count)) {
-                        progressBatcher.enqueue((value / 1_000_000.0) / safeDuration)
-                        return
-                    }
-
-                    if rawLine.hasPrefix("out_time="),
-                       let seconds = parseTimecode(String(rawLine.dropFirst("out_time=".count))) {
-                        progressBatcher.enqueue(seconds / safeDuration)
-                    }
-                }
-                consumeLines(buffer: &stderrBuffer, source: "ffmpeg") { rawLine in
-                    stderrLines.append(rawLine)
-                }
+                stdoutProcessor.finish(with: trailingStdout)
+                stderrProcessor.finish(with: stderrData)
                 consoleBatcher.flushNow()
                 progressBatcher.flushNow()
 
-                let stderrText = String(decoding: stderrData, as: UTF8.self)
+                let stderrSnapshot = stderrLines.snapshot()
+                let stdoutSnapshot = stdoutLines.snapshot()
+                let stderrText = stderrSnapshot.joined(separator: "\n")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                let stdoutText = String(decoding: stdoutBuffer, as: UTF8.self)
+                let stdoutText = stdoutSnapshot.joined(separator: "\n")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                let stderrFromLines = stderrLines.suffix(8).joined(separator: "\n")
+                let stderrFromLines = stderrSnapshot.suffix(8).joined(separator: "\n")
 
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: nil)
@@ -511,16 +550,8 @@ extension WorkspaceViewModel {
             process.standardError = stderr
             process.standardOutput = stdout
 
-            var stdoutBuffer = Data()
-            var stderrBuffer = Data()
-            var stderrLines: [String] = []
-            var outputPath: String?
-
-            func isYTDLPWarningLine(_ line: String) -> Bool {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                let upper = trimmed.uppercased()
-                return upper.hasPrefix("WARNING:") || upper.hasPrefix("[WARNING]")
-            }
+            let stderrLines = LockedBox<[String]>([])
+            let outputPath = LockedBox<String?>(nil)
 
             if captureConsoleOutput {
                 consoleBatcher.enqueue(line: "$ \(commandLine)", source: "yt-dlp")
@@ -534,43 +565,33 @@ extension WorkspaceViewModel {
                 if rawLine.hasPrefix("after_move:") {
                     let path = String(rawLine.dropFirst("after_move:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
                     if !path.isEmpty {
-                        outputPath = path
+                        outputPath.withValue { $0 = path }
                     }
                 } else if rawLine.hasPrefix("/") {
                     let path = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
                     if FileManager.default.fileExists(atPath: path) {
-                        outputPath = path
+                        outputPath.withValue { $0 = path }
                     }
                 }
             }
 
-            func consumeLines(buffer: inout Data, source: String) {
-                while let separatorIndex = buffer.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
-                    let lineData = buffer.subdata(in: 0..<separatorIndex)
-                    buffer.removeSubrange(0...separatorIndex)
-                    guard let line = String(data: lineData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines),
-                          !line.isEmpty else { continue }
-                    consoleBatcher.enqueue(line: line, source: source)
-                    parseLine(line)
-                    if source == "stderr" {
-                        stderrLines.append(line)
-                    }
-                }
+            let stdoutProcessor = BufferedLineProcessor { line in
+                consoleBatcher.enqueue(line: line, source: "yt-dlp")
+                parseLine(line)
+            }
+
+            let stderrProcessor = BufferedLineProcessor { line in
+                consoleBatcher.enqueue(line: line, source: "stderr")
+                parseLine(line)
+                stderrLines.withValue { $0.append(line) }
             }
 
             stdout.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                guard !chunk.isEmpty else { return }
-                stdoutBuffer.append(chunk)
-                consumeLines(buffer: &stdoutBuffer, source: "yt-dlp")
+                stdoutProcessor.append(handle.availableData)
             }
 
             stderr.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                guard !chunk.isEmpty else { return }
-                stderrBuffer.append(chunk)
-                consumeLines(buffer: &stderrBuffer, source: "stderr")
+                stderrProcessor.append(handle.availableData)
             }
 
             do {
@@ -596,22 +617,22 @@ extension WorkspaceViewModel {
 
                 let trailingStdout = stdout.fileHandleForReading.readDataToEndOfFile()
                 let trailingStderr = stderr.fileHandleForReading.readDataToEndOfFile()
-                if !trailingStdout.isEmpty { stdoutBuffer.append(trailingStdout) }
-                if !trailingStderr.isEmpty { stderrBuffer.append(trailingStderr) }
-                consumeLines(buffer: &stdoutBuffer, source: "yt-dlp")
-                consumeLines(buffer: &stderrBuffer, source: "stderr")
+                stdoutProcessor.finish(with: trailingStdout)
+                stderrProcessor.finish(with: trailingStderr)
                 consoleBatcher.flushNow()
                 progressBatcher.flushNow()
 
+                let resolvedOutputPath = outputPath.snapshot()
+                let stderrSnapshot = stderrLines.snapshot()
                 if proc.terminationStatus == 0 {
-                    continuation.resume(returning: (outputPath, nil))
+                    continuation.resume(returning: (resolvedOutputPath, nil))
                 } else {
-                    let nonWarningLines = stderrLines.filter { !isYTDLPWarningLine($0) }
+                    let nonWarningLines = stderrSnapshot.filter { !isYTDLPWarningLine($0) }
 
                     if nonWarningLines.isEmpty,
-                       let outputPath,
-                       FileManager.default.fileExists(atPath: outputPath) {
-                        continuation.resume(returning: (outputPath, nil))
+                       let resolvedOutputPath,
+                       FileManager.default.fileExists(atPath: resolvedOutputPath) {
+                        continuation.resume(returning: (resolvedOutputPath, nil))
                         return
                     }
 
