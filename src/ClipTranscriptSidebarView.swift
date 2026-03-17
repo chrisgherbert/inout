@@ -334,6 +334,32 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     }
                 }
 
+                if isGeneratingTranscript {
+                    HStack(alignment: .top, spacing: 8) {
+                        TranscriptGeneratingDot()
+                            .padding(.top, 3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Generating transcript...")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.primary.opacity(0.88))
+                            Text("Wording and timing may shift slightly until transcription completes.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.secondary.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.05), lineWidth: 0.6)
+                    )
+                }
+
                 TranscriptTableView(
                     rows: displayedTranscriptRows,
                     rowsVersion: transcriptRowsVersion,
@@ -367,10 +393,15 @@ struct ClipTranscriptSidebarView: View, Equatable {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                Text(transcriptStatusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                HStack(spacing: 8) {
+                    if isGeneratingTranscript {
+                        TranscriptGeneratingDot()
+                    }
+                    Text(transcriptStatusText)
+                        .font(.caption)
+                        .foregroundStyle(isGeneratingTranscript ? Color.primary.opacity(0.82) : Color.secondary)
+                        .lineLimit(2)
+                }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(hasAudioTrack ? transcriptStatusText : "No audio track available for transcript.")
@@ -439,5 +470,24 @@ struct ClipTranscriptSidebarView: View, Equatable {
             RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
         )
+    }
+}
+
+private struct TranscriptGeneratingDot: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
+            let elapsed = context.date.timeIntervalSinceReferenceDate
+            let pulse = 0.5 + (0.5 * sin(elapsed * .pi * 1.5))
+            let opacity = 0.45 + (pulse * 0.45)
+            let scale = 0.82 + (pulse * 0.22)
+
+            Circle()
+                .fill(Color.accentColor.opacity(opacity))
+                .frame(width: 7, height: 7)
+                .scaleEffect(scale)
+        }
+        .frame(width: 8, height: 8)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
