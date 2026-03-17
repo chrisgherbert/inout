@@ -52,6 +52,7 @@ struct CheckBlackFramesApp: App {
         WindowGroup("In/Out", id: "main", for: UUID.self) { _ in
             ContentView()
         }
+        .defaultSize(width: 1280, height: 820)
         .windowResizability(.contentMinSize)
 
         Window("In/Out Help", id: "help") {

@@ -103,7 +103,7 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(model.appearance.colorScheme)
-        .frame(minWidth: 980, minHeight: 640)
+        .frame(minWidth: 980, minHeight: 700)
         .background(
             WindowAccessor { window in
                 appWindow = window
