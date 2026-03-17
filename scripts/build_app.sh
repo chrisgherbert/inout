@@ -17,6 +17,7 @@ APP_EXECUTABLE="BulwarkVideoTools"
 BUNDLE_ID="com.bulwark.BulwarkVideoTools"
 APP_VERSION="${APP_VERSION:-1.0}"
 APP_BUILD_NUMBER="${APP_BUILD_NUMBER:-1}"
+MIN_MACOS_VERSION="${MIN_MACOS_VERSION:-13.0}"
 APP_NAME_XML="$(python3 - <<'PY'
 from xml.sax.saxutils import escape
 print(escape("In/Out"))
@@ -228,8 +229,8 @@ PY
 
 swiftc \
   "${SWIFTC_OPT_FLAGS[@]}" \
+  -target "arm64-apple-macos${MIN_MACOS_VERSION}" \
   -parse-as-library \
-  -incremental \
   -output-file-map "$SWIFTC_OUTPUT_FILE_MAP" \
   -module-name "$APP_EXECUTABLE" \
   -module-cache-path "$MODULE_CACHE" \
@@ -283,7 +284,7 @@ cat > "$PLIST" <<PLIST
     </dict>
   </array>
   <key>LSMinimumSystemVersion</key>
-  <string>12.0</string>
+  <string>${MIN_MACOS_VERSION}</string>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
