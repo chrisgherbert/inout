@@ -141,6 +141,28 @@ with open(ofm_path, "w", encoding="utf-8") as f:
 PY
 }
 
+should_refresh_bundle_item() {
+  local src="$1"
+  local dest="$2"
+
+  if [[ ! -e "$src" ]]; then
+    return 1
+  fi
+  if [[ "$BUILD_MODE" == "release" ]]; then
+    return 0
+  fi
+  if [[ "$REFRESH_BUNDLED_TOOLS" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ ! -e "$dest" ]]; then
+    return 0
+  fi
+  if [[ "$src" -nt "$dest" ]]; then
+    return 0
+  fi
+  return 1
+}
+
 copy_whisper_runtime_libs() {
   local whisper_cli_path="$1"
   local whisper_root
@@ -228,16 +250,19 @@ PY
 
 BUILD_MODE="${1:-dev}"
 QUICK_BUILD=0
+PRESERVE_APP_BUNDLE=0
 REFRESH_BUNDLED_TOOLS="${REFRESH_BUNDLED_TOOLS:-0}"
 case "$BUILD_MODE" in
   dev)
     SWIFTC_OPT_FLAGS=(-Onone -g)
     SWIFTC_INCREMENTAL_FLAGS=(-incremental)
+    PRESERVE_APP_BUNDLE=1
     ;;
   quick)
     SWIFTC_OPT_FLAGS=(-O)
     QUICK_BUILD=1
     SWIFTC_INCREMENTAL_FLAGS=(-incremental)
+    PRESERVE_APP_BUNDLE=1
     ;;
   release)
     SWIFTC_OPT_FLAGS=(-O)
@@ -256,7 +281,7 @@ mkdir -p "$CORE_OBJECTS_DIR" "$CORE_DEPS_DIR" "$CORE_DIAGNOSTICS_DIR" "$CORE_MOD
 export TMPDIR="$SWIFTC_TMP_DIR/"
 # Remove legacy app bundle names to avoid launching stale builds by accident.
 rm -rf "$LEGACY_APP_1" "$LEGACY_APP_2"
-if [[ "$QUICK_BUILD" -eq 0 ]]; then
+if [[ "$PRESERVE_APP_BUNDLE" -eq 0 ]]; then
   rm -rf "$APP"
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES"
@@ -321,6 +346,9 @@ swiftc \
   "${SWIFTC_INCREMENTAL_FLAGS[@]}" \
   -target "arm64-apple-macos${MIN_MACOS_VERSION}" \
   -parse-as-library \
+  -emit-executable \
+  -emit-module \
+  -emit-module-path "$SWIFTC_MODULE_DIR/$APP_EXECUTABLE.swiftmodule" \
   -output-file-map "$SWIFTC_OUTPUT_FILE_MAP" \
   -module-name "$APP_EXECUTABLE" \
   -module-cache-path "$MODULE_CACHE" \
@@ -386,8 +414,10 @@ PLIST
 chmod +x "$BIN"
 
 if [[ -f "$ICON_SOURCE_PNG" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -f "$ICON_ICNS_PATH" ]]; then
-    echo "Quick mode: keeping existing app icon."
+  if [[ "$BUILD_MODE" != "release" && "$REFRESH_BUNDLED_TOOLS" -eq 0 && \
+        (( -f "$ICON_ICNS_PATH" && ! "$ICON_SOURCE_PNG" -nt "$ICON_ICNS_PATH" ) || \
+           ( -f "$ICON_PNG_PATH" && ! "$ICON_SOURCE_PNG" -nt "$ICON_PNG_PATH" )) ]]; then
+    echo "Keeping existing app icon."
   else
     ICONSET_DIR="$DIST/AppIcon.iconset"
     rm -rf "$ICONSET_DIR"
@@ -417,15 +447,23 @@ else
 fi
 
 if [[ -f "$FRAME_SOUND_SOURCE" ]]; then
-  cp "$FRAME_SOUND_SOURCE" "$FRAME_SOUND_DEST"
-  echo "Bundled frame capture sound: $FRAME_SOUND_SOURCE"
+  if should_refresh_bundle_item "$FRAME_SOUND_SOURCE" "$FRAME_SOUND_DEST"; then
+    cp "$FRAME_SOUND_SOURCE" "$FRAME_SOUND_DEST"
+    echo "Bundled frame capture sound: $FRAME_SOUND_SOURCE"
+  else
+    echo "Keeping existing frame capture sound."
+  fi
 else
   echo "Frame capture sound not bundled (missing $FRAME_SOUND_SOURCE)."
 fi
 
 if [[ -f "$QUICK_EXPORT_SOUND_SOURCE" ]]; then
-  cp "$QUICK_EXPORT_SOUND_SOURCE" "$QUICK_EXPORT_SOUND_DEST"
-  echo "Bundled quick export sound: $QUICK_EXPORT_SOUND_SOURCE"
+  if should_refresh_bundle_item "$QUICK_EXPORT_SOUND_SOURCE" "$QUICK_EXPORT_SOUND_DEST"; then
+    cp "$QUICK_EXPORT_SOUND_SOURCE" "$QUICK_EXPORT_SOUND_DEST"
+    echo "Bundled quick export sound: $QUICK_EXPORT_SOUND_SOURCE"
+  else
+    echo "Keeping existing quick export sound."
+  fi
 else
   echo "Quick export sound not bundled (missing $QUICK_EXPORT_SOUND_SOURCE)."
 fi
@@ -556,9 +594,7 @@ else
 fi
 
 if [[ -n "$FFMPEG_SOURCE" && -x "$FFMPEG_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/ffmpeg" && "$BUILD_MODE" != "release" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
-    echo "Quick mode: keeping existing bundled ffmpeg."
-  else
+  if should_refresh_bundle_item "$FFMPEG_SOURCE" "$APP_RESOURCES/ffmpeg"; then
     cp "$FFMPEG_SOURCE" "$APP_RESOURCES/ffmpeg"
     chmod +x "$APP_RESOURCES/ffmpeg"
     if [[ -n "${ACTUAL_FFMPEG_SHA:-}" ]]; then
@@ -566,15 +602,15 @@ if [[ -n "$FFMPEG_SOURCE" && -x "$FFMPEG_SOURCE" ]]; then
     else
       echo "Bundled ffmpeg: $FFMPEG_SOURCE"
     fi
+  else
+    echo "Keeping existing bundled ffmpeg."
   fi
 else
   echo "ffmpeg not bundled (set BUNDLED_FFMPEG_PATH to include one)."
 fi
 
 if [[ -n "$FFPROBE_SOURCE" && -x "$FFPROBE_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/ffprobe" && "$BUILD_MODE" != "release" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
-    echo "Quick mode: keeping existing bundled ffprobe."
-  else
+  if should_refresh_bundle_item "$FFPROBE_SOURCE" "$APP_RESOURCES/ffprobe"; then
     cp "$FFPROBE_SOURCE" "$APP_RESOURCES/ffprobe"
     chmod +x "$APP_RESOURCES/ffprobe"
     if [[ -n "${ACTUAL_FFPROBE_SHA:-}" ]]; then
@@ -582,6 +618,8 @@ if [[ -n "$FFPROBE_SOURCE" && -x "$FFPROBE_SOURCE" ]]; then
     else
       echo "Bundled ffprobe: $FFPROBE_SOURCE"
     fi
+  else
+    echo "Keeping existing bundled ffprobe."
   fi
 else
   echo "ffprobe not bundled (set BUNDLED_FFPROBE_PATH to include one)."
@@ -636,9 +674,7 @@ if [[ "$BUILD_MODE" == "release" ]]; then
 fi
 
 if [[ -n "$YTDLP_SOURCE" && -x "$YTDLP_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/yt-dlp" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
-    echo "Quick mode: keeping existing bundled yt-dlp."
-  else
+  if should_refresh_bundle_item "$YTDLP_SOURCE" "$APP_RESOURCES/yt-dlp"; then
     cp "$YTDLP_SOURCE" "$APP_RESOURCES/yt-dlp"
     chmod +x "$APP_RESOURCES/yt-dlp"
     if [[ -n "${ACTUAL_YTDLP_SHA:-}" ]]; then
@@ -646,6 +682,8 @@ if [[ -n "$YTDLP_SOURCE" && -x "$YTDLP_SOURCE" ]]; then
     else
       echo "Bundled yt-dlp: $YTDLP_SOURCE"
     fi
+  else
+    echo "Keeping existing bundled yt-dlp."
   fi
 else
   echo "yt-dlp not bundled (set BUNDLED_YTDLP_PATH to include one)."
@@ -700,13 +738,13 @@ if [[ -z "$WHISPER_SOURCE" ]]; then
 fi
 
 if [[ -n "$WHISPER_SOURCE" && -x "$WHISPER_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -x "$APP_RESOURCES/whisper-cli" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
-    echo "Quick mode: keeping existing bundled whisper-cli/runtime libs."
-  else
+  if should_refresh_bundle_item "$WHISPER_SOURCE" "$APP_RESOURCES/whisper-cli"; then
     cp "$WHISPER_SOURCE" "$APP_RESOURCES/whisper-cli"
     chmod +x "$APP_RESOURCES/whisper-cli"
     copy_whisper_runtime_libs "$WHISPER_SOURCE"
     echo "Bundled whisper-cli: $WHISPER_SOURCE"
+  else
+    echo "Keeping existing bundled whisper-cli/runtime libs."
   fi
 else
   echo "whisper-cli not bundled (set BUNDLED_WHISPER_PATH to include one)."
@@ -714,11 +752,11 @@ fi
 
 WHISPER_MODEL_SOURCE="${BUNDLED_WHISPER_MODEL_PATH:-}"
 if [[ -n "$WHISPER_MODEL_SOURCE" && -f "$WHISPER_MODEL_SOURCE" ]]; then
-  if [[ "$QUICK_BUILD" -eq 1 && -f "$APP_RESOURCES/profanity-model.bin" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
-    echo "Quick mode: keeping existing bundled Whisper model."
-  else
+  if should_refresh_bundle_item "$WHISPER_MODEL_SOURCE" "$APP_RESOURCES/profanity-model.bin"; then
     cp "$WHISPER_MODEL_SOURCE" "$APP_RESOURCES/profanity-model.bin"
     echo "Bundled Whisper model: $WHISPER_MODEL_SOURCE"
+  else
+    echo "Keeping existing bundled Whisper model."
   fi
 else
   local_vendor_model=""
@@ -729,11 +767,11 @@ else
   fi
 
   if [[ -n "$local_vendor_model" && -f "$local_vendor_model" ]]; then
-    if [[ "$QUICK_BUILD" -eq 1 && -f "$APP_RESOURCES/profanity-model.bin" && "$REFRESH_BUNDLED_TOOLS" -eq 0 ]]; then
-      echo "Quick mode: keeping existing bundled Whisper model."
-    else
+    if should_refresh_bundle_item "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"; then
       cp "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"
       echo "Bundled Whisper model: $local_vendor_model"
+    else
+      echo "Keeping existing bundled Whisper model."
     fi
   else
     echo "Whisper model not bundled (set BUNDLED_WHISPER_MODEL_PATH or place a model in $ROOT_DIR/vendor/models)."
