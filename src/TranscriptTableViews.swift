@@ -16,15 +16,9 @@ func normalizedTranscriptSearchText(_ text: String) -> String {
     text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
 }
 
-enum TranscriptTextWidthMode {
-    case moderated
-    case exact
-}
-
 func preferredTranscriptTextWidth(
     for rows: [TranscriptDisplayRow],
-    fontSize: CGFloat,
-    mode: TranscriptTextWidthMode = .moderated
+    fontSize: CGFloat
 ) -> CGFloat {
     let baseAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: fontSize)
@@ -38,18 +32,7 @@ func preferredTranscriptTextWidth(
     }
 
     guard !widths.isEmpty else { return 320 }
-
-    switch mode {
-    case .exact:
-        return min(max(320, widths.max() ?? 320), 6_000)
-    case .moderated:
-        widths.sort()
-        let widest = widths.last ?? 320
-        let percentileIndex = min(widths.count - 1, Int((Double(widths.count - 1) * 0.97).rounded()))
-        let percentileWidth = widths[percentileIndex]
-        let moderatedWidth = min(widest, percentileWidth + 80)
-        return min(max(320, moderatedWidth), 6_000)
-    }
+    return min(max(320, widths.max() ?? 320), 6_000)
 }
 
 func exactTranscriptTableDocumentWidth(
@@ -58,83 +41,8 @@ func exactTranscriptTableDocumentWidth(
     timeColumnWidth: CGFloat = transcriptTimeColumnPreferredWidth
 ) -> CGFloat {
     timeColumnWidth +
-        preferredTranscriptTextWidth(for: rows, fontSize: fontSize, mode: .exact) +
+        preferredTranscriptTextWidth(for: rows, fontSize: fontSize) +
         transcriptTableWidthSlack
-}
-
-func scrollStyleDescription(_ style: NSScroller.Style) -> String {
-    switch style {
-    case .legacy:
-        return "legacy"
-    case .overlay:
-        return "overlay"
-    @unknown default:
-        return "unknown"
-    }
-}
-
-func roundedScrollMetric(_ value: CGFloat) -> String {
-    String(format: "%.1f", value)
-}
-
-func scrollAuditSignature(
-    label: String,
-    scrollView: NSScrollView,
-    documentView: NSView?,
-    fittingWidth: CGFloat?
-) -> String {
-    [
-        label,
-        roundedScrollMetric(scrollView.frame.width),
-        roundedScrollMetric(scrollView.contentView.bounds.width),
-        roundedScrollMetric(scrollView.documentVisibleRect.width),
-        roundedScrollMetric(documentView?.frame.width ?? 0),
-        roundedScrollMetric(fittingWidth ?? documentView?.fittingSize.width ?? 0),
-        scrollView.hasVerticalScroller ? "v1" : "v0",
-        scrollView.hasHorizontalScroller ? "h1" : "h0",
-        scrollStyleDescription(scrollView.scrollerStyle),
-        scrollStyleDescription(NSScroller.preferredScrollerStyle)
-    ].joined(separator: "|")
-}
-
-func logScrollAuditIfNeeded(
-    label: String,
-    scrollView: NSScrollView,
-    documentView: NSView?,
-    fittingWidth: CGFloat?,
-    lastSignature: inout String
-) {
-    let signature = scrollAuditSignature(
-        label: label,
-        scrollView: scrollView,
-        documentView: documentView,
-        fittingWidth: fittingWidth
-    )
-    guard signature != lastSignature else { return }
-    lastSignature = signature
-    NSLog(
-        "[ScrollAudit] %@ frame=%.1f contentBounds=%.1f visible=%.1f documentFrame=%.1f fitting=%.1f hasV=%@ hasH=%@ scrollStyle=%@ preferredStyle=%@",
-        label,
-        scrollView.frame.width,
-        scrollView.contentView.bounds.width,
-        scrollView.documentVisibleRect.width,
-        documentView?.frame.width ?? 0,
-        fittingWidth ?? documentView?.fittingSize.width ?? 0,
-        scrollView.hasVerticalScroller ? "true" : "false",
-        scrollView.hasHorizontalScroller ? "true" : "false",
-        scrollStyleDescription(scrollView.scrollerStyle),
-        scrollStyleDescription(NSScroller.preferredScrollerStyle)
-    )
-}
-
-func transcriptLegacyVerticalScrollerWidth(
-    for scrollView: NSScrollView,
-    tableViewHeight: CGFloat,
-    visibleHeight: CGFloat
-) -> CGFloat {
-    guard scrollView.scrollerStyle == .legacy else { return 0 }
-    guard tableViewHeight > (visibleHeight + 1) else { return 0 }
-    return NSScroller.scrollerWidth(for: .regular, scrollerStyle: scrollView.scrollerStyle)
 }
 
 struct TranscriptDisplayRow: Identifiable, Equatable {
@@ -390,8 +298,6 @@ struct TranscriptTableView: NSViewRepresentable {
     var onUserScrollActivityChanged: ((Bool) -> Void)? = nil
     var onActivateRow: ((TranscriptDisplayRow) -> Void)? = nil
     var onDoubleActivateRow: ((TranscriptDisplayRow) -> Void)? = nil
-    var onMeasuredFittingWidthChange: ((CGFloat) -> Void)? = nil
-    var onHorizontalOverflowChange: ((Bool) -> Void)? = nil
 
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         var rows: [TranscriptDisplayRow] = []
@@ -421,11 +327,6 @@ struct TranscriptTableView: NSViewRepresentable {
         var lastAttributedCacheSearchVersion: Int = -1
         var lastAttributedCacheFontSize: CGFloat = -1
         var onUserScrollActivityChanged: ((Bool) -> Void)?
-        var onMeasuredFittingWidthChange: ((CGFloat) -> Void)?
-        var onHorizontalOverflowChange: ((Bool) -> Void)?
-        var lastReportedFittingWidth: CGFloat = 0
-        var lastReportedHorizontalOverflow: Bool?
-        var lastScrollAuditSignature = ""
         weak var observedScrollView: NSScrollView?
         var boundsDidChangeObserver: NSObjectProtocol?
         var liveScrollStartObserver: NSObjectProtocol?
@@ -589,44 +490,6 @@ struct TranscriptTableView: NSViewRepresentable {
                 scrollView.hasHorizontalScroller = needsHorizontalScrolling
                 scrollView.tile()
             }
-            if lastReportedHorizontalOverflow != needsHorizontalScrolling {
-                lastReportedHorizontalOverflow = needsHorizontalScrolling
-                onHorizontalOverflowChange?(needsHorizontalScrolling)
-            }
-
-            reportMeasuredFittingWidth(from: scrollView, tableView: tableView)
-            logScrollAuditIfNeeded(
-                label: "TranscriptTable",
-                scrollView: scrollView,
-                documentView: tableView,
-                fittingWidth: actualDocumentWidth,
-                lastSignature: &lastScrollAuditSignature
-            )
-        }
-
-        private func reportMeasuredFittingWidth(from scrollView: NSScrollView, tableView: NSTableView) {
-            let timeColumnWidth = tableView.tableColumns.first?.width ?? transcriptTimeColumnPreferredWidth
-            let exactDocumentWidth = exactTranscriptTableDocumentWidth(
-                for: rows,
-                fontSize: fontSize,
-                timeColumnWidth: timeColumnWidth
-            )
-            let verticalScrollerWidth = transcriptLegacyVerticalScrollerWidth(
-                for: scrollView,
-                tableViewHeight: tableView.bounds.height,
-                visibleHeight: scrollView.contentSize.height
-            )
-            let requiredWidth =
-                exactDocumentWidth +
-                scrollView.contentInsets.left +
-                scrollView.contentInsets.right +
-                scrollView.scrollerInsets.left +
-                scrollView.scrollerInsets.right +
-                verticalScrollerWidth
-
-            guard abs(requiredWidth - lastReportedFittingWidth) > 0.5 else { return }
-            lastReportedFittingWidth = requiredWidth
-            onMeasuredFittingWidthChange?(requiredWidth)
         }
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -689,7 +552,7 @@ struct TranscriptTableView: NSViewRepresentable {
                 return cachedTranscriptTextWidth
             }
 
-            let measured = preferredTranscriptTextWidth(for: rows, fontSize: fontSize, mode: .exact)
+            let measured = preferredTranscriptTextWidth(for: rows, fontSize: fontSize)
             cachedTranscriptTextWidth = measured
             lastMeasuredRowsVersion = rowsVersion
             lastMeasuredFontSize = fontSize
@@ -981,8 +844,6 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.currentSearchResultRowID = currentSearchResultRowID
         context.coordinator.requestedSearchRevealRowID = requestedSearchRevealRowID
         context.coordinator.onUserScrollActivityChanged = onUserScrollActivityChanged
-        context.coordinator.onMeasuredFittingWidthChange = onMeasuredFittingWidthChange
-        context.coordinator.onHorizontalOverflowChange = onHorizontalOverflowChange
         context.coordinator.onActivateRow = onActivateRow
         context.coordinator.onDoubleActivateRow = onDoubleActivateRow
         tableView.target = context.coordinator
@@ -1036,8 +897,6 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.currentSearchResultRowID = currentSearchResultRowID
         context.coordinator.requestedSearchRevealRowID = requestedSearchRevealRowID
         context.coordinator.onUserScrollActivityChanged = onUserScrollActivityChanged
-        context.coordinator.onMeasuredFittingWidthChange = onMeasuredFittingWidthChange
-        context.coordinator.onHorizontalOverflowChange = onHorizontalOverflowChange
         context.coordinator.onActivateRow = onActivateRow
         context.coordinator.onDoubleActivateRow = onDoubleActivateRow
         tableView.allowsMultipleSelection = allowsMultipleSelection

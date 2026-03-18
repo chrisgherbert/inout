@@ -2,49 +2,6 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-private struct ClipScrollAuditProbe: NSViewRepresentable {
-    let label: String
-
-    final class Coordinator {
-        var lastSignature = ""
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> NSView {
-        NSView(frame: .zero)
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            var ancestor: NSView? = nsView
-            var enclosingScrollView: NSScrollView?
-            while let current = ancestor {
-                if let scrollView = current as? NSScrollView {
-                    enclosingScrollView = scrollView
-                    break
-                }
-                ancestor = current.superview
-            }
-            guard let scrollView = enclosingScrollView else { return }
-
-            scrollView.layoutSubtreeIfNeeded()
-            scrollView.contentView.layoutSubtreeIfNeeded()
-            scrollView.documentView?.layoutSubtreeIfNeeded()
-
-            logScrollAuditIfNeeded(
-                label: label,
-                scrollView: scrollView,
-                documentView: scrollView.documentView,
-                fittingWidth: scrollView.documentView?.fittingSize.width,
-                lastSignature: &context.coordinator.lastSignature
-            )
-        }
-    }
-}
-
 private struct LazyToolTabContent<Content: View>: View {
     let isActive: Bool
     let content: () -> Content
@@ -152,7 +109,6 @@ struct ToolContentView: View {
                             )
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .id("clip-\(model.sourceSessionID.uuidString)")
-                                .background(ClipScrollAuditProbe(label: "ClipOuterScroll"))
                         }
                         .scrollIndicators(.automatic)
                     } else {
