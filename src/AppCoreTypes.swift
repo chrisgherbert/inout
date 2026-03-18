@@ -340,6 +340,38 @@ enum URLDownloadSaveLocationMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum URLDownloadAuthenticationMode: String, CaseIterable, Identifiable {
+    case none = "None"
+    case browserCookies = "Use Browser Cookies"
+
+    var id: String { rawValue }
+}
+
+enum URLDownloadBrowserCookiesSource: String, CaseIterable, Identifiable {
+    case firefox = "Firefox"
+    case chrome = "Chrome"
+    case brave = "Brave"
+    case edge = "Edge"
+    case safari = "Safari"
+
+    var id: String { rawValue }
+
+    var ytDLPArgument: String {
+        switch self {
+        case .firefox:
+            return "firefox"
+        case .chrome:
+            return "chrome"
+        case .brave:
+            return "brave"
+        case .edge:
+            return "edge"
+        case .safari:
+            return "safari"
+        }
+    }
+}
+
 typealias Segment = InOutCore.Segment
 
 struct CaptureTimelineMarker: Identifiable, Equatable {

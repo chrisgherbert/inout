@@ -112,13 +112,16 @@ struct ToolContentView: View {
                         }
                         .scrollIndicators(.automatic)
                     } else {
-                        ClipToolView(
-                            model: model,
-                            clipTimelinePresentation: model.clipTimelinePresentation,
-                            isCompactLayout: isCompactLayout
-                        )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                            .id("clip-\(model.sourceSessionID.uuidString)")
+                        ScrollView {
+                            ClipToolView(
+                                model: model,
+                                clipTimelinePresentation: model.clipTimelinePresentation,
+                                isCompactLayout: isCompactLayout
+                            )
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id("clip-\(model.sourceSessionID.uuidString)")
+                        }
+                        .scrollIndicators(.automatic)
                     }
                 }
             }

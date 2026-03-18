@@ -46,6 +46,18 @@ enum URLDownloadUtilities {
         }
     }
 
+    static func ytDLPAuthenticationArguments(
+        authenticationMode: URLDownloadAuthenticationMode,
+        browserCookiesSource: URLDownloadBrowserCookiesSource
+    ) -> [String] {
+        switch authenticationMode {
+        case .none:
+            return []
+        case .browserCookies:
+            return ["--cookies-from-browser", browserCookiesSource.ytDLPArgument]
+        }
+    }
+
     static func defaultDownloadDirectoryURL(fileManager: FileManager = .default) -> URL? {
         if let downloads = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first {
             return downloads

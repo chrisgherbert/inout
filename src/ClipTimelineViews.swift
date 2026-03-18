@@ -77,6 +77,8 @@ struct ClipToolView: View {
     @State private var importURLPreset: URLDownloadPreset = .compatibleBest
     @State private var importURLSaveMode: URLDownloadSaveLocationMode = .askEachTime
     @State private var importCustomFolderPath: String = ""
+    @State private var importURLAuthenticationMode: URLDownloadAuthenticationMode = .none
+    @State private var importURLBrowserCookiesSource: URLDownloadBrowserCookiesSource = .firefox
     @State private var showURLImportAdvancedOptions = false
     @State private var emptyStateURLText: String = ""
     @State private var isEmptyDropTargeted = false
@@ -1581,10 +1583,9 @@ struct ClipToolView: View {
                         dismissTimecodeFieldFocus()
                     }
             } else {
-                Spacer(minLength: 0)
                 emptySourceImportView
-                    .frame(maxWidth: .infinity)
-                Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 40)
             }
         }
         .background(
@@ -1607,6 +1608,26 @@ struct ClipToolView: View {
         ClipEmptySourceView(
             emptyStateURLText: $emptyStateURLText,
             isDropTargeted: $isEmptyDropTargeted,
+            urlDownloadPreset: Binding(
+                get: { model.urlDownloadPreset },
+                set: { model.urlDownloadPreset = $0 }
+            ),
+            urlDownloadSaveMode: Binding(
+                get: { model.urlDownloadSaveLocationMode },
+                set: { model.urlDownloadSaveLocationMode = $0 }
+            ),
+            customURLDownloadDirectoryPath: Binding(
+                get: { model.customURLDownloadDirectoryPath },
+                set: { model.customURLDownloadDirectoryPath = $0 }
+            ),
+            urlDownloadAuthenticationMode: Binding(
+                get: { model.urlDownloadAuthenticationMode },
+                set: { model.urlDownloadAuthenticationMode = $0 }
+            ),
+            urlDownloadBrowserCookiesSource: Binding(
+                get: { model.urlDownloadBrowserCookiesSource },
+                set: { model.urlDownloadBrowserCookiesSource = $0 }
+            ),
             reduceTransparency: reduceTransparency,
             isURLDownloadEnabled: model.ytDLPAvailable && model.canRequestURLDownload,
             onChooseFile: {
@@ -1619,8 +1640,13 @@ struct ClipToolView: View {
                     urlText: trimmed,
                     preset: model.urlDownloadPreset,
                     saveMode: model.urlDownloadSaveLocationMode,
-                    customFolderPath: model.customURLDownloadDirectoryPath
+                    customFolderPath: model.customURLDownloadDirectoryPath,
+                    authenticationMode: model.urlDownloadAuthenticationMode,
+                    browserCookiesSource: model.urlDownloadBrowserCookiesSource
                 )
+            },
+            onChooseCustomFolder: {
+                model.chooseCustomURLDownloadDirectory()
             },
             onHandleDrop: { providers in
                 model.handleDrop(providers: providers)
@@ -1640,11 +1666,13 @@ struct ClipToolView: View {
         return nil
     }
 
-    private func prepareURLImportSheetDefaults() {
-        importURLText = ""
+    private func prepareURLImportSheetDefaults(prefilledURLText: String? = nil) {
+        importURLText = prefilledURLText ?? ""
         importURLPreset = model.urlDownloadPreset
         importURLSaveMode = model.urlDownloadSaveLocationMode
         importCustomFolderPath = model.customURLDownloadDirectoryPath
+        importURLAuthenticationMode = model.urlDownloadAuthenticationMode
+        importURLBrowserCookiesSource = model.urlDownloadBrowserCookiesSource
         showURLImportAdvancedOptions = false
     }
 
@@ -1656,7 +1684,9 @@ struct ClipToolView: View {
             urlText: trimmed,
             preset: importURLPreset,
             saveMode: importURLSaveMode,
-            customFolderPath: importCustomFolderPath
+            customFolderPath: importCustomFolderPath,
+            authenticationMode: importURLAuthenticationMode,
+            browserCookiesSource: importURLBrowserCookiesSource
         )
     }
 
@@ -1666,6 +1696,8 @@ struct ClipToolView: View {
             importURLPreset: $importURLPreset,
             importURLSaveMode: $importURLSaveMode,
             importCustomFolderPath: $importCustomFolderPath,
+            importURLAuthenticationMode: $importURLAuthenticationMode,
+            importURLBrowserCookiesSource: $importURLBrowserCookiesSource,
             showAdvancedOptions: $showURLImportAdvancedOptions,
             clipboardURLString: clipboardURLString,
             onCancel: {

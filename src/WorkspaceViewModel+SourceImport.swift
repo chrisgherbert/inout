@@ -40,7 +40,9 @@ extension WorkspaceViewModel {
         urlText: String,
         preset: URLDownloadPreset,
         saveMode: URLDownloadSaveLocationMode,
-        customFolderPath: String?
+        customFolderPath: String?,
+        authenticationMode: URLDownloadAuthenticationMode,
+        browserCookiesSource: URLDownloadBrowserCookiesSource
     ) {
         guard canRequestURLDownload else {
             uiMessage = "Finish current task before downloading."
@@ -60,6 +62,8 @@ extension WorkspaceViewModel {
         if let customFolderPath {
             customURLDownloadDirectoryPath = customFolderPath
         }
+        urlDownloadAuthenticationMode = authenticationMode
+        urlDownloadBrowserCookiesSource = browserCookiesSource
 
         if preset.requiresTranscodeWarning && !confirmTranscodeDownloadWarning() {
             uiMessage = "Download cancelled."
@@ -111,9 +115,14 @@ extension WorkspaceViewModel {
                     "--progress",
                     "--progress-template", "download:%(progress._percent_str)s",
                     "--print", "after_move:%(filepath)s",
-                    "-o", downloadTemplateURL.path,
-                    normalized.absoluteString
-                ] + URLDownloadUtilities.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+                    "-o", downloadTemplateURL.path
+                ] + URLDownloadUtilities.ytDLPFormatArguments(for: preset)
+                  + URLDownloadUtilities.ytDLPAuthenticationArguments(
+                    authenticationMode: authenticationMode,
+                    browserCookiesSource: browserCookiesSource
+                  )
+                  + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+                  + [normalized.absoluteString]
 
                 let staged = await self.runYTDLPProcessWithProgress(
                     executableURL: ytDLPLaunch.executableURL,
@@ -132,9 +141,14 @@ extension WorkspaceViewModel {
                     "--progress",
                     "--progress-template", "download:%(progress._percent_str)s",
                     "--print", "after_move:%(filepath)s",
-                    "-o", destinationURL.path,
-                    normalized.absoluteString
-                ] + URLDownloadUtilities.ytDLPFormatArguments(for: preset) + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+                    "-o", destinationURL.path
+                ] + URLDownloadUtilities.ytDLPFormatArguments(for: preset)
+                  + URLDownloadUtilities.ytDLPAuthenticationArguments(
+                    authenticationMode: authenticationMode,
+                    browserCookiesSource: browserCookiesSource
+                  )
+                  + (ffmpegDirectory.map { ["--ffmpeg-location", $0] } ?? [])
+                  + [normalized.absoluteString]
 
                 let direct = await self.runYTDLPProcessWithProgress(
                     executableURL: ytDLPLaunch.executableURL,

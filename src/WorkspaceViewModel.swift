@@ -53,6 +53,8 @@ final class WorkspaceViewModel: ObservableObject {
         static let urlDownloadPreset = "prefs.urlDownloadPreset"
         static let urlDownloadSaveLocationMode = "prefs.urlDownloadSaveLocationMode"
         static let customURLDownloadDirectoryPath = "prefs.customURLDownloadDirectoryPath"
+        static let urlDownloadAuthenticationMode = "prefs.urlDownloadAuthenticationMode"
+        static let urlDownloadBrowserCookiesSource = "prefs.urlDownloadBrowserCookiesSource"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -282,6 +284,16 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var customURLDownloadDirectoryPath: String = "" {
         didSet {
             UserDefaults.standard.set(customURLDownloadDirectoryPath, forKey: DefaultsKey.customURLDownloadDirectoryPath)
+        }
+    }
+    @Published var urlDownloadAuthenticationMode: URLDownloadAuthenticationMode = .none {
+        didSet {
+            UserDefaults.standard.set(urlDownloadAuthenticationMode.rawValue, forKey: DefaultsKey.urlDownloadAuthenticationMode)
+        }
+    }
+    @Published var urlDownloadBrowserCookiesSource: URLDownloadBrowserCookiesSource = .firefox {
+        didSet {
+            UserDefaults.standard.set(urlDownloadBrowserCookiesSource.rawValue, forKey: DefaultsKey.urlDownloadBrowserCookiesSource)
         }
     }
     @Published var estimatedSizeWarningThresholdGB: Double = 1.0 {
@@ -522,6 +534,14 @@ final class WorkspaceViewModel: ObservableObject {
             urlDownloadSaveLocationMode = mode
         }
         customURLDownloadDirectoryPath = defaults.string(forKey: DefaultsKey.customURLDownloadDirectoryPath) ?? ""
+        if let rawURLAuthMode = defaults.string(forKey: DefaultsKey.urlDownloadAuthenticationMode),
+           let mode = URLDownloadAuthenticationMode(rawValue: rawURLAuthMode) {
+            urlDownloadAuthenticationMode = mode
+        }
+        if let rawURLBrowserSource = defaults.string(forKey: DefaultsKey.urlDownloadBrowserCookiesSource),
+           let source = URLDownloadBrowserCookiesSource(rawValue: rawURLBrowserSource) {
+            urlDownloadBrowserCookiesSource = source
+        }
 
         if let rawCaptionStyle = defaults.string(forKey: DefaultsKey.burnInCaptionStyle),
            let style = BurnInCaptionStyle(rawValue: rawCaptionStyle) {
