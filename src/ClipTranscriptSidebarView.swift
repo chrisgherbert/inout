@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ClipTranscriptSidebarView: View, Equatable {
     let transcriptSegments: [TranscriptSegment]
@@ -27,7 +28,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     @State private var transcriptSearchVersion: Int = 0
     @State private var settledCurrentTimeSeconds: Double = 0
     @State private var isUserScrollingTranscript = false
-    @FocusState private var isSearchFieldFocused: Bool
+    @State private var transcriptControlsAvailableWidth: CGFloat = 0
 
     static func == (lhs: ClipTranscriptSidebarView, rhs: ClipTranscriptSidebarView) -> Bool {
         lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
@@ -242,6 +243,36 @@ struct ClipTranscriptSidebarView: View, Equatable {
         }
     }
 
+    @ViewBuilder
+    private func transcriptControls(availableWidth: CGFloat) -> some View {
+        let usesStackedLayout = availableWidth < 440
+
+        if usesStackedLayout {
+            VStack(alignment: .leading, spacing: 6) {
+                transcriptSearchField
+
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    transcriptExportButton
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                transcriptSearchField
+                transcriptExportButton
+            }
+        }
+    }
+
+    private var transcriptExportButton: some View {
+        Button("Export…") {
+            exportTranscript()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -265,31 +296,20 @@ struct ClipTranscriptSidebarView: View, Equatable {
 
             if hasTranscript {
                 VStack(alignment: .leading, spacing: 6) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 8) {
-                            transcriptSearchField
-
-                            Button("Export…") {
-                                exportTranscript()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .fixedSize(horizontal: true, vertical: false)
+                    transcriptControls(
+                        availableWidth: transcriptControlsAvailableWidth > 0 ? transcriptControlsAvailableWidth : 600
+                    )
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear
+                                .preference(
+                                    key: TranscriptControlsWidthPreferenceKey.self,
+                                    value: geometry.size.width
+                                )
                         }
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            transcriptSearchField
-
-                            HStack(spacing: 0) {
-                                Spacer(minLength: 0)
-                                Button("Export…") {
-                                    exportTranscript()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .fixedSize(horizontal: true, vertical: false)
-                            }
-                        }
+                    )
+                    .onPreferenceChange(TranscriptControlsWidthPreferenceKey.self) { newWidth in
+                        transcriptControlsAvailableWidth = newWidth
                     }
 
                     if !normalizedSearchText.isEmpty {
@@ -424,9 +444,6 @@ struct ClipTranscriptSidebarView: View, Equatable {
             refreshTranscriptRows()
             settledCurrentTimeSeconds = currentTimeSeconds
         }
-        .onChange(of: focusSearchFieldToken) { _ in
-            isSearchFieldFocused = true
-        }
         .onChange(of: transcriptRefreshToken) { _ in
             refreshTranscriptRows()
         }
@@ -464,33 +481,97 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 }
 
+private struct TranscriptControlsWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private extension ClipTranscriptSidebarView {
     var transcriptSearchField: some View {
-        TextField("Search transcript", text: $searchText)
-            .textFieldStyle(.roundedBorder)
-            .controlSize(.small)
-            .focused($isSearchFieldFocused)
-            .frame(minWidth: 0, maxWidth: .infinity)
-            .layoutPriority(1)
-            .padding(.trailing, normalizedSearchText.isEmpty ? 0 : 22)
-            .overlay(alignment: .trailing) {
-                if !normalizedSearchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 8)
-                    .help("Clear Search")
-                    .accessibilityLabel("Clear Search")
-                }
-            }
-            .onSubmit {
+        TranscriptSearchField(
+            text: $searchText,
+            placeholder: "Search transcript",
+            focusToken: focusSearchFieldToken,
+            onSubmit: {
                 navigateSearchMatch(direction: 1)
             }
+        )
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .frame(height: 22)
+            .layoutPriority(1)
+    }
+}
+
+private struct TranscriptSearchField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let focusToken: Int
+    let onSubmit: () -> Void
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: TranscriptSearchField
+        var lastAppliedFocusToken: Int
+
+        init(parent: TranscriptSearchField) {
+            self.parent = parent
+            self.lastAppliedFocusToken = parent.focusToken
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSSearchField else { return }
+            let value = field.stringValue
+            if parent.text != value {
+                parent.text = value
+            }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                parent.onSubmit()
+                return true
+            }
+            return false
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let searchField = NSSearchField(frame: .zero)
+        searchField.delegate = context.coordinator
+        searchField.placeholderString = placeholder
+        searchField.controlSize = .small
+        searchField.sendsWholeSearchString = false
+        searchField.sendsSearchStringImmediately = true
+        searchField.recentsAutosaveName = nil
+        return searchField
+    }
+
+    func updateNSView(_ nsView: NSSearchField, context: Context) {
+        context.coordinator.parent = self
+
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+
+        if nsView.placeholderString != placeholder {
+            nsView.placeholderString = placeholder
+        }
+
+        if context.coordinator.lastAppliedFocusToken != focusToken {
+            context.coordinator.lastAppliedFocusToken = focusToken
+            DispatchQueue.main.async {
+                guard let window = nsView.window else { return }
+                if window.firstResponder !== nsView.currentEditor() {
+                    window.makeFirstResponder(nsView)
+                }
+            }
+        }
     }
 }
 

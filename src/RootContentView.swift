@@ -48,7 +48,6 @@ struct WindowAccessor: NSViewRepresentable {
 
 struct ContentView: View {
     @StateObject private var model: WorkspaceViewModel
-    @ObservedObject private var sourcePresentation: SourcePresentationModel
     @ObservedObject private var externalOpenBridge = ExternalFileOpenBridge.shared
     @AppStorage("onboarding.urlDownloadSetupCompleted") private var urlDownloadSetupCompleted = false
     @AppStorage("onboarding.urlDownloadSetupDismissed") private var urlDownloadSetupDismissed = false
@@ -60,18 +59,16 @@ struct ContentView: View {
     @State private var showURLDownloadSetupSheet = false
 
     @MainActor init() {
-        let workspace = WorkspaceViewModel()
-        _model = StateObject(wrappedValue: workspace)
-        _sourcePresentation = ObservedObject(wrappedValue: workspace.sourcePresentation)
+        _model = StateObject(wrappedValue: WorkspaceViewModel())
     }
 
     private func syncWindowMetadata() {
         guard let appWindow else { return }
         appWindow.titleVisibility = .visible
         appWindow.titlebarAppearsTransparent = false
-        appWindow.title = sourcePresentation.sourceURL?.lastPathComponent ?? "In/Out"
+        appWindow.title = model.sourceURL?.lastPathComponent ?? "In/Out"
         appWindow.subtitle = ""
-        appWindow.representedURL = sourcePresentation.sourceURL
+        appWindow.representedURL = model.sourceURL
     }
 
     var body: some View {
@@ -81,7 +78,7 @@ struct ContentView: View {
 
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: isCompactLayout ? 8 : 10) {
-                    ToolContentView(model: model, sourcePresentation: sourcePresentation, isCompactLayout: isCompactLayout)
+                    ToolContentView(model: model, isCompactLayout: isCompactLayout)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
                 .padding(.top, contentPadding)
@@ -119,7 +116,7 @@ struct ContentView: View {
                 }
                 let canReuseSingleEmptyWindow =
                     visibleDocumentWindows.count == 1 &&
-                    sourcePresentation.sourceURL == nil
+                    model.sourceURL == nil
 
                 guard appWindow?.isKeyWindow == true || canReuseSingleEmptyWindow else { return }
                 model.setSource(url)
@@ -135,7 +132,7 @@ struct ContentView: View {
                 syncWindowMetadata()
             }
         )
-        .onChange(of: sourcePresentation.sourceURL?.path) { _ in
+        .onChange(of: model.sourceURL?.path) { _ in
             syncWindowMetadata()
         }
         .onChange(of: model.queuedJobs.count) { newCount in
@@ -160,7 +157,7 @@ struct ContentView: View {
                 showURLDownloadSetupSheet = false
             }
         }
-        .onChange(of: sourcePresentation.sourceURL?.path) { _ in
+        .onChange(of: model.sourceURL?.path) { _ in
             updateURLDownloadOnboardingPresentation()
         }
         .sheet(isPresented: $showURLDownloadSetupSheet) {
@@ -208,7 +205,7 @@ struct ContentView: View {
         }
 
         let shouldShow =
-            sourcePresentation.sourceURL == nil &&
+            model.sourceURL == nil &&
             !urlDownloadSetupCompleted &&
             !urlDownloadSetupDismissed
 

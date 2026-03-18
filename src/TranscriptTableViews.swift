@@ -6,6 +6,42 @@ func normalizedTranscriptSearchText(_ text: String) -> String {
     text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
 }
 
+enum TranscriptTextWidthMode {
+    case moderated
+    case exact
+}
+
+func preferredTranscriptTextWidth(
+    for rows: [TranscriptDisplayRow],
+    fontSize: CGFloat,
+    mode: TranscriptTextWidthMode = .moderated
+) -> CGFloat {
+    let baseAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: fontSize)
+    ]
+
+    var widths: [CGFloat] = []
+    widths.reserveCapacity(rows.count)
+    for row in rows {
+        let width = ceil((row.text as NSString).size(withAttributes: baseAttributes).width) + 12
+        widths.append(width)
+    }
+
+    guard !widths.isEmpty else { return 320 }
+
+    switch mode {
+    case .exact:
+        return min(max(320, widths.max() ?? 320), 6_000)
+    case .moderated:
+        widths.sort()
+        let widest = widths.last ?? 320
+        let percentileIndex = min(widths.count - 1, Int((Double(widths.count - 1) * 0.97).rounded()))
+        let percentileWidth = widths[percentileIndex]
+        let moderatedWidth = min(widest, percentileWidth + 80)
+        return min(max(320, moderatedWidth), 6_000)
+    }
+}
+
 struct TranscriptDisplayRow: Identifiable, Equatable {
     let id: UUID
     let start: Double
@@ -395,13 +431,20 @@ struct TranscriptTableView: NSViewRepresentable {
             let timeColumn = tableView.tableColumns[0]
             let textColumn = tableView.tableColumns[1]
 
-            let minTextWidth = max(280, scrollView.contentSize.width - timeColumn.width - 18)
+            let availableTextWidth = max(0, scrollView.contentSize.width - timeColumn.width - 18)
+            let minTextWidth = max(280, availableTextWidth)
             let measuredTextWidth = preferredTranscriptTextColumnWidth()
             let targetWidth = max(minTextWidth, measuredTextWidth)
             if abs(textColumn.width - targetWidth) > 0.5 {
                 textColumn.width = targetWidth
             }
             tableView.sizeToFit()
+
+            let needsHorizontalScrolling = tableView.bounds.width > (scrollView.contentView.bounds.width + 2)
+            if scrollView.hasHorizontalScroller != needsHorizontalScrolling {
+                scrollView.hasHorizontalScroller = needsHorizontalScrolling
+                scrollView.tile()
+            }
         }
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -457,19 +500,7 @@ struct TranscriptTableView: NSViewRepresentable {
                 return cachedTranscriptTextWidth
             }
 
-            let baseAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: fontSize)
-            ]
-
-            var widest: CGFloat = 0
-            for row in rows {
-                let width = ceil((row.text as NSString).size(withAttributes: baseAttributes).width) + 12
-                if width > widest {
-                    widest = width
-                }
-            }
-
-            let measured = min(max(320, widest), 6_000)
+            let measured = preferredTranscriptTextWidth(for: rows, fontSize: fontSize, mode: .moderated)
             cachedTranscriptTextWidth = measured
             lastMeasuredRowsVersion = rowsVersion
             lastMeasuredFontSize = fontSize
@@ -706,9 +737,11 @@ struct TranscriptTableView: NSViewRepresentable {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
-        scrollView.autohidesScrollers = false
-        scrollView.scrollerStyle = .overlay
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .legacy
         scrollView.borderType = .noBorder
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 2, right: 2)
+        scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 2)
 
         let tableView = TranscriptNSTableView(frame: .zero)
         tableView.headerView = nil

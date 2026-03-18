@@ -45,7 +45,6 @@ private final class ClipToolRuntimeState: ObservableObject {
 
 struct ClipToolView: View {
     @ObservedObject var model: WorkspaceViewModel
-    @ObservedObject var sourcePresentation: SourcePresentationModel
     @ObservedObject var clipTimelinePresentation: ClipTimelinePresentationModel
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -83,7 +82,6 @@ struct ClipToolView: View {
     @State private var isEmptyDropTargeted = false
     @FocusState private var isImportURLFieldFocused: Bool
 
-    private var source: SourcePresentationModel { sourcePresentation }
     private var clip: ClipTimelinePresentationModel { clipTimelinePresentation }
 
     private var allowedTimelineZoomLevels: [Double] {
@@ -264,7 +262,7 @@ struct ClipToolView: View {
     }
 
     private func loadPlayerItem() {
-        guard let sourceURL = source.sourceURL else {
+        guard let sourceURL = model.sourceURL else {
             removePlayerTimeObserver()
             player.replaceCurrentItem(with: nil)
             playheadSeconds = 0
@@ -763,7 +761,7 @@ struct ClipToolView: View {
 
             if flags.contains(.command) && flags.contains(.option) && !flags.contains(.control) && !flags.contains(.shift) {
                 if chars == "s",
-                   source.sourceURL != nil,
+                   model.sourceURL != nil,
                    model.hasVideoTrack {
                     model.captureFrame(at: effectivePlayheadSeconds())
                     return nil
@@ -828,7 +826,7 @@ struct ClipToolView: View {
             }
 
             if flags.contains(.option) && flags.contains(.shift) && !flags.contains(.command) && !flags.contains(.control) {
-                let fps = max(1.0, source.sourceInfo?.frameRate ?? 30.0)
+                let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
                 let hundredFrames = 100.0 / fps
                 if event.specialKey == .leftArrow {
                     seekPlayerAnimatedFromKeyboard(to: playheadSeconds - hundredFrames)
@@ -849,7 +847,7 @@ struct ClipToolView: View {
                     seekPlayerAnimatedFromKeyboard(to: totalDurationSeconds)
                     return nil
                 }
-                let fps = max(1.0, source.sourceInfo?.frameRate ?? 30.0)
+                let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
                 let oneFrame = 1.0 / fps
                 if event.specialKey == .leftArrow {
                     seekPlayer(to: playheadSeconds - oneFrame)
@@ -898,7 +896,7 @@ struct ClipToolView: View {
             let hasShift = flags.contains(.shift)
             guard hasShift && !hasDisallowedModifier else { return event }
 
-            let fps = max(1.0, source.sourceInfo?.frameRate ?? 30.0)
+            let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
             let tenFrames = 10.0 / fps
 
             if event.specialKey == .leftArrow {
@@ -1131,6 +1129,31 @@ struct ClipToolView: View {
         return clampedTranscriptSidebarWidth(CGFloat(storedTranscriptSidebarWidth))
     }
 
+    private func bestFitTranscriptSidebarWidth(maximumSidebarWidth: CGFloat) -> CGFloat {
+        let rows = model.transcriptSegments.map { segment in
+            TranscriptDisplayRow(
+                id: segment.id,
+                start: segment.start,
+                startLabel: formatSeconds(segment.start),
+                text: segment.text,
+                normalizedText: normalizedTranscriptSearchText(segment.text)
+            )
+        }
+
+        guard !rows.isEmpty else {
+            return min(clipTranscriptSidebarMinWidth, maximumSidebarWidth)
+        }
+
+        let textWidth = preferredTranscriptTextWidth(for: rows, fontSize: 13, mode: .exact)
+        let verticalScrollerWidth = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+        let tableChromeWidth: CGFloat = 122 + 18 + verticalScrollerWidth
+        let sidebarPadding: CGFloat = 24
+        let autoFitHeadroom: CGFloat = 36
+        let desiredWidth = textWidth + tableChromeWidth + sidebarPadding + autoFitHeadroom
+        let cappedMaximum = min(clipTranscriptSidebarMaxWidth, maximumSidebarWidth)
+        return min(max(desiredWidth, clipTranscriptSidebarMinWidth), cappedMaximum)
+    }
+
     private func playTranscript(from seconds: Double) {
         seekPlayerAndFocusViewport(to: seconds, focusViewport: true)
         springAnimateVisualPlayhead(to: seconds)
@@ -1138,7 +1161,7 @@ struct ClipToolView: View {
     }
 
     private var currentPlayerAspectRatio: CGFloat {
-        if let resolution = source.sourceInfo?.resolution {
+        if let resolution = model.sourceInfo?.resolution {
             let sanitized = resolution
                 .replacingOccurrences(of: "×", with: "x")
                 .replacingOccurrences(of: " ", with: "")
@@ -1167,31 +1190,41 @@ struct ClipToolView: View {
         VStack(alignment: .leading, spacing: 6) {
             GeometryReader { geometry in
                 if showsClipTranscriptSidebar {
-                    let dividerWidth: CGFloat = 16
-                    let maxPlayerWidth = max(
-                        260,
-                        geometry.size.width - clipTranscriptSidebarWidth - dividerWidth
+                    let rowSpacing: CGFloat = 12
+                    let dividerHandleWidth: CGFloat = 4
+                    let minimumPlayerRegionWidth: CGFloat = 260
+                    let maximumSidebarWidth = max(
+                        220,
+                        geometry.size.width - minimumPlayerRegionWidth - dividerHandleWidth - (rowSpacing * 2)
                     )
-                    let resolvedPlayerWidth = min(preferredPlayerDisplayWidth, maxPlayerWidth)
+                    let sidebarWidth = min(clipTranscriptSidebarWidth, maximumSidebarWidth)
+                    let playerRegionWidth = max(
+                        minimumPlayerRegionWidth,
+                        geometry.size.width - sidebarWidth - dividerHandleWidth - (rowSpacing * 2)
+                    )
+                    let resolvedPlayerWidth = min(preferredPlayerDisplayWidth, playerRegionWidth)
 
-                    HStack(alignment: .top, spacing: 12) {
-                        Spacer(minLength: 0)
+                    HStack(alignment: .top, spacing: rowSpacing) {
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
 
-                        InlinePlayerView(player: player)
-                            .frame(width: resolvedPlayerWidth, height: currentPlayerHeight)
-                            .transaction { transaction in
-                                transaction.animation = nil
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-                            .onTapGesture {
-                                dismissTimecodeFieldFocus()
-                            }
+                            InlinePlayerView(player: player)
+                                .frame(width: resolvedPlayerWidth, height: currentPlayerHeight)
+                                .transaction { transaction in
+                                    transaction.animation = nil
+                                }
+                                .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+                                .onTapGesture {
+                                    dismissTimecodeFieldFocus()
+                                }
 
-                        Spacer(minLength: 12)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(width: playerRegionWidth, height: currentPlayerHeight, alignment: .center)
 
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(Color.secondary.opacity(0.45))
-                            .frame(width: 4)
+                            .frame(width: dividerHandleWidth)
                             .frame(maxHeight: .infinity)
                             .padding(.vertical, 10)
                             .contentShape(Rectangle().inset(by: -6))
@@ -1202,6 +1235,15 @@ struct ClipToolView: View {
                                     NSCursor.arrow.set()
                                 }
                             }
+                            .simultaneousGesture(
+                                TapGesture(count: 2).onEnded {
+                                    let fittedWidth = bestFitTranscriptSidebarWidth(maximumSidebarWidth: maximumSidebarWidth)
+                                    storedTranscriptSidebarWidth = Double(fittedWidth)
+                                    liveTranscriptSidebarWidth = nil
+                                    runtime.transcriptSidebarResizeStartWidth = nil
+                                    runtime.transcriptSidebarResizeStartGlobalX = nil
+                                }
+                            )
                             .gesture(
                                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                                     .onChanged { value in
@@ -1226,10 +1268,10 @@ struct ClipToolView: View {
 
                         EquatableView(content:
                             ClipTranscriptSidebarView(
-                                transcriptSegments: source.transcriptSegments,
-                                transcriptStatusText: source.transcriptStatusText,
+                                transcriptSegments: model.transcriptSegments,
+                                transcriptStatusText: model.transcriptStatusText,
                                 canGenerateTranscript: model.canGenerateTranscript,
-                                isGeneratingTranscript: source.isGeneratingTranscript,
+                                isGeneratingTranscript: model.isGeneratingTranscript,
                                 hasAudioTrack: model.hasAudioTrack,
                                 currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
                                 isPlaying: player.rate != 0,
@@ -1254,7 +1296,7 @@ struct ClipToolView: View {
                                 }
                             )
                         )
-                        .frame(width: clipTranscriptSidebarWidth, height: currentPlayerHeight)
+                        .frame(width: sidebarWidth, height: currentPlayerHeight)
                     }
                     .frame(width: geometry.size.width, height: currentPlayerHeight, alignment: .topLeading)
                 } else {
@@ -1426,7 +1468,7 @@ struct ClipToolView: View {
     private var selectionSection: some View {
         ClipSelectionPanel(
             player: player,
-            sourceSessionID: source.sourceSessionID,
+            sourceSessionID: model.sourceSessionID,
             clipStartSeconds: clip.clipStartSeconds,
             clipEndSeconds: clip.clipEndSeconds,
             clipDurationSeconds: model.clipDurationSeconds,
@@ -1525,7 +1567,7 @@ struct ClipToolView: View {
 
     private var clipBaseContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if source.sourceURL != nil {
+            if model.sourceURL != nil {
                 clipPlayerSection
                 timelineControlsSection
                 outputSection
@@ -1656,7 +1698,7 @@ struct ClipToolView: View {
             }
         }
 
-        let step2 = step1.onChange(of: source.sourceURL?.path) { _ in
+        let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
             loadPlayerItem()
         }
 

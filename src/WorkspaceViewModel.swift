@@ -4,6 +4,7 @@ import AVFoundation
 import UniformTypeIdentifiers
 import UserNotifications
 import Foundation
+import Combine
 
 enum ClipExportQueueStatus: String, Equatable {
     case queued
@@ -56,45 +57,29 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var selectedTool: WorkspaceTool = .clip
     let sourcePresentation = SourcePresentationModel()
     let clipTimelinePresentation = ClipTimelinePresentationModel()
-
-    var sourceURL: URL? {
-        get { sourcePresentation.sourceURL }
-        set { sourcePresentation.sourceURL = newValue }
+    @Published var sourceURL: URL? {
+        didSet { sourcePresentation.sourceURL = sourceURL }
     }
-
-    var sourceSessionID: UUID {
-        get { sourcePresentation.sourceSessionID }
-        set { sourcePresentation.sourceSessionID = newValue }
+    @Published var sourceSessionID = UUID() {
+        didSet { sourcePresentation.sourceSessionID = sourceSessionID }
     }
-
-    var analysis: FileAnalysis? {
-        get { sourcePresentation.analysis }
-        set { sourcePresentation.analysis = newValue }
+    @Published var analysis: FileAnalysis? {
+        didSet { sourcePresentation.analysis = analysis }
     }
-
-    var sourceInfo: SourceMediaInfo? {
-        get { sourcePresentation.sourceInfo }
-        set { sourcePresentation.sourceInfo = newValue }
+    @Published var sourceInfo: SourceMediaInfo? {
+        didSet { sourcePresentation.sourceInfo = sourceInfo }
     }
-
-    var transcriptSegments: [TranscriptSegment] {
-        get { sourcePresentation.transcriptSegments }
-        set { sourcePresentation.transcriptSegments = newValue }
+    @Published var transcriptSegments: [TranscriptSegment] = [] {
+        didSet { sourcePresentation.transcriptSegments = transcriptSegments }
     }
-
-    var transcriptStatusText: String {
-        get { sourcePresentation.transcriptStatusText }
-        set { sourcePresentation.transcriptStatusText = newValue }
+    @Published var transcriptStatusText: String = "No transcript generated yet." {
+        didSet { sourcePresentation.transcriptStatusText = transcriptStatusText }
     }
-
-    var hasCachedTranscript: Bool {
-        get { sourcePresentation.hasCachedTranscript }
-        set { sourcePresentation.hasCachedTranscript = newValue }
+    @Published var hasCachedTranscript = false {
+        didSet { sourcePresentation.hasCachedTranscript = hasCachedTranscript }
     }
-
-    var isGeneratingTranscript: Bool {
-        get { sourcePresentation.isGeneratingTranscript }
-        set { sourcePresentation.isGeneratingTranscript = newValue }
+    @Published var isGeneratingTranscript = false {
+        didSet { sourcePresentation.isGeneratingTranscript = isGeneratingTranscript }
     }
 
     @Published var isAnalyzing = false {
@@ -402,8 +387,24 @@ final class WorkspaceViewModel: ObservableObject {
     var cachedWhisperCLIAvailable = false
     var cachedWhisperModelAvailable = false
     var cachedWhisperAvailable = false
+    private var presentationModelCancellables: Set<AnyCancellable> = []
 
     init() {
+        clipTimelinePresentation.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &presentationModelCancellables)
+
+        sourcePresentation.sourceURL = sourceURL
+        sourcePresentation.sourceSessionID = sourceSessionID
+        sourcePresentation.analysis = analysis
+        sourcePresentation.sourceInfo = sourceInfo
+        sourcePresentation.transcriptSegments = transcriptSegments
+        sourcePresentation.transcriptStatusText = transcriptStatusText
+        sourcePresentation.hasCachedTranscript = hasCachedTranscript
+        sourcePresentation.isGeneratingTranscript = isGeneratingTranscript
+
         willTerminateObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
