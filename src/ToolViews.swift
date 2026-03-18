@@ -30,13 +30,13 @@ struct SourceHeaderView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(model.sourceURL == nil ? "Choose Media" : "Change Media") {
+            Button(model.sourcePresentation.sourceURL == nil ? "Choose Media" : "Change Media") {
                 model.chooseSource()
             }
 
             Spacer()
 
-            if let sourceURL = model.sourceURL {
+            if let sourceURL = model.sourcePresentation.sourceURL {
                 HStack(spacing: 6) {
                     Image(nsImage: fileIcon(for: sourceURL))
                         .interpolation(.high)
@@ -93,6 +93,7 @@ struct SourceHeaderView: View {
 
 struct ToolContentView: View {
     @ObservedObject var model: WorkspaceViewModel
+    @ObservedObject var sourcePresentation: SourcePresentationModel
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -100,17 +101,27 @@ struct ToolContentView: View {
         TabView(selection: $model.selectedTool) {
             LazyToolTabContent(isActive: model.selectedTool == .clip) {
                 Group {
-                    if model.sourceURL != nil {
+                    if sourcePresentation.sourceURL != nil {
                         ScrollView {
-                            ClipToolView(model: model, isCompactLayout: isCompactLayout)
+                            ClipToolView(
+                                model: model,
+                                sourcePresentation: sourcePresentation,
+                                clipTimelinePresentation: model.clipTimelinePresentation,
+                                isCompactLayout: isCompactLayout
+                            )
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .id("clip-\(model.sourceSessionID.uuidString)")
+                                .id("clip-\(sourcePresentation.sourceSessionID.uuidString)")
                         }
                         .scrollIndicators(.automatic)
                     } else {
-                        ClipToolView(model: model, isCompactLayout: isCompactLayout)
+                        ClipToolView(
+                            model: model,
+                            sourcePresentation: sourcePresentation,
+                            clipTimelinePresentation: model.clipTimelinePresentation,
+                            isCompactLayout: isCompactLayout
+                        )
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                            .id("clip-\(model.sourceSessionID.uuidString)")
+                            .id("clip-\(sourcePresentation.sourceSessionID.uuidString)")
                     }
                 }
             }
@@ -120,9 +131,9 @@ struct ToolContentView: View {
 
             LazyToolTabContent(isActive: model.selectedTool == .analyze) {
                 ScrollView {
-                    AnalyzeToolView(model: model, isCompactLayout: isCompactLayout)
+                    AnalyzeToolView(model: model, sourcePresentation: sourcePresentation, isCompactLayout: isCompactLayout)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .id("analyze-\(model.sourceSessionID.uuidString)")
+                        .id("analyze-\(sourcePresentation.sourceSessionID.uuidString)")
                 }
             }
             .padding(10)
@@ -132,9 +143,9 @@ struct ToolContentView: View {
 
             LazyToolTabContent(isActive: model.selectedTool == .convert) {
                 ScrollView {
-                    ConvertToolView(model: model, isCompactLayout: isCompactLayout)
+                    ConvertToolView(model: model, sourcePresentation: sourcePresentation, isCompactLayout: isCompactLayout)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .id("convert-\(model.sourceSessionID.uuidString)")
+                        .id("convert-\(sourcePresentation.sourceSessionID.uuidString)")
                 }
             }
             .padding(10)
@@ -146,13 +157,13 @@ struct ToolContentView: View {
                 ScrollView {
                     InspectToolView(
                         activity: model.activityPresentation,
-                        sourceURL: model.sourceURL,
-                        analysis: model.analysis,
-                        sourceInfo: model.sourceInfo,
-                        transcriptSegments: model.transcriptSegments,
-                        transcriptStatusText: model.transcriptStatusText,
+                        sourceURL: sourcePresentation.sourceURL,
+                        analysis: sourcePresentation.analysis,
+                        sourceInfo: sourcePresentation.sourceInfo,
+                        transcriptSegments: sourcePresentation.transcriptSegments,
+                        transcriptStatusText: sourcePresentation.transcriptStatusText,
                         canGenerateTranscript: model.canGenerateTranscript,
-                        isGeneratingTranscript: model.isGeneratingTranscript,
+                        isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
                         whisperTranscriptionAvailable: model.whisperTranscriptionAvailable,
                         hasAudioTrack: model.hasAudioTrack,
                         generateTranscript: { model.generateTranscriptFromInspect() },
@@ -163,7 +174,7 @@ struct ToolContentView: View {
                         isCompactLayout: isCompactLayout
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .id("inspect-\(model.sourceSessionID.uuidString)")
+                    .id("inspect-\(sourcePresentation.sourceSessionID.uuidString)")
                 }
             }
             .padding(10)
@@ -188,6 +199,7 @@ struct ToolContentView: View {
 
 struct AnalyzeToolView: View {
     @ObservedObject var model: WorkspaceViewModel
+    @ObservedObject var sourcePresentation: SourcePresentationModel
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -200,7 +212,7 @@ struct AnalyzeToolView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if model.sourceURL != nil {
+            if sourcePresentation.sourceURL != nil {
                 HStack(spacing: 8) {
                     Button {
                         model.startAnalysis()
@@ -236,14 +248,14 @@ struct AnalyzeToolView: View {
                     .controlSize(.small)
                     .disabled(model.isAnalyzing || !model.hasAudioTrack)
 
-                if let analysis = model.analysis {
+                if let analysis = sourcePresentation.analysis {
                     Text(analysis.summary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Group {
-                    if let analysis = model.analysis {
+                    if let analysis = sourcePresentation.analysis {
                         DetailView(
                             file: analysis,
                             isCompactLayout: isCompactLayout,
@@ -261,20 +273,21 @@ struct AnalyzeToolView: View {
                 EmptyToolView(title: "Analyze", subtitle: "Choose media and run analysis.")
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.sourceURL != nil)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.analysis?.summary ?? "")
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: sourcePresentation.sourceURL != nil)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: sourcePresentation.analysis?.summary ?? "")
     }
 }
 
 struct ConvertToolView: View {
     @ObservedObject var model: WorkspaceViewModel
+    @ObservedObject var sourcePresentation: SourcePresentationModel
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if model.sourceURL != nil {
+            if sourcePresentation.sourceURL != nil {
                 Group {
                     GroupBox("Audio Export") {
                         VStack(alignment: .leading, spacing: 10) {
@@ -346,7 +359,7 @@ struct ConvertToolView: View {
                         )
                     }
 
-                    if let source = model.sourceURL {
+                    if let source = sourcePresentation.sourceURL {
                         Text("Source: \(source.path)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -358,7 +371,7 @@ struct ConvertToolView: View {
                 EmptyToolView(title: "Convert", subtitle: "Choose source media to enable audio export.")
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.sourceURL != nil)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: sourcePresentation.sourceURL != nil)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isExporting)
     }
 }

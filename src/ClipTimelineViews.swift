@@ -45,6 +45,8 @@ private final class ClipToolRuntimeState: ObservableObject {
 
 struct ClipToolView: View {
     @ObservedObject var model: WorkspaceViewModel
+    @ObservedObject var sourcePresentation: SourcePresentationModel
+    @ObservedObject var clipTimelinePresentation: ClipTimelinePresentationModel
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.undoManager) private var undoManager
@@ -80,6 +82,10 @@ struct ClipToolView: View {
     @State private var emptyStateURLText: String = ""
     @State private var isEmptyDropTargeted = false
     @FocusState private var isImportURLFieldFocused: Bool
+
+    private var source: SourcePresentationModel { sourcePresentation }
+    private var clip: ClipTimelinePresentationModel { clipTimelinePresentation }
+
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
         if duration <= 300 {
@@ -258,7 +264,7 @@ struct ClipToolView: View {
     }
 
     private func loadPlayerItem() {
-        guard let sourceURL = model.sourceURL else {
+        guard let sourceURL = source.sourceURL else {
             removePlayerTimeObserver()
             player.replaceCurrentItem(with: nil)
             playheadSeconds = 0
@@ -273,7 +279,7 @@ struct ClipToolView: View {
 
         if runtime.loadedSourcePath == sourceURL.path, player.currentItem != nil {
             let duration = max(playerDurationSeconds, model.sourceDurationSeconds)
-            let restored = max(0, min(model.clipPlayheadSeconds, duration))
+            let restored = max(0, min(clip.clipPlayheadSeconds, duration))
             if abs(playheadSeconds - restored) > (1.0 / 120.0) {
                 seekPlayer(to: restored)
             } else {
@@ -288,7 +294,7 @@ struct ClipToolView: View {
         installPlayerTimeObserverIfNeeded()
         let duration = CMTimeGetSeconds(item.asset.duration)
         playerDurationSeconds = duration.isFinite && duration > 0 ? duration : model.sourceDurationSeconds
-        let restored = max(0, min(model.clipPlayheadSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let restored = max(0, min(clip.clipPlayheadSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
         playheadSeconds = restored
         syncVisualPlayheadImmediately(restored)
         viewportStartSeconds = 0
@@ -459,9 +465,9 @@ struct ClipToolView: View {
 
     private func navigateToMarker(previous: Bool) {
         let epsilon = 1.0 / 240.0
-        var points = model.captureTimelineMarkers.map(\.seconds)
-        points.append(model.clipStartSeconds)
-        points.append(model.clipEndSeconds)
+        var points = clip.captureTimelineMarkers.map(\.seconds)
+        points.append(clip.clipStartSeconds)
+        points.append(clip.clipEndSeconds)
         points.sort()
 
         var deduped: [Double] = []
@@ -491,10 +497,10 @@ struct ClipToolView: View {
         }
         if model.nearestTimelineMarker(to: target, tolerance: 1.0 / 120.0) != nil {
             model.selectTimelineMarkerIfAligned(near: target, tolerance: 1.0 / 120.0)
-            model.highlightedClipBoundary = nil
+            clip.highlightedClipBoundary = nil
         } else {
-            model.highlightedCaptureTimelineMarkerID = nil
-            model.highlightBoundaryIfNeeded(near: target, clipStart: model.clipStartSeconds, clipEnd: model.clipEndSeconds)
+            clip.highlightedCaptureTimelineMarkerID = nil
+            model.highlightBoundaryIfNeeded(near: target, clipStart: clip.clipStartSeconds, clipEnd: clip.clipEndSeconds)
         }
     }
 
@@ -725,8 +731,8 @@ struct ClipToolView: View {
         let now = CACurrentMediaTime()
         let syncInterval = 1.0 / 20.0
         guard force || (now - runtime.lastSharedPlayheadSyncTimestamp) >= syncInterval else { return }
-        if abs(model.clipPlayheadSeconds - seconds) > (1.0 / 240.0) {
-            model.clipPlayheadSeconds = seconds
+        if abs(clip.clipPlayheadSeconds - seconds) > (1.0 / 240.0) {
+            clip.clipPlayheadSeconds = seconds
         }
         if updateAlignment {
             model.selectTimelineMarkerIfAligned(near: seconds)
@@ -757,7 +763,7 @@ struct ClipToolView: View {
 
             if flags.contains(.command) && flags.contains(.option) && !flags.contains(.control) && !flags.contains(.shift) {
                 if chars == "s",
-                   model.sourceURL != nil,
+                   source.sourceURL != nil,
                    model.hasVideoTrack {
                     model.captureFrame(at: effectivePlayheadSeconds())
                     return nil
@@ -822,7 +828,7 @@ struct ClipToolView: View {
             }
 
             if flags.contains(.option) && flags.contains(.shift) && !flags.contains(.command) && !flags.contains(.control) {
-                let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+                let fps = max(1.0, source.sourceInfo?.frameRate ?? 30.0)
                 let hundredFrames = 100.0 / fps
                 if event.specialKey == .leftArrow {
                     seekPlayerAnimatedFromKeyboard(to: playheadSeconds - hundredFrames)
@@ -843,7 +849,7 @@ struct ClipToolView: View {
                     seekPlayerAnimatedFromKeyboard(to: totalDurationSeconds)
                     return nil
                 }
-                let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+                let fps = max(1.0, source.sourceInfo?.frameRate ?? 30.0)
                 let oneFrame = 1.0 / fps
                 if event.specialKey == .leftArrow {
                     seekPlayer(to: playheadSeconds - oneFrame)
@@ -880,7 +886,7 @@ struct ClipToolView: View {
                 }
                 if chars == "x" {
                     model.resetClipRange(undoManager: undoManager)
-                    seekPlayer(to: model.clipStartSeconds)
+                    seekPlayer(to: clip.clipStartSeconds)
                     return nil
                 }
                 if chars == "m" {
@@ -892,7 +898,7 @@ struct ClipToolView: View {
             let hasShift = flags.contains(.shift)
             guard hasShift && !hasDisallowedModifier else { return event }
 
-            let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+            let fps = max(1.0, source.sourceInfo?.frameRate ?? 30.0)
             let tenFrames = 10.0 / fps
 
             if event.specialKey == .leftArrow {
@@ -1132,7 +1138,7 @@ struct ClipToolView: View {
     }
 
     private var currentPlayerAspectRatio: CGFloat {
-        if let resolution = model.sourceInfo?.resolution {
+        if let resolution = source.sourceInfo?.resolution {
             let sanitized = resolution
                 .replacingOccurrences(of: "×", with: "x")
                 .replacingOccurrences(of: " ", with: "")
@@ -1220,10 +1226,10 @@ struct ClipToolView: View {
 
                         EquatableView(content:
                             ClipTranscriptSidebarView(
-                                transcriptSegments: model.transcriptSegments,
-                                transcriptStatusText: model.transcriptStatusText,
+                                transcriptSegments: source.transcriptSegments,
+                                transcriptStatusText: source.transcriptStatusText,
                                 canGenerateTranscript: model.canGenerateTranscript,
-                                isGeneratingTranscript: model.isGeneratingTranscript,
+                                isGeneratingTranscript: source.isGeneratingTranscript,
                                 hasAudioTrack: model.hasAudioTrack,
                                 currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
                                 isPlaying: player.rate != 0,
@@ -1347,12 +1353,12 @@ struct ClipToolView: View {
                 timelineZoomLevelCount: allowedTimelineZoomLevels.count,
                 onCopyPlayheadTimecode: copyPlayheadTimecode,
                 onJumpToStart: {
-                    seekPlayer(to: model.clipStartSeconds)
-                    springAnimateVisualPlayhead(to: model.clipStartSeconds)
+                    seekPlayer(to: clip.clipStartSeconds)
+                    springAnimateVisualPlayhead(to: clip.clipStartSeconds)
                 },
                 onJumpToEnd: {
-                    seekPlayer(to: model.clipEndSeconds)
-                    springAnimateVisualPlayhead(to: model.clipEndSeconds)
+                    seekPlayer(to: clip.clipEndSeconds)
+                    springAnimateVisualPlayhead(to: clip.clipEndSeconds)
                 },
                 onCaptureFrame: {
                     model.captureFrame(at: displayedPlayheadSeconds)
@@ -1406,9 +1412,9 @@ struct ClipToolView: View {
             visibleStartSeconds: visibleStartSeconds,
             visibleEndSeconds: visibleEndSeconds,
             playheadSeconds: playheadSeconds,
-            clipStartSeconds: model.clipStartSeconds,
-            clipEndSeconds: model.clipEndSeconds,
-            captureMarkers: model.captureTimelineMarkers
+            clipStartSeconds: clip.clipStartSeconds,
+            clipEndSeconds: clip.clipEndSeconds,
+            captureMarkers: clip.captureTimelineMarkers
         ) { newStart in
             viewportStartSeconds = clampedViewportStart(newStart)
             runtime.isViewportManuallyControlled = true
@@ -1420,13 +1426,13 @@ struct ClipToolView: View {
     private var selectionSection: some View {
         ClipSelectionPanel(
             player: player,
-            sourceSessionID: model.sourceSessionID,
-            clipStartSeconds: model.clipStartSeconds,
-            clipEndSeconds: model.clipEndSeconds,
+            sourceSessionID: source.sourceSessionID,
+            clipStartSeconds: clip.clipStartSeconds,
+            clipEndSeconds: clip.clipEndSeconds,
             clipDurationSeconds: model.clipDurationSeconds,
             hasVideoTrack: model.hasVideoTrack,
-            clipStartText: $model.clipStartText,
-            clipEndText: $model.clipEndText,
+            clipStartText: $clipTimelinePresentation.clipStartText,
+            clipEndText: $clipTimelinePresentation.clipEndText,
             onCommitClipStartText: { model.commitClipStartText(undoManager: undoManager) },
             onCommitClipEndText: { model.commitClipEndText(undoManager: undoManager) },
             isCompactLayout: isCompactLayout,
@@ -1443,11 +1449,11 @@ struct ClipToolView: View {
             playheadJumpAnimationToken: playheadJumpAnimationToken,
             playheadSeconds: displayedPlayheadSeconds,
             playheadCopyFlash: playheadCopyFlash,
-            captureMarkers: model.captureTimelineMarkers,
-            highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
-            highlightedClipBoundary: model.highlightedClipBoundary,
-            captureFrameFlashToken: model.captureFrameFlashToken,
-            quickExportFlashToken: model.quickExportFlashToken,
+            captureMarkers: clip.captureTimelineMarkers,
+            highlightedMarkerID: clip.highlightedCaptureTimelineMarkerID,
+            highlightedClipBoundary: clip.highlightedClipBoundary,
+            captureFrameFlashToken: clip.captureFrameFlashToken,
+            quickExportFlashToken: clip.quickExportFlashToken,
             onTimelineWidthChanged: { runtime.timelineInteractiveWidth = $0 },
             onSeek: { seconds, shouldSnapToMarker in
                 let target = shouldSnapToMarker ? snappedMarkerTime(around: seconds) : seconds
@@ -1483,12 +1489,12 @@ struct ClipToolView: View {
             },
             onCopyPlayheadTimecode: copyPlayheadTimecode,
             onJumpToStart: {
-                seekPlayer(to: model.clipStartSeconds)
-                springAnimateVisualPlayhead(to: model.clipStartSeconds)
+                seekPlayer(to: clip.clipStartSeconds)
+                springAnimateVisualPlayhead(to: clip.clipStartSeconds)
             },
             onJumpToEnd: {
-                seekPlayer(to: model.clipEndSeconds)
-                springAnimateVisualPlayhead(to: model.clipEndSeconds)
+                seekPlayer(to: clip.clipEndSeconds)
+                springAnimateVisualPlayhead(to: clip.clipEndSeconds)
             },
             onCaptureFrame: {
                 model.captureFrame(at: playheadSeconds)
@@ -1519,7 +1525,7 @@ struct ClipToolView: View {
 
     private var clipBaseContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if model.sourceURL != nil {
+            if source.sourceURL != nil {
                 clipPlayerSection
                 timelineControlsSection
                 outputSection
@@ -1650,7 +1656,7 @@ struct ClipToolView: View {
             }
         }
 
-        let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
+        let step2 = step1.onChange(of: source.sourceURL?.path) { _ in
             loadPlayerItem()
         }
 
@@ -1694,7 +1700,7 @@ struct ClipToolView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipClearRange, object: model)) { _ in
                 model.resetClipRange(undoManager: undoManager)
-                seekPlayer(to: model.clipStartSeconds)
+                seekPlayer(to: clip.clipStartSeconds)
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipAddMarkerAtPlayhead, object: model)) { _ in
                 model.addTimelineMarker(at: effectivePlayheadSeconds(), undoManager: undoManager)

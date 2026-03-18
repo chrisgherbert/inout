@@ -54,14 +54,48 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
-    @Published var sourceURL: URL?
-    @Published var sourceSessionID = UUID()
-    @Published var analysis: FileAnalysis?
-    @Published var sourceInfo: SourceMediaInfo?
-    @Published var transcriptSegments: [TranscriptSegment] = []
-    @Published var transcriptStatusText: String = "No transcript generated yet."
-    @Published var hasCachedTranscript = false
-    @Published var isGeneratingTranscript = false
+    let sourcePresentation = SourcePresentationModel()
+    let clipTimelinePresentation = ClipTimelinePresentationModel()
+
+    var sourceURL: URL? {
+        get { sourcePresentation.sourceURL }
+        set { sourcePresentation.sourceURL = newValue }
+    }
+
+    var sourceSessionID: UUID {
+        get { sourcePresentation.sourceSessionID }
+        set { sourcePresentation.sourceSessionID = newValue }
+    }
+
+    var analysis: FileAnalysis? {
+        get { sourcePresentation.analysis }
+        set { sourcePresentation.analysis = newValue }
+    }
+
+    var sourceInfo: SourceMediaInfo? {
+        get { sourcePresentation.sourceInfo }
+        set { sourcePresentation.sourceInfo = newValue }
+    }
+
+    var transcriptSegments: [TranscriptSegment] {
+        get { sourcePresentation.transcriptSegments }
+        set { sourcePresentation.transcriptSegments = newValue }
+    }
+
+    var transcriptStatusText: String {
+        get { sourcePresentation.transcriptStatusText }
+        set { sourcePresentation.transcriptStatusText = newValue }
+    }
+
+    var hasCachedTranscript: Bool {
+        get { sourcePresentation.hasCachedTranscript }
+        set { sourcePresentation.hasCachedTranscript = newValue }
+    }
+
+    var isGeneratingTranscript: Bool {
+        get { sourcePresentation.isGeneratingTranscript }
+        set { sourcePresentation.isGeneratingTranscript = newValue }
+    }
 
     @Published var isAnalyzing = false {
         didSet {
@@ -99,17 +133,55 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var outputURL: URL?
     @Published var queuedJobs: [QueuedClipExport] = []
     @Published var activeQueuedJobID: UUID?
-    @Published var captureTimelineMarkers: [CaptureTimelineMarker] = []
-    @Published var highlightedCaptureTimelineMarkerID: UUID?
-    @Published var highlightedClipBoundary: ClipBoundaryHighlight?
-    @Published var captureFrameFlashToken: Int = 0
-    @Published var quickExportFlashToken: Int = 0
+    var captureTimelineMarkers: [CaptureTimelineMarker] {
+        get { clipTimelinePresentation.captureTimelineMarkers }
+        set { clipTimelinePresentation.captureTimelineMarkers = newValue }
+    }
 
-    @Published var clipStartSeconds: Double = 0
-    @Published var clipEndSeconds: Double = 0
-    @Published var clipPlayheadSeconds: Double = 0
-    @Published var clipStartText = "00:00:00.000"
-    @Published var clipEndText = "00:00:00.000"
+    var highlightedCaptureTimelineMarkerID: UUID? {
+        get { clipTimelinePresentation.highlightedCaptureTimelineMarkerID }
+        set { clipTimelinePresentation.highlightedCaptureTimelineMarkerID = newValue }
+    }
+
+    var highlightedClipBoundary: ClipBoundaryHighlight? {
+        get { clipTimelinePresentation.highlightedClipBoundary }
+        set { clipTimelinePresentation.highlightedClipBoundary = newValue }
+    }
+
+    var captureFrameFlashToken: Int {
+        get { clipTimelinePresentation.captureFrameFlashToken }
+        set { clipTimelinePresentation.captureFrameFlashToken = newValue }
+    }
+
+    var quickExportFlashToken: Int {
+        get { clipTimelinePresentation.quickExportFlashToken }
+        set { clipTimelinePresentation.quickExportFlashToken = newValue }
+    }
+
+    var clipStartSeconds: Double {
+        get { clipTimelinePresentation.clipStartSeconds }
+        set { clipTimelinePresentation.clipStartSeconds = newValue }
+    }
+
+    var clipEndSeconds: Double {
+        get { clipTimelinePresentation.clipEndSeconds }
+        set { clipTimelinePresentation.clipEndSeconds = newValue }
+    }
+
+    var clipPlayheadSeconds: Double {
+        get { clipTimelinePresentation.clipPlayheadSeconds }
+        set { clipTimelinePresentation.clipPlayheadSeconds = newValue }
+    }
+
+    var clipStartText: String {
+        get { clipTimelinePresentation.clipStartText }
+        set { clipTimelinePresentation.clipStartText = newValue }
+    }
+
+    var clipEndText: String {
+        get { clipTimelinePresentation.clipEndText }
+        set { clipTimelinePresentation.clipEndText = newValue }
+    }
     @Published var selectedClipFormat: ClipFormat = .mp4
     @Published var defaultClipEncodingMode: ClipEncodingMode = .fast {
         didSet {
