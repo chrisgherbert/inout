@@ -12,6 +12,7 @@ SWIFTC_DEPS_DIR="$SWIFTC_BUILD_DIR/deps"
 SWIFTC_DIAGNOSTICS_DIR="$SWIFTC_BUILD_DIR/diagnostics"
 SWIFTC_MODULE_DIR="$SWIFTC_BUILD_DIR/module"
 SWIFTC_OUTPUT_FILE_MAP="$SWIFTC_BUILD_DIR/output-file-map.json"
+SWIFTC_INCREMENTAL_FLAGS=()
 APP_NAME="In-Out"
 APP_EXECUTABLE="BulwarkVideoTools"
 BUNDLE_ID="com.bulwark.BulwarkVideoTools"
@@ -137,10 +138,12 @@ REFRESH_BUNDLED_TOOLS="${REFRESH_BUNDLED_TOOLS:-0}"
 case "$BUILD_MODE" in
   dev)
     SWIFTC_OPT_FLAGS=(-Onone -g)
+    SWIFTC_INCREMENTAL_FLAGS=(-incremental)
     ;;
   quick)
     SWIFTC_OPT_FLAGS=(-O)
     QUICK_BUILD=1
+    SWIFTC_INCREMENTAL_FLAGS=(-incremental)
     ;;
   release)
     SWIFTC_OPT_FLAGS=(-O)
@@ -167,20 +170,33 @@ mkdir -p "$ROOT_DIR/assets"
 SWIFT_SOURCES=("$SRC_DIR"/*.swift)
 
 # Clean stale module outputs that can trigger swiftc temp-path resolution errors.
-find "$SWIFTC_MODULE_DIR" -maxdepth 1 -type f \
-  \( -name "$APP_EXECUTABLE.swiftmodule" \
-     -o -name "$APP_EXECUTABLE.swiftdoc" \
-     -o -name "$APP_EXECUTABLE.swiftsourceinfo" \
-     -o -name "$APP_EXECUTABLE.swiftdeps" \
-     -o -name "$APP_EXECUTABLE.d" \
-     -o -name "$APP_EXECUTABLE-master.dia" \
-     -o -name "$APP_EXECUTABLE-*.swiftmodule" \
-     -o -name "$APP_EXECUTABLE-*.swiftdoc" \
-     -o -name "$APP_EXECUTABLE-*.swiftsourceinfo" \
-     -o -name "$APP_EXECUTABLE-*.swiftdeps" \
-     -o -name "$APP_EXECUTABLE-*.d" \
-     -o -name "$APP_EXECUTABLE-*.dia" \) \
-  -delete
+# Preserve the canonical outputs for dev/quick builds so the incremental driver
+# can reuse the prior build state, while still removing wildcard leftovers.
+if [[ ${#SWIFTC_INCREMENTAL_FLAGS[@]} -eq 0 ]]; then
+  find "$SWIFTC_MODULE_DIR" -maxdepth 1 -type f \
+    \( -name "$APP_EXECUTABLE.swiftmodule" \
+       -o -name "$APP_EXECUTABLE.swiftdoc" \
+       -o -name "$APP_EXECUTABLE.swiftsourceinfo" \
+       -o -name "$APP_EXECUTABLE.swiftdeps" \
+       -o -name "$APP_EXECUTABLE.d" \
+       -o -name "$APP_EXECUTABLE-master.dia" \
+       -o -name "$APP_EXECUTABLE-*.swiftmodule" \
+       -o -name "$APP_EXECUTABLE-*.swiftdoc" \
+       -o -name "$APP_EXECUTABLE-*.swiftsourceinfo" \
+       -o -name "$APP_EXECUTABLE-*.swiftdeps" \
+       -o -name "$APP_EXECUTABLE-*.d" \
+       -o -name "$APP_EXECUTABLE-*.dia" \) \
+    -delete
+else
+  find "$SWIFTC_MODULE_DIR" -maxdepth 1 -type f \
+    \( -name "$APP_EXECUTABLE-*.swiftmodule" \
+       -o -name "$APP_EXECUTABLE-*.swiftdoc" \
+       -o -name "$APP_EXECUTABLE-*.swiftsourceinfo" \
+       -o -name "$APP_EXECUTABLE-*.swiftdeps" \
+       -o -name "$APP_EXECUTABLE-*.d" \
+       -o -name "$APP_EXECUTABLE-*.dia" \) \
+    -delete
+fi
 
 python3 - "$SWIFTC_OUTPUT_FILE_MAP" "$SWIFTC_OBJECTS_DIR" "$SWIFTC_DEPS_DIR" "$SWIFTC_DIAGNOSTICS_DIR" "$SWIFTC_MODULE_DIR" "$APP_EXECUTABLE" "${SWIFT_SOURCES[@]}" <<'PY'
 import hashlib
@@ -229,6 +245,7 @@ PY
 
 swiftc \
   "${SWIFTC_OPT_FLAGS[@]}" \
+  "${SWIFTC_INCREMENTAL_FLAGS[@]}" \
   -target "arm64-apple-macos${MIN_MACOS_VERSION}" \
   -parse-as-library \
   -output-file-map "$SWIFTC_OUTPUT_FILE_MAP" \
