@@ -1144,12 +1144,16 @@ struct ClipToolView: View {
             return min(clipTranscriptSidebarMinWidth, maximumSidebarWidth)
         }
 
-        let textWidth = preferredTranscriptTextWidth(for: rows, fontSize: 13, mode: .exact)
-        let verticalScrollerWidth = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
-        let tableChromeWidth: CGFloat = 122 + 18 + verticalScrollerWidth
+        let documentWidth = exactTranscriptTableDocumentWidth(for: rows, fontSize: 13)
         let sidebarPadding: CGFloat = 24
-        let autoFitHeadroom: CGFloat = 36
-        let desiredWidth = textWidth + tableChromeWidth + sidebarPadding + autoFitHeadroom
+        let baseHeadroom: CGFloat = 56
+        let legacyScrollerAllowance: CGFloat
+        if NSScroller.preferredScrollerStyle == .legacy {
+            legacyScrollerAllowance = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) + 18
+        } else {
+            legacyScrollerAllowance = 0
+        }
+        let desiredWidth = documentWidth + sidebarPadding + baseHeadroom + legacyScrollerAllowance
         let cappedMaximum = min(clipTranscriptSidebarMaxWidth, maximumSidebarWidth)
         return min(max(desiredWidth, clipTranscriptSidebarMinWidth), cappedMaximum)
     }
@@ -1293,7 +1297,9 @@ struct ClipToolView: View {
                                 },
                                 onCloseTranscript: {
                                     storedTranscriptSidebarVisible = false
-                                }
+                                },
+                                onMeasuredFittingWidthChange: nil,
+                                onHorizontalOverflowChange: nil
                             )
                         )
                         .frame(width: sidebarWidth, height: currentPlayerHeight)

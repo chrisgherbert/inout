@@ -17,6 +17,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let seekToTranscriptTime: (Double) -> Void
     let playTranscriptFromTime: (Double) -> Void
     let onCloseTranscript: () -> Void
+    let onMeasuredFittingWidthChange: ((CGFloat) -> Void)?
+    let onHorizontalOverflowChange: ((Bool) -> Void)?
 
     @State private var searchText = ""
     @State private var currentSearchMatchID: UUID?
@@ -400,7 +402,9 @@ struct ClipTranscriptSidebarView: View, Equatable {
                             requestSearchReveal(for: row.id)
                         }
                         playTranscriptFromTime(row.start)
-                    }
+                    },
+                    onMeasuredFittingWidthChange: onMeasuredFittingWidthChange,
+                    onHorizontalOverflowChange: onHorizontalOverflowChange
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
