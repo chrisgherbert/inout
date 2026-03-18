@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import InOutCore
 
 extension WorkspaceViewModel {
     func generateTranscriptFromInspect() {

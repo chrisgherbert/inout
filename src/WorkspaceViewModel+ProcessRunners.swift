@@ -1,4 +1,5 @@
 import Foundation
+import InOutCore
 
 private final class ConsoleLineBatcher {
     private let isEnabled: Bool

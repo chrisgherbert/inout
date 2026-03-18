@@ -3,6 +3,7 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
+import InOutCore
 import SwiftUI
 
 private let picThreshold = 0.90
@@ -12,12 +13,7 @@ private let quickSampleDimension = 160
 private let quickDecisionMargin = 0.08
 
 func formatSeconds(_ value: Double) -> String {
-    let whole = Int(value)
-    let h = whole / 3600
-    let m = (whole % 3600) / 60
-    let s = whole % 60
-    let ms = Int(((value - floor(value)) * 1000.0).rounded())
-    return String(format: "%02d:%02d:%02d.%03d", h, m, s, ms)
+    InOutCore.formatSeconds(value)
 }
 
 func formatBitrate(_ bps: Double?) -> String {

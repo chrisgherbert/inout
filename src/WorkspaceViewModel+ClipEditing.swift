@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import AVFoundation
+import InOutCore
 import UniformTypeIdentifiers
 
 extension WorkspaceViewModel {

@@ -1,4 +1,5 @@
 import Foundation
+import InOutCore
 
 @MainActor
 extension WorkspaceViewModel {

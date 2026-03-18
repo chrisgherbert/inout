@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SRC_DIR="$ROOT_DIR/src"
+CORE_SRC_DIR="$ROOT_DIR/src-core"
 DIST="$ROOT_DIR/dist"
 MODULE_CACHE="$ROOT_DIR/.build/module-cache"
 SWIFTC_TMP_DIR="$ROOT_DIR/.build/tmp"
@@ -12,9 +13,16 @@ SWIFTC_DEPS_DIR="$SWIFTC_BUILD_DIR/deps"
 SWIFTC_DIAGNOSTICS_DIR="$SWIFTC_BUILD_DIR/diagnostics"
 SWIFTC_MODULE_DIR="$SWIFTC_BUILD_DIR/module"
 SWIFTC_OUTPUT_FILE_MAP="$SWIFTC_BUILD_DIR/output-file-map.json"
+CORE_BUILD_DIR="$ROOT_DIR/.build/core"
+CORE_OBJECTS_DIR="$CORE_BUILD_DIR/objects"
+CORE_DEPS_DIR="$CORE_BUILD_DIR/deps"
+CORE_DIAGNOSTICS_DIR="$CORE_BUILD_DIR/diagnostics"
+CORE_MODULE_DIR="$CORE_BUILD_DIR/module"
+CORE_OUTPUT_FILE_MAP="$CORE_BUILD_DIR/output-file-map.json"
 SWIFTC_INCREMENTAL_FLAGS=()
 APP_NAME="In-Out"
 APP_EXECUTABLE="BulwarkVideoTools"
+CORE_MODULE_NAME="InOutCore"
 BUNDLE_ID="com.bulwark.BulwarkVideoTools"
 APP_VERSION="${APP_VERSION:-1.0}"
 APP_BUILD_NUMBER="${APP_BUILD_NUMBER:-1}"
@@ -46,6 +54,92 @@ PINNED_FFPROBE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffprobe"
 PINNED_FFPROBE_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffprobe.sha256"
 PINNED_YTDLP_DEFAULT="$ROOT_DIR/vendor/yt-dlp/macos-arm64/yt-dlp"
 PINNED_YTDLP_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/yt-dlp/macos-arm64/yt-dlp.sha256"
+
+clean_swift_module_outputs() {
+  local module_dir="$1"
+  local module_name="$2"
+
+  if [[ ${#SWIFTC_INCREMENTAL_FLAGS[@]} -eq 0 ]]; then
+    find "$module_dir" -maxdepth 1 -type f \
+      \( -name "$module_name.swiftmodule" \
+         -o -name "$module_name.swiftdoc" \
+         -o -name "$module_name.swiftsourceinfo" \
+         -o -name "$module_name.swiftdeps" \
+         -o -name "$module_name.d" \
+         -o -name "$module_name-master.dia" \
+         -o -name "$module_name-*.swiftmodule" \
+         -o -name "$module_name-*.swiftdoc" \
+         -o -name "$module_name-*.swiftsourceinfo" \
+         -o -name "$module_name-*.swiftdeps" \
+         -o -name "$module_name-*.d" \
+         -o -name "$module_name-*.dia" \) \
+      -delete
+  else
+    find "$module_dir" -maxdepth 1 -type f \
+      \( -name "$module_name-*.swiftmodule" \
+         -o -name "$module_name-*.swiftdoc" \
+         -o -name "$module_name-*.swiftsourceinfo" \
+         -o -name "$module_name-*.swiftdeps" \
+         -o -name "$module_name-*.d" \
+         -o -name "$module_name-*.dia" \) \
+      -delete
+  fi
+}
+
+generate_output_file_map() {
+  local ofm_path="$1"
+  local objects_dir="$2"
+  local deps_dir="$3"
+  local diagnostics_dir="$4"
+  local module_dir="$5"
+  local module_name="$6"
+  shift 6
+
+  python3 - "$ofm_path" "$objects_dir" "$deps_dir" "$diagnostics_dir" "$module_dir" "$module_name" "$@" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+ofm_path = sys.argv[1]
+objects_dir = sys.argv[2]
+deps_dir = sys.argv[3]
+diagnostics_dir = sys.argv[4]
+module_dir = sys.argv[5]
+module_name = sys.argv[6]
+sources = sys.argv[7:]
+
+os.makedirs(objects_dir, exist_ok=True)
+os.makedirs(deps_dir, exist_ok=True)
+os.makedirs(diagnostics_dir, exist_ok=True)
+os.makedirs(module_dir, exist_ok=True)
+
+result = {
+    "": {
+        "swift-dependencies": os.path.join(module_dir, f"{module_name}.swiftdeps"),
+        "swiftmodule": os.path.join(module_dir, f"{module_name}.swiftmodule"),
+        "swiftdoc": os.path.join(module_dir, f"{module_name}.swiftdoc"),
+        "swiftsourceinfo": os.path.join(module_dir, f"{module_name}.swiftsourceinfo"),
+        "dependencies": os.path.join(module_dir, f"{module_name}.d"),
+        "diagnostics": os.path.join(module_dir, f"{module_name}-master.dia"),
+    }
+}
+
+for source in sources:
+    base = os.path.splitext(os.path.basename(source))[0]
+    digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:8]
+    stem = f"{base}-{digest}"
+    result[source] = {
+        "object": os.path.join(objects_dir, f"{stem}.o"),
+        "swift-dependencies": os.path.join(deps_dir, f"{stem}.swiftdeps"),
+        "dependencies": os.path.join(deps_dir, f"{stem}.d"),
+        "diagnostics": os.path.join(diagnostics_dir, f"{stem}.dia"),
+    }
+
+with open(ofm_path, "w", encoding="utf-8") as f:
+    json.dump(result, f, indent=2, sort_keys=True)
+PY
+}
 
 copy_whisper_runtime_libs() {
   local whisper_cli_path="$1"
@@ -158,6 +252,7 @@ mkdir -p "$DIST"
 mkdir -p "$MODULE_CACHE"
 mkdir -p "$SWIFTC_TMP_DIR"
 mkdir -p "$SWIFTC_OBJECTS_DIR" "$SWIFTC_DEPS_DIR" "$SWIFTC_DIAGNOSTICS_DIR" "$SWIFTC_MODULE_DIR"
+mkdir -p "$CORE_OBJECTS_DIR" "$CORE_DEPS_DIR" "$CORE_DIAGNOSTICS_DIR" "$CORE_MODULE_DIR"
 export TMPDIR="$SWIFTC_TMP_DIR/"
 # Remove legacy app bundle names to avoid launching stale builds by accident.
 rm -rf "$LEGACY_APP_1" "$LEGACY_APP_2"
@@ -168,80 +263,58 @@ mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES"
 mkdir -p "$ROOT_DIR/assets"
 
 SWIFT_SOURCES=("$SRC_DIR"/*.swift)
-
-# Clean stale module outputs that can trigger swiftc temp-path resolution errors.
-# Preserve the canonical outputs for dev/quick builds so the incremental driver
-# can reuse the prior build state, while still removing wildcard leftovers.
-if [[ ${#SWIFTC_INCREMENTAL_FLAGS[@]} -eq 0 ]]; then
-  find "$SWIFTC_MODULE_DIR" -maxdepth 1 -type f \
-    \( -name "$APP_EXECUTABLE.swiftmodule" \
-       -o -name "$APP_EXECUTABLE.swiftdoc" \
-       -o -name "$APP_EXECUTABLE.swiftsourceinfo" \
-       -o -name "$APP_EXECUTABLE.swiftdeps" \
-       -o -name "$APP_EXECUTABLE.d" \
-       -o -name "$APP_EXECUTABLE-master.dia" \
-       -o -name "$APP_EXECUTABLE-*.swiftmodule" \
-       -o -name "$APP_EXECUTABLE-*.swiftdoc" \
-       -o -name "$APP_EXECUTABLE-*.swiftsourceinfo" \
-       -o -name "$APP_EXECUTABLE-*.swiftdeps" \
-       -o -name "$APP_EXECUTABLE-*.d" \
-       -o -name "$APP_EXECUTABLE-*.dia" \) \
-    -delete
-else
-  find "$SWIFTC_MODULE_DIR" -maxdepth 1 -type f \
-    \( -name "$APP_EXECUTABLE-*.swiftmodule" \
-       -o -name "$APP_EXECUTABLE-*.swiftdoc" \
-       -o -name "$APP_EXECUTABLE-*.swiftsourceinfo" \
-       -o -name "$APP_EXECUTABLE-*.swiftdeps" \
-       -o -name "$APP_EXECUTABLE-*.d" \
-       -o -name "$APP_EXECUTABLE-*.dia" \) \
-    -delete
+CORE_SOURCES=()
+if [[ -d "$CORE_SRC_DIR" ]]; then
+  CORE_SOURCES=("$CORE_SRC_DIR"/*.swift(N))
 fi
 
-python3 - "$SWIFTC_OUTPUT_FILE_MAP" "$SWIFTC_OBJECTS_DIR" "$SWIFTC_DEPS_DIR" "$SWIFTC_DIAGNOSTICS_DIR" "$SWIFTC_MODULE_DIR" "$APP_EXECUTABLE" "${SWIFT_SOURCES[@]}" <<'PY'
-import hashlib
-import json
-import os
-import sys
+clean_swift_module_outputs "$SWIFTC_MODULE_DIR" "$APP_EXECUTABLE"
+generate_output_file_map \
+  "$SWIFTC_OUTPUT_FILE_MAP" \
+  "$SWIFTC_OBJECTS_DIR" \
+  "$SWIFTC_DEPS_DIR" \
+  "$SWIFTC_DIAGNOSTICS_DIR" \
+  "$SWIFTC_MODULE_DIR" \
+  "$APP_EXECUTABLE" \
+  "${SWIFT_SOURCES[@]}"
 
-ofm_path = sys.argv[1]
-objects_dir = sys.argv[2]
-deps_dir = sys.argv[3]
-diagnostics_dir = sys.argv[4]
-module_dir = sys.argv[5]
-module_name = sys.argv[6]
-sources = sys.argv[7:]
+CORE_LINK_INPUTS=()
+if [[ ${#CORE_SOURCES[@]} -gt 0 ]]; then
+  clean_swift_module_outputs "$CORE_MODULE_DIR" "$CORE_MODULE_NAME"
+  generate_output_file_map \
+    "$CORE_OUTPUT_FILE_MAP" \
+    "$CORE_OBJECTS_DIR" \
+    "$CORE_DEPS_DIR" \
+    "$CORE_DIAGNOSTICS_DIR" \
+    "$CORE_MODULE_DIR" \
+    "$CORE_MODULE_NAME" \
+    "${CORE_SOURCES[@]}"
 
-os.makedirs(objects_dir, exist_ok=True)
-os.makedirs(deps_dir, exist_ok=True)
-os.makedirs(diagnostics_dir, exist_ok=True)
-os.makedirs(module_dir, exist_ok=True)
+  swiftc \
+    "${SWIFTC_OPT_FLAGS[@]}" \
+    "${SWIFTC_INCREMENTAL_FLAGS[@]}" \
+    -target "arm64-apple-macos${MIN_MACOS_VERSION}" \
+    -parse-as-library \
+    -emit-module \
+    -emit-module-path "$CORE_MODULE_DIR/$CORE_MODULE_NAME.swiftmodule" \
+    -output-file-map "$CORE_OUTPUT_FILE_MAP" \
+    -module-name "$CORE_MODULE_NAME" \
+    -module-cache-path "$MODULE_CACHE" \
+    -framework AVFoundation \
+    -framework CoreMedia \
+    -framework CoreVideo \
+    -framework Foundation \
+    "${CORE_SOURCES[@]}" \
+    -c
 
-result = {
-    "": {
-        "swift-dependencies": os.path.join(module_dir, f"{module_name}.swiftdeps"),
-        "swiftmodule": os.path.join(module_dir, f"{module_name}.swiftmodule"),
-        "swiftdoc": os.path.join(module_dir, f"{module_name}.swiftdoc"),
-        "swiftsourceinfo": os.path.join(module_dir, f"{module_name}.swiftsourceinfo"),
-        "dependencies": os.path.join(module_dir, f"{module_name}.d"),
-        "diagnostics": os.path.join(module_dir, f"{module_name}-master.dia"),
-    }
-}
+  rm -f \
+    "$ROOT_DIR/$CORE_MODULE_NAME.abi.json" \
+    "$ROOT_DIR/$CORE_MODULE_NAME.swiftdoc" \
+    "$ROOT_DIR/$CORE_MODULE_NAME.swiftmodule" \
+    "$ROOT_DIR/$CORE_MODULE_NAME.swiftsourceinfo"
 
-for source in sources:
-    base = os.path.splitext(os.path.basename(source))[0]
-    digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:8]
-    stem = f"{base}-{digest}"
-    result[source] = {
-        "object": os.path.join(objects_dir, f"{stem}.o"),
-        "swift-dependencies": os.path.join(deps_dir, f"{stem}.swiftdeps"),
-        "dependencies": os.path.join(deps_dir, f"{stem}.d"),
-        "diagnostics": os.path.join(diagnostics_dir, f"{stem}.dia"),
-    }
-
-with open(ofm_path, "w", encoding="utf-8") as f:
-    json.dump(result, f, indent=2, sort_keys=True)
-PY
+  CORE_LINK_INPUTS=("$CORE_OBJECTS_DIR"/*.o(N))
+fi
 
 swiftc \
   "${SWIFTC_OPT_FLAGS[@]}" \
@@ -251,12 +324,14 @@ swiftc \
   -output-file-map "$SWIFTC_OUTPUT_FILE_MAP" \
   -module-name "$APP_EXECUTABLE" \
   -module-cache-path "$MODULE_CACHE" \
+  -I "$CORE_MODULE_DIR" \
   -framework SwiftUI \
   -framework AppKit \
   -framework AVFoundation \
   -framework CoreVideo \
   -framework CoreMedia \
   -framework Foundation \
+  "${CORE_LINK_INPUTS[@]}" \
   "${SWIFT_SOURCES[@]}" \
   -o "$BIN"
 

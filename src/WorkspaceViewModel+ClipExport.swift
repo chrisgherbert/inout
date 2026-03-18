@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import AVFoundation
+import InOutCore
 
 extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = false, queueJobID: UUID? = nil, preselectedDestination: URL? = nil) {
         func finalizeQueued(_ status: ClipExportQueueStatus, _ message: String? = nil) {

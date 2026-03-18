@@ -1,13 +1,13 @@
 import Foundation
 import AVFoundation
 
-func normalizedToken(_ token: String) -> String {
+public func normalizedToken(_ token: String) -> String {
     token
         .trimmingCharacters(in: .punctuationCharacters.union(.symbols).union(.whitespacesAndNewlines))
         .lowercased()
 }
 
-func profanityWordsFromString(_ raw: String) -> Set<String> {
+public func profanityWordsFromString(_ raw: String) -> Set<String> {
     let separators = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;"))
     return Set(
         raw.components(separatedBy: separators)
@@ -16,11 +16,11 @@ func profanityWordsFromString(_ raw: String) -> Set<String> {
     )
 }
 
-func normalizedProfanityWordsStorageString(_ raw: String) -> String {
+public func normalizedProfanityWordsStorageString(_ raw: String) -> String {
     profanityWordsFromString(raw).sorted().joined(separator: ", ")
 }
 
-func sanitizeFilenameComponent(_ value: String) -> String {
+public func sanitizeFilenameComponent(_ value: String) -> String {
     let invalid = CharacterSet(charactersIn: "/\\?%*|\"<>:")
     let sanitizedScalars = value.unicodeScalars.map { invalid.contains($0) ? "_" : Character($0) }
     let sanitized = String(sanitizedScalars)
@@ -29,7 +29,7 @@ func sanitizeFilenameComponent(_ value: String) -> String {
     return sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
-func extractPercentProgress(from line: String) -> Double? {
+public func extractPercentProgress(from line: String) -> Double? {
     let pattern = #"([0-9]{1,3})(?:\.[0-9]+)?\s*%"#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
     let range = NSRange(line.startIndex..<line.endIndex, in: line)
@@ -39,7 +39,7 @@ func extractPercentProgress(from line: String) -> Double? {
     return min(max(percent / 100.0, 0.0), 1.0)
 }
 
-func findWhisperExecutable() -> URL? {
+public func findWhisperExecutable() -> URL? {
     if let bundled = Bundle.main.url(forResource: "whisper-cli", withExtension: nil),
        FileManager.default.isExecutableFile(atPath: bundled.path) {
         return bundled
@@ -47,7 +47,7 @@ func findWhisperExecutable() -> URL? {
     return nil
 }
 
-func findWhisperModel() -> URL? {
+public func findWhisperModel() -> URL? {
     if let bundled = Bundle.main.url(forResource: "profanity-model", withExtension: "bin"),
        FileManager.default.fileExists(atPath: bundled.path) {
         return bundled
@@ -349,7 +349,7 @@ func computeProfanityHits(
     return hits
 }
 
-func transcribeAudioWithWhisper(
+public func transcribeAudioWithWhisper(
     file: URL,
     shouldCancel: @escaping @Sendable () -> Bool = { false },
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in },

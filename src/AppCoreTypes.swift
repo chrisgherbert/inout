@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import InOutCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -30,16 +31,12 @@ extension FocusedValues {
     }
 }
 
-let minDurationSeconds = 0.001
-let defaultMinSilenceDurationSeconds = 1.0
-let silenceAmplitudeThreshold = 0.01
+let minDurationSeconds = InOutCore.minDurationSeconds
+let defaultMinSilenceDurationSeconds = InOutCore.defaultMinSilenceDurationSeconds
+let silenceAmplitudeThreshold = InOutCore.silenceAmplitudeThreshold
 let defaultAdvancedClipFilenameTemplate = "{source_name}_clip_{in_tc}_to_{out_tc}"
-let defaultProfanityWords: Set<String> = [
-    "ass", "asshole", "bastard", "bitch", "bullshit", "crap", "damn",
-    "dick", "douche", "douchebag", "fucker", "fucking", "fuck", "goddamn",
-    "hell", "motherfucker", "pissed", "shit", "shitty", "slut", "whore"
-]
-let defaultProfanityWordsStorageString = defaultProfanityWords.sorted().joined(separator: ", ")
+let defaultProfanityWords = InOutCore.defaultProfanityWords
+let defaultProfanityWordsStorageString = InOutCore.defaultProfanityWordsStorageString
 
 enum UIRadius {
     static let small: CGFloat = 8
@@ -343,16 +340,7 @@ enum URLDownloadSaveLocationMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct Segment: Identifiable {
-    let id = UUID()
-    let start: Double
-    let end: Double
-    let duration: Double
-
-    var formatted: String {
-        "\(formatSeconds(start)) → \(formatSeconds(end)) (\(String(format: "%.3f", duration))s)"
-    }
-}
+typealias Segment = InOutCore.Segment
 
 struct CaptureTimelineMarker: Identifiable, Equatable {
     let id = UUID()
@@ -364,44 +352,10 @@ enum ClipBoundaryHighlight: Equatable {
     case end
 }
 
-struct ProfanityHit: Identifiable {
-    let id = UUID()
-    let start: Double
-    let end: Double
-    let duration: Double
-    let word: String
-
-    var formatted: String {
-        "\(formatSeconds(start)) → \(formatSeconds(end)) (\(word))"
-    }
-}
-
-struct TranscriptSegment: Identifiable {
-    let id = UUID()
-    let start: Double
-    let end: Double
-    let text: String
-
-    var duration: Double {
-        max(0, end - start)
-    }
-
-    var formatted: String {
-        "\(formatSeconds(start)) → \(formatSeconds(end))  \(text)"
-    }
-}
-
-enum FileStatus {
-    case idle
-    case running
-    case done
-    case failed(String)
-}
-
-enum DetectionError: Error {
-    case failed(String)
-    case cancelled
-}
+typealias ProfanityHit = InOutCore.ProfanityHit
+typealias TranscriptSegment = InOutCore.TranscriptSegment
+typealias FileStatus = InOutCore.FileStatus
+typealias DetectionError = InOutCore.DetectionError
 
 enum ActivityState {
     case idle
@@ -435,110 +389,6 @@ final class CancellationFlag {
     }
 }
 
-struct DetectionOutput {
-    let segments: [Segment]
-    let silentSegments: [Segment]
-    let profanityHits: [ProfanityHit]
-    let transcriptSegments: [TranscriptSegment]?
-    let mediaDuration: Double?
-}
-
-struct FileAnalysis {
-    let fileURL: URL
-    var segments: [Segment] = []
-    var silentSegments: [Segment] = []
-    var profanityHits: [ProfanityHit] = []
-    var includedBlackDetection: Bool = true
-    var includedSilenceDetection: Bool = true
-    var includedProfanityDetection: Bool = false
-    var profanityWordsSnapshot: String = defaultProfanityWordsStorageString
-    var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds
-    var mediaDuration: Double?
-    var progress: Double = 0
-    var status: FileStatus = .idle
-
-    var totalDuration: Double {
-        segments.reduce(0.0) { $0 + $1.duration }
-    }
-
-    var totalSilentDuration: Double {
-        silentSegments.reduce(0.0) { $0 + $1.duration }
-    }
-
-    var summary: String {
-        switch status {
-        case .idle:
-            return "Ready"
-        case .running:
-            return "Analyzing… \(Int((progress * 100).rounded()))%"
-        case .done:
-            var pieces: [String] = []
-            if includedBlackDetection {
-                if segments.isEmpty {
-                    pieces.append("No black segments")
-                } else {
-                    pieces.append("\(segments.count) black segment(s), \(String(format: "%.3f", totalDuration))s")
-                }
-            }
-            if includedSilenceDetection {
-                if silentSegments.isEmpty {
-                    pieces.append("No silent gaps")
-                } else {
-                    pieces.append("\(silentSegments.count) silent gap(s), \(String(format: "%.3f", totalSilentDuration))s")
-                }
-            }
-            if includedProfanityDetection {
-                if profanityHits.isEmpty {
-                    pieces.append("No profanity detected")
-                } else {
-                    pieces.append("\(profanityHits.count) profanity hit(s)")
-                }
-            }
-            return pieces.isEmpty ? "No analysis type enabled" : pieces.joined(separator: " • ")
-        case .failed(let reason):
-            return "Failed: \(reason)"
-        }
-    }
-
-    var formattedList: String {
-        segments.map(\.formatted).joined(separator: "\n")
-    }
-
-    var formattedSilentList: String {
-        silentSegments.map(\.formatted).joined(separator: "\n")
-    }
-
-    var formattedProfanityList: String {
-        profanityHits.map(\.formatted).joined(separator: "\n")
-    }
-
-    var timelineDuration: Double? {
-        if let mediaDuration, mediaDuration > 0 {
-            return mediaDuration
-        }
-        let maxBlackEnd = segments.map(\.end).max() ?? 0
-        let maxSilentEnd = silentSegments.map(\.end).max() ?? 0
-        let maxProfanityEnd = profanityHits.map(\.end).max() ?? 0
-        let maxEnd = max(maxBlackEnd, max(maxSilentEnd, maxProfanityEnd))
-        return maxEnd > 0 ? maxEnd : nil
-    }
-}
-
-struct SourceMediaInfo {
-    var fileSizeBytes: Int64?
-    var durationSeconds: Double?
-    var overallBitrateBps: Double?
-    var containerDescription: String?
-
-    var videoCodec: String?
-    var resolution: String?
-    var frameRate: Double?
-    var videoBitrateBps: Double?
-    var colorPrimaries: String?
-    var colorTransfer: String?
-
-    var audioCodec: String?
-    var sampleRateHz: Double?
-    var channels: Int?
-    var audioBitrateBps: Double?
-}
+typealias DetectionOutput = InOutCore.DetectionOutput
+typealias FileAnalysis = InOutCore.FileAnalysis
+typealias SourceMediaInfo = InOutCore.SourceMediaInfo

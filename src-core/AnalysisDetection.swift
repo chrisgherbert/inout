@@ -1,7 +1,7 @@
 import Foundation
 import AVFoundation
 
-func runDetection(
+public func runDetection(
     file: URL,
     detectBlackFrames: Bool,
     detectAudioSilence: Bool,
