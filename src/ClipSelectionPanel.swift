@@ -28,7 +28,6 @@ struct ClipSelectionPanel: View, Equatable {
     let playheadJumpAnimationToken: Int
     let playheadSeconds: Double
     let playheadCopyFlash: Bool
-    let isTimelineHovered: Bool
     let captureMarkers: [CaptureTimelineMarker]
     let highlightedMarkerID: UUID?
     let highlightedClipBoundary: ClipBoundaryHighlight?
@@ -68,7 +67,6 @@ struct ClipSelectionPanel: View, Equatable {
         lhs.playheadJumpAnimationToken == rhs.playheadJumpAnimationToken &&
         abs(lhs.playheadSeconds - rhs.playheadSeconds) < 0.0001 &&
         lhs.playheadCopyFlash == rhs.playheadCopyFlash &&
-        lhs.isTimelineHovered == rhs.isTimelineHovered &&
         lhs.captureMarkers == rhs.captureMarkers &&
         lhs.highlightedMarkerID == rhs.highlightedMarkerID &&
         lhs.highlightedClipBoundary == rhs.highlightedClipBoundary &&

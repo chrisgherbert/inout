@@ -8,61 +8,67 @@ import SwiftUI
 import Combine
 import UserNotifications
 
+@MainActor
+private final class ClipToolRuntimeState: ObservableObject {
+    var waveformTask: Task<Void, Never>?
+    var keyMonitor: Any?
+    var flagsMonitor: Any?
+    var scrollMonitor: Any?
+    var mouseDownMonitor: Any?
+    var middleMousePanMonitor: Any?
+    var isViewportManuallyControlled = false
+    var isTimelineHovered = false
+    var isWaveformHovered = false
+    var timelineInteractiveWidth: CGFloat = 1
+    var isMiddleMousePanning = false
+    var middleMousePanLastWindowX: CGFloat?
+    var loadedSourcePath: String?
+    var suppressVisualPlayheadSyncUntil: Date = .distantPast
+    var playheadDragLocationX: CGFloat?
+    var playheadDragWidth: CGFloat = 0
+    var playheadDragAutoPanTask: Task<Void, Never>?
+    var keyboardPanTask: Task<Void, Never>?
+    var lastInteractiveSeekCommitTimestamp: CFTimeInterval = 0
+    var lastInteractiveReadoutSyncTimestamp: CFTimeInterval = 0
+    var lastSharedPlayheadSyncTimestamp: CFTimeInterval = 0
+    var timelinePointerSeconds: Double?
+    weak var clipWindow: NSWindow?
+    var playerTimeObserverToken: Any?
+    var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
+    var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
+    var playerResizeStartHeight: CGFloat?
+    var playerResizeStartGlobalY: CGFloat?
+    var transcriptSidebarResizeStartWidth: CGFloat?
+    var transcriptSidebarResizeStartGlobalX: CGFloat?
+    var lastInteractiveSeekSeconds: Double = -1
+}
+
 struct ClipToolView: View {
     @ObservedObject var model: WorkspaceViewModel
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.undoManager) private var undoManager
 
+    @StateObject private var runtime = ClipToolRuntimeState()
     @State private var player = AVPlayer()
     @State private var playheadSeconds: Double = 0
     @State private var playerDurationSeconds: Double = 0
     @State private var waveformSamples: [Double] = []
     @State private var isWaveformLoading = false
-    @State private var waveformTask: Task<Void, Never>?
-    @State private var keyMonitor: Any?
-    @State private var flagsMonitor: Any?
-    @State private var scrollMonitor: Any?
-    @State private var mouseDownMonitor: Any?
-    @State private var middleMousePanMonitor: Any?
     @State private var timelineZoom: Double = 1.0
     @State private var viewportStartSeconds: Double = 0
-    @State private var isViewportManuallyControlled = false
-    @State private var isTimelineHovered = false
-    @State private var isWaveformHovered = false
     @State private var isOptionKeyPressed = false
-    @State private var timelineInteractiveWidth: CGFloat = 1
-    @State private var isMiddleMousePanning = false
-    @State private var middleMousePanLastWindowX: CGFloat?
-    @State private var loadedSourcePath: String?
     @State private var playheadVisualSeconds: Double = 0
-    @State private var suppressVisualPlayheadSyncUntil: Date = .distantPast
     @State private var playheadJumpAnimationToken: Int = 0
     @State private var playheadJumpFromSeconds: Double = 0
     @State private var isPlayheadDragActive = false
-    @State private var playheadDragLocationX: CGFloat?
-    @State private var playheadDragWidth: CGFloat = 0
-    @State private var playheadDragAutoPanTask: Task<Void, Never>?
-    @State private var keyboardPanTask: Task<Void, Never>?
     @State private var playheadCopyFlash = false
     @State private var dragVisualPlayheadSeconds: Double?
-    @State private var lastInteractiveSeekCommitTimestamp: CFTimeInterval = 0
-    @State private var lastInteractiveReadoutSyncTimestamp: CFTimeInterval = 0
-    @State private var lastSharedPlayheadSyncTimestamp: CFTimeInterval = 0
-    @State private var timelinePointerSeconds: Double?
-    @State private var clipWindow: NSWindow?
     @State private var clipContentHeight: CGFloat = 0
-    @State private var playerTimeObserverToken: Any?
-    @State private var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
-    @State private var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
     @SceneStorage("clip.playerHeight") private var storedPlayerHeight: Double = 0
     @SceneStorage("clip.transcriptSidebarWidth") private var storedTranscriptSidebarWidth: Double = 440
     @SceneStorage("clip.transcriptSidebarVisible") private var storedTranscriptSidebarVisible = true
-    @State private var playerResizeStartHeight: CGFloat?
-    @State private var playerResizeStartGlobalY: CGFloat?
     @State private var livePlayerHeight: CGFloat?
-    @State private var transcriptSidebarResizeStartWidth: CGFloat?
-    @State private var transcriptSidebarResizeStartGlobalX: CGFloat?
     @State private var liveTranscriptSidebarWidth: CGFloat?
     @State private var clipTranscriptSidebarTimeSeconds: Double = 0
     @State private var clipTranscriptSearchFocusToken: Int = 0
@@ -88,19 +94,17 @@ struct ClipToolView: View {
         return [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128]
     }
 
-    @State private var lastInteractiveSeekSeconds: Double = -1
-
     private func syncVisualPlayheadImmediately(_ value: Double) {
         playheadVisualSeconds = value
         playheadJumpFromSeconds = value
-        suppressVisualPlayheadSyncUntil = .distantPast
+        runtime.suppressVisualPlayheadSyncUntil = .distantPast
     }
 
     private func springAnimateVisualPlayhead(to value: Double) {
         playheadJumpFromSeconds = playheadVisualSeconds
         playheadVisualSeconds = value
         playheadJumpAnimationToken &+= 1
-        suppressVisualPlayheadSyncUntil = Date().addingTimeInterval(0.22)
+        runtime.suppressVisualPlayheadSyncUntil = Date().addingTimeInterval(0.22)
     }
 
     private func nearestZoomIndex(for value: Double) -> Int {
@@ -127,12 +131,12 @@ struct ClipToolView: View {
 
         let playheadAnchorSeconds = min(max(0, playheadVisualSeconds), totalDurationSeconds)
         let anchorSeconds: Double = {
-            if isWaveformHovered, let pointer = timelinePointerSeconds {
+            if runtime.isWaveformHovered, let pointer = runtime.timelinePointerSeconds {
                 return min(max(0, pointer), totalDurationSeconds)
             }
             return playheadAnchorSeconds
         }()
-        let usingPointerAnchor = isWaveformHovered && timelinePointerSeconds != nil
+        let usingPointerAnchor = runtime.isWaveformHovered && runtime.timelinePointerSeconds != nil
         let playheadVisibleInCurrentWindow = playheadSeconds >= oldStart && playheadSeconds <= (oldStart + oldWindow)
         let anchorRatio: Double
         if oldZoom <= 1.0001 {
@@ -152,7 +156,7 @@ struct ClipToolView: View {
         timelineZoom = next
         if next <= 1 {
             viewportStartSeconds = 0
-            isViewportManuallyControlled = false
+            runtime.isViewportManuallyControlled = false
             return
         }
 
@@ -165,7 +169,7 @@ struct ClipToolView: View {
             newStart = anchorSeconds - (anchorRatio * newWindow)
         }
         viewportStartSeconds = clampedViewportStart(newStart)
-        isViewportManuallyControlled = true
+        runtime.isViewportManuallyControlled = true
     }
 
     private func clampTimelineZoomToAllowedLevels() {
@@ -192,63 +196,65 @@ struct ClipToolView: View {
     }
 
     private func installPlayerTimeObserverIfNeeded() {
-        guard playerTimeObserverToken == nil else { return }
+        guard runtime.playerTimeObserverToken == nil else { return }
         let interval = CMTime(seconds: 1.0 / 60.0, preferredTimescale: 600)
-        playerTimeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            let current = CMTimeGetSeconds(time)
-            if current.isFinite {
-                let newPlayhead = max(0, current)
-                let didMove = abs(newPlayhead - playheadSeconds) > (1.0 / 240.0)
+        runtime.playerTimeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            MainActor.assumeIsolated {
+                let current = CMTimeGetSeconds(time)
+                if current.isFinite {
+                    let newPlayhead = max(0, current)
+                    let didMove = abs(newPlayhead - playheadSeconds) > (1.0 / 240.0)
 
-                if didMove {
-                    let now = CACurrentMediaTime()
-                    let isPlaying = player.rate != 0
-                    let uiUpdateInterval = isPlaying ? (1.0 / 30.0) : (1.0 / 60.0)
-                    if !isPlaying || (now - lastPlaybackUIUpdateTimestamp) >= uiUpdateInterval {
-                        playheadSeconds = newPlayhead
-                        if Date() >= suppressVisualPlayheadSyncUntil {
-                            playheadVisualSeconds = newPlayhead
-                        }
-                        lastPlaybackUIUpdateTimestamp = now
-                    }
-                    // Avoid high-frequency @Published writes while playback is active.
-                    // Persist shared playhead state only while paused or on explicit actions.
-                    if !isPlaying {
-                        syncSharedPlayheadStateIfNeeded(newPlayhead, force: false, updateAlignment: true)
-                    }
-                }
-
-                if player.rate != 0 {
-                    // While playing, do not forcibly override manual viewport panning.
-                    // Follow only when viewport is not currently under manual control,
-                    // and throttle follow updates to avoid layout churn.
-                    let shouldFollow = !isViewportManuallyControlled
-                    if shouldFollow {
+                    if didMove {
                         let now = CACurrentMediaTime()
-                        if (now - lastPlaybackFollowUpdateTimestamp) >= (1.0 / 20.0) {
-                            updateViewportForPlayhead(shouldFollow: true)
-                            lastPlaybackFollowUpdateTimestamp = now
+                        let isPlaying = player.rate != 0
+                        let uiUpdateInterval = isPlaying ? (1.0 / 30.0) : (1.0 / 60.0)
+                        if !isPlaying || (now - runtime.lastPlaybackUIUpdateTimestamp) >= uiUpdateInterval {
+                            playheadSeconds = newPlayhead
+                            if Date() >= runtime.suppressVisualPlayheadSyncUntil {
+                                playheadVisualSeconds = newPlayhead
+                            }
+                            runtime.lastPlaybackUIUpdateTimestamp = now
+                        }
+                        // Avoid high-frequency @Published writes while playback is active.
+                        // Persist shared playhead state only while paused or on explicit actions.
+                        if !isPlaying {
+                            syncSharedPlayheadStateIfNeeded(newPlayhead, force: false, updateAlignment: true)
                         }
                     }
-                } else if didMove {
-                    updateViewportForPlayhead(shouldFollow: false)
-                }
-            }
 
-            let currentDuration = CMTimeGetSeconds(player.currentItem?.duration ?? .invalid)
-            if currentDuration.isFinite && currentDuration > 0,
-               abs(currentDuration - playerDurationSeconds) > (1.0 / 120.0) {
-                playerDurationSeconds = currentDuration
+                    if player.rate != 0 {
+                        // While playing, do not forcibly override manual viewport panning.
+                        // Follow only when viewport is not currently under manual control,
+                        // and throttle follow updates to avoid layout churn.
+                        let shouldFollow = !runtime.isViewportManuallyControlled
+                        if shouldFollow {
+                            let now = CACurrentMediaTime()
+                            if (now - runtime.lastPlaybackFollowUpdateTimestamp) >= (1.0 / 20.0) {
+                                updateViewportForPlayhead(shouldFollow: true)
+                                runtime.lastPlaybackFollowUpdateTimestamp = now
+                            }
+                        }
+                    } else if didMove {
+                        updateViewportForPlayhead(shouldFollow: false)
+                    }
+                }
+
+                let currentDuration = CMTimeGetSeconds(player.currentItem?.duration ?? .invalid)
+                if currentDuration.isFinite && currentDuration > 0,
+                   abs(currentDuration - playerDurationSeconds) > (1.0 / 120.0) {
+                    playerDurationSeconds = currentDuration
+                }
             }
         }
     }
 
     private func removePlayerTimeObserver() {
-        guard let token = playerTimeObserverToken else { return }
+        guard let token = runtime.playerTimeObserverToken else { return }
         player.removeTimeObserver(token)
-        playerTimeObserverToken = nil
-        lastPlaybackUIUpdateTimestamp = 0
-        lastPlaybackFollowUpdateTimestamp = 0
+        runtime.playerTimeObserverToken = nil
+        runtime.lastPlaybackUIUpdateTimestamp = 0
+        runtime.lastPlaybackFollowUpdateTimestamp = 0
     }
 
     private func loadPlayerItem() {
@@ -258,14 +264,14 @@ struct ClipToolView: View {
             playheadSeconds = 0
             playheadVisualSeconds = 0
             playerDurationSeconds = 0
-            loadedSourcePath = nil
-            waveformTask?.cancel()
+            runtime.loadedSourcePath = nil
+            runtime.waveformTask?.cancel()
             waveformSamples = []
             isWaveformLoading = false
             return
         }
 
-        if loadedSourcePath == sourceURL.path, player.currentItem != nil {
+        if runtime.loadedSourcePath == sourceURL.path, player.currentItem != nil {
             let duration = max(playerDurationSeconds, model.sourceDurationSeconds)
             let restored = max(0, min(model.clipPlayheadSeconds, duration))
             if abs(playheadSeconds - restored) > (1.0 / 120.0) {
@@ -276,7 +282,7 @@ struct ClipToolView: View {
             return
         }
 
-        loadedSourcePath = sourceURL.path
+        runtime.loadedSourcePath = sourceURL.path
         let item = AVPlayerItem(url: sourceURL)
         player.replaceCurrentItem(with: item)
         installPlayerTimeObserverIfNeeded()
@@ -292,7 +298,7 @@ struct ClipToolView: View {
     }
 
     private func loadWaveform(for url: URL) {
-        waveformTask?.cancel()
+        runtime.waveformTask?.cancel()
 
         // Keep long timelines detailed when zoomed in: higher bucket density than real-time display rate.
         let targetSampleCount = Int(min(240_000, max(12_000, model.sourceDurationSeconds * 120.0)))
@@ -306,7 +312,7 @@ struct ClipToolView: View {
         waveformSamples = []
         isWaveformLoading = true
 
-        waveformTask = Task.detached(priority: .userInitiated) {
+        runtime.waveformTask = Task.detached(priority: .userInitiated) {
             let samples = generateWaveformSamples(for: url, sampleCount: targetSampleCount)
             await MainActor.run {
                 self.model.cacheWaveformSamples(samples, for: url, sampleCount: targetSampleCount)
@@ -318,23 +324,23 @@ struct ClipToolView: View {
 
     private func seekPlayer(to time: Double) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
-        lastInteractiveSeekSeconds = -1
+        runtime.lastInteractiveSeekSeconds = -1
         dragVisualPlayheadSeconds = nil
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
         syncSharedPlayheadStateIfNeeded(clamped, force: true)
         syncVisualPlayheadImmediately(clamped)
-        updateViewportForPlayhead(shouldFollow: !isViewportManuallyControlled || player.rate != 0)
+        updateViewportForPlayhead(shouldFollow: !runtime.isViewportManuallyControlled || player.rate != 0)
     }
 
     private func commitInteractiveSeek(to time: Double) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
 
         // Coalesce tiny drag deltas so scrubbing stays responsive without flooding seeks.
-        if lastInteractiveSeekSeconds >= 0, abs(clamped - lastInteractiveSeekSeconds) < (1.0 / 120.0) {
+        if runtime.lastInteractiveSeekSeconds >= 0, abs(clamped - runtime.lastInteractiveSeekSeconds) < (1.0 / 120.0) {
             return
         }
-        lastInteractiveSeekSeconds = clamped
+        runtime.lastInteractiveSeekSeconds = clamped
 
         let tolerance = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
         player.seek(
@@ -353,15 +359,15 @@ struct ClipToolView: View {
 
         let now = CACurrentMediaTime()
         let readoutInterval = 1.0 / 30.0
-        if forceCommit || (now - lastInteractiveReadoutSyncTimestamp) >= readoutInterval {
+        if forceCommit || (now - runtime.lastInteractiveReadoutSyncTimestamp) >= readoutInterval {
             dragVisualPlayheadSeconds = clamped
             playheadVisualSeconds = clamped
-            lastInteractiveReadoutSyncTimestamp = now
+            runtime.lastInteractiveReadoutSyncTimestamp = now
         }
 
         let commitInterval = 1.0 / 30.0
-        guard forceCommit || (now - lastInteractiveSeekCommitTimestamp) >= commitInterval else { return }
-        lastInteractiveSeekCommitTimestamp = now
+        guard forceCommit || (now - runtime.lastInteractiveSeekCommitTimestamp) >= commitInterval else { return }
+        runtime.lastInteractiveSeekCommitTimestamp = now
         commitInteractiveSeek(to: clamped)
     }
 
@@ -392,7 +398,7 @@ struct ClipToolView: View {
             } else {
                 viewportStartSeconds = currentStart
             }
-            isViewportManuallyControlled = true
+            runtime.isViewportManuallyControlled = true
         } else {
             updateViewportForPlayhead(shouldFollow: true)
         }
@@ -506,7 +512,7 @@ struct ClipToolView: View {
     }
 
     private var markerSnapToleranceSeconds: Double {
-        let width = max(1, timelineInteractiveWidth)
+        let width = max(1, runtime.timelineInteractiveWidth)
         let snapDistanceInPixels: CGFloat = 16
         let secondsPerPixel = zoomedWindowDuration / Double(width)
         return min(0.75, max(1.0 / 30.0, secondsPerPixel * Double(snapDistanceInPixels)))
@@ -537,8 +543,8 @@ struct ClipToolView: View {
             if abs(viewportStartSeconds) > 0.000_001 {
                 viewportStartSeconds = 0
             }
-            if isViewportManuallyControlled {
-                isViewportManuallyControlled = false
+            if runtime.isViewportManuallyControlled {
+                runtime.isViewportManuallyControlled = false
             }
             return
         }
@@ -574,7 +580,7 @@ struct ClipToolView: View {
 
     private func panViewport(byPoints points: CGFloat) {
         guard timelineZoom > 1 else { return }
-        let width = max(1, timelineInteractiveWidth)
+        let width = max(1, runtime.timelineInteractiveWidth)
         let secondsPerPoint = zoomedWindowDuration / Double(width)
         // Natural-feeling pan: swipe left reveals later timeline content.
         let nextStart = clampedViewportStart(viewportStartSeconds - (Double(points) * secondsPerPoint))
@@ -582,7 +588,7 @@ struct ClipToolView: View {
             return
         }
         viewportStartSeconds = nextStart
-        isViewportManuallyControlled = true
+        runtime.isViewportManuallyControlled = true
     }
 
     private func autoPanViewportIfNeededForPlayheadDrag(x: CGFloat, width: CGFloat) -> Bool {
@@ -614,15 +620,15 @@ struct ClipToolView: View {
     }
 
     private func startPlayheadDragAutoPanLoopIfNeeded() {
-        guard playheadDragAutoPanTask == nil else { return }
-        playheadDragAutoPanTask = Task { @MainActor in
+        guard runtime.playheadDragAutoPanTask == nil else { return }
+        runtime.playheadDragAutoPanTask = Task { @MainActor in
             while !Task.isCancelled && isPlayheadDragActive {
-                guard let x = playheadDragLocationX, playheadDragWidth > 0 else {
+                guard let x = runtime.playheadDragLocationX, runtime.playheadDragWidth > 0 else {
                     try? await Task.sleep(nanoseconds: 16_000_000)
                     continue
                 }
-                if autoPanViewportIfNeededForPlayheadDrag(x: x, width: playheadDragWidth) {
-                    seekPlayerInteractive(to: timeForPlayheadDragLocation(x: x, width: playheadDragWidth))
+                if autoPanViewportIfNeededForPlayheadDrag(x: x, width: runtime.playheadDragWidth) {
+                    seekPlayerInteractive(to: timeForPlayheadDragLocation(x: x, width: runtime.playheadDragWidth))
                 }
                 try? await Task.sleep(nanoseconds: 16_000_000)
             }
@@ -630,25 +636,25 @@ struct ClipToolView: View {
     }
 
     private func stopPlayheadDragAutoPanLoop() {
-        playheadDragAutoPanTask?.cancel()
-        playheadDragAutoPanTask = nil
+        runtime.playheadDragAutoPanTask?.cancel()
+        runtime.playheadDragAutoPanTask = nil
     }
 
     private func updatePlayheadDragLocation(_ x: CGFloat, width: CGFloat) {
-        playheadDragLocationX = x
-        playheadDragWidth = width
+        runtime.playheadDragLocationX = x
+        runtime.playheadDragWidth = width
     }
 
     private func setPlayheadDragActive(_ active: Bool) {
         isPlayheadDragActive = active
         if active {
-            lastInteractiveSeekCommitTimestamp = 0
-            lastInteractiveReadoutSyncTimestamp = 0
+            runtime.lastInteractiveSeekCommitTimestamp = 0
+            runtime.lastInteractiveReadoutSyncTimestamp = 0
             startPlayheadDragAutoPanLoopIfNeeded()
         } else {
             stopPlayheadDragAutoPanLoop()
-            if let x = playheadDragLocationX, playheadDragWidth > 0 {
-                seekPlayerInteractive(to: timeForPlayheadDragLocation(x: x, width: playheadDragWidth), forceCommit: true)
+            if let x = runtime.playheadDragLocationX, runtime.playheadDragWidth > 0 {
+                seekPlayerInteractive(to: timeForPlayheadDragLocation(x: x, width: runtime.playheadDragWidth), forceCommit: true)
             }
             if let dragVisualPlayheadSeconds {
                 playheadSeconds = dragVisualPlayheadSeconds
@@ -656,9 +662,9 @@ struct ClipToolView: View {
                 syncVisualPlayheadImmediately(dragVisualPlayheadSeconds)
             }
             dragVisualPlayheadSeconds = nil
-            lastInteractiveSeekSeconds = -1
-            playheadDragLocationX = nil
-            playheadDragWidth = 0
+            runtime.lastInteractiveSeekSeconds = -1
+            runtime.playheadDragLocationX = nil
+            runtime.playheadDragWidth = 0
         }
     }
 
@@ -680,10 +686,10 @@ struct ClipToolView: View {
         let nextStart = clampedViewportStart(viewportStartSeconds + delta)
         guard abs(nextStart - viewportStartSeconds) > 0.000001 else { return }
 
-        keyboardPanTask?.cancel()
+        runtime.keyboardPanTask?.cancel()
         let fromStart = viewportStartSeconds
         let toStart = nextStart
-        keyboardPanTask = Task { @MainActor in
+        runtime.keyboardPanTask = Task { @MainActor in
             let animationDuration = 0.16
             let startTime = CACurrentMediaTime()
             while !Task.isCancelled {
@@ -695,9 +701,9 @@ struct ClipToolView: View {
                 try? await Task.sleep(nanoseconds: 16_000_000)
             }
             viewportStartSeconds = toStart
-            keyboardPanTask = nil
+            runtime.keyboardPanTask = nil
         }
-        isViewportManuallyControlled = true
+        runtime.isViewportManuallyControlled = true
     }
 
     private func copyPlayheadTimecode() {
@@ -718,14 +724,14 @@ struct ClipToolView: View {
     private func syncSharedPlayheadStateIfNeeded(_ seconds: Double, force: Bool, updateAlignment: Bool = true) {
         let now = CACurrentMediaTime()
         let syncInterval = 1.0 / 20.0
-        guard force || (now - lastSharedPlayheadSyncTimestamp) >= syncInterval else { return }
+        guard force || (now - runtime.lastSharedPlayheadSyncTimestamp) >= syncInterval else { return }
         if abs(model.clipPlayheadSeconds - seconds) > (1.0 / 240.0) {
             model.clipPlayheadSeconds = seconds
         }
         if updateAlignment {
             model.selectTimelineMarkerIfAligned(near: seconds)
         }
-        lastSharedPlayheadSyncTimestamp = now
+        runtime.lastSharedPlayheadSyncTimestamp = now
     }
 
     private var visibleStartSeconds: Double {
@@ -740,9 +746,9 @@ struct ClipToolView: View {
     }
 
     private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
-            guard clipWindow?.isKeyWindow == true else { return event }
+        guard runtime.keyMonitor == nil else { return }
+        runtime.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            guard runtime.clipWindow?.isKeyWindow == true else { return event }
 
             let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
             let rawChars = event.characters ?? ""
@@ -904,10 +910,10 @@ struct ClipToolView: View {
     }
 
     private func installScrollMonitor() {
-        guard scrollMonitor == nil else { return }
-        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { event in
-            guard clipWindow?.isKeyWindow == true else { return event }
-            guard isTimelineHovered, timelineZoom > 1 else { return event }
+        guard runtime.scrollMonitor == nil else { return }
+        runtime.scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { event in
+            guard runtime.clipWindow?.isKeyWindow == true else { return event }
+            guard runtime.isTimelineHovered, timelineZoom > 1 else { return event }
 
             let dx = event.scrollingDeltaX
             let dy = event.scrollingDeltaY
@@ -933,18 +939,18 @@ struct ClipToolView: View {
     }
 
     private func installFlagsMonitor() {
-        guard flagsMonitor == nil else { return }
-        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { event in
-            guard clipWindow?.isKeyWindow == true else { return event }
+        guard runtime.flagsMonitor == nil else { return }
+        runtime.flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { event in
+            guard runtime.clipWindow?.isKeyWindow == true else { return event }
             isOptionKeyPressed = event.modifierFlags.contains(.option)
             return event
         }
     }
 
     private func installMouseDownMonitor() {
-        guard mouseDownMonitor == nil else { return }
-        mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
-            guard clipWindow?.isKeyWindow == true else { return event }
+        guard runtime.mouseDownMonitor == nil else { return }
+        runtime.mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
+            guard runtime.clipWindow?.isKeyWindow == true else { return event }
             guard let window = NSApp.keyWindow else { return event }
             guard window.firstResponder is NSTextView else { return event }
 
@@ -960,7 +966,7 @@ struct ClipToolView: View {
     }
 
     private func updateTimelineCursor() {
-        guard timelineZoom > 1, isWaveformHovered, isMiddleMousePanning else {
+        guard timelineZoom > 1, runtime.isWaveformHovered, runtime.isMiddleMousePanning else {
             NSCursor.arrow.set()
             return
         }
@@ -968,30 +974,30 @@ struct ClipToolView: View {
     }
 
     private func installMiddleMousePanMonitor() {
-        guard middleMousePanMonitor == nil else { return }
-        middleMousePanMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .otherMouseDragged, .otherMouseUp]) { event in
-            guard clipWindow?.isKeyWindow == true else { return event }
+        guard runtime.middleMousePanMonitor == nil else { return }
+        runtime.middleMousePanMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .otherMouseDragged, .otherMouseUp]) { event in
+            guard runtime.clipWindow?.isKeyWindow == true else { return event }
             guard event.buttonNumber == 2 else { return event }
 
             switch event.type {
             case .otherMouseDown:
-                guard isWaveformHovered, timelineZoom > 1 else { return event }
-                isMiddleMousePanning = true
-                middleMousePanLastWindowX = event.locationInWindow.x
+                guard runtime.isWaveformHovered, timelineZoom > 1 else { return event }
+                runtime.isMiddleMousePanning = true
+                runtime.middleMousePanLastWindowX = event.locationInWindow.x
                 updateTimelineCursor()
                 return nil
             case .otherMouseDragged:
-                guard isMiddleMousePanning else { return event }
+                guard runtime.isMiddleMousePanning else { return event }
                 let currentX = event.locationInWindow.x
-                let lastX = middleMousePanLastWindowX ?? currentX
+                let lastX = runtime.middleMousePanLastWindowX ?? currentX
                 let deltaX = currentX - lastX
-                middleMousePanLastWindowX = currentX
+                runtime.middleMousePanLastWindowX = currentX
                 panViewport(byPoints: deltaX)
                 return nil
             case .otherMouseUp:
-                guard isMiddleMousePanning else { return event }
-                isMiddleMousePanning = false
-                middleMousePanLastWindowX = nil
+                guard runtime.isMiddleMousePanning else { return event }
+                runtime.isMiddleMousePanning = false
+                runtime.middleMousePanLastWindowX = nil
                 updateTimelineCursor()
                 return nil
             default:
@@ -1012,25 +1018,25 @@ struct ClipToolView: View {
     }
 
     private func removeKeyMonitor() {
-        if let keyMonitor {
+        if let keyMonitor = runtime.keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
-            self.keyMonitor = nil
+            runtime.keyMonitor = nil
         }
-        if let flagsMonitor {
+        if let flagsMonitor = runtime.flagsMonitor {
             NSEvent.removeMonitor(flagsMonitor)
-            self.flagsMonitor = nil
+            runtime.flagsMonitor = nil
         }
-        if let scrollMonitor {
+        if let scrollMonitor = runtime.scrollMonitor {
             NSEvent.removeMonitor(scrollMonitor)
-            self.scrollMonitor = nil
+            runtime.scrollMonitor = nil
         }
-        if let mouseDownMonitor {
+        if let mouseDownMonitor = runtime.mouseDownMonitor {
             NSEvent.removeMonitor(mouseDownMonitor)
-            self.mouseDownMonitor = nil
+            runtime.mouseDownMonitor = nil
         }
-        if let middleMousePanMonitor {
+        if let middleMousePanMonitor = runtime.middleMousePanMonitor {
             NSEvent.removeMonitor(middleMousePanMonitor)
-            self.middleMousePanMonitor = nil
+            runtime.middleMousePanMonitor = nil
         }
     }
 
@@ -1186,19 +1192,19 @@ struct ClipToolView: View {
                             .onHover { hovering in
                                 if hovering {
                                     NSCursor.resizeLeftRight.set()
-                                } else if !isMiddleMousePanning {
+                                } else if !runtime.isMiddleMousePanning {
                                     NSCursor.arrow.set()
                                 }
                             }
                             .gesture(
                                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                                     .onChanged { value in
-                                        if transcriptSidebarResizeStartWidth == nil {
-                                            transcriptSidebarResizeStartWidth = clipTranscriptSidebarWidth
-                                            transcriptSidebarResizeStartGlobalX = value.startLocation.x
+                                        if runtime.transcriptSidebarResizeStartWidth == nil {
+                                            runtime.transcriptSidebarResizeStartWidth = clipTranscriptSidebarWidth
+                                            runtime.transcriptSidebarResizeStartGlobalX = value.startLocation.x
                                         }
-                                        let base = transcriptSidebarResizeStartWidth ?? clipTranscriptSidebarWidth
-                                        let startX = transcriptSidebarResizeStartGlobalX ?? value.startLocation.x
+                                        let base = runtime.transcriptSidebarResizeStartWidth ?? clipTranscriptSidebarWidth
+                                        let startX = runtime.transcriptSidebarResizeStartGlobalX ?? value.startLocation.x
                                         let deltaX = value.location.x - startX
                                         liveTranscriptSidebarWidth = clampedTranscriptSidebarWidth(base - deltaX)
                                     }
@@ -1207,8 +1213,8 @@ struct ClipToolView: View {
                                             storedTranscriptSidebarWidth = Double(clampedTranscriptSidebarWidth(liveTranscriptSidebarWidth))
                                         }
                                         liveTranscriptSidebarWidth = nil
-                                        transcriptSidebarResizeStartWidth = nil
-                                        transcriptSidebarResizeStartGlobalX = nil
+                                        runtime.transcriptSidebarResizeStartWidth = nil
+                                        runtime.transcriptSidebarResizeStartGlobalX = nil
                                     }
                             )
 
@@ -1292,20 +1298,20 @@ struct ClipToolView: View {
             .onHover { hovering in
                 if hovering {
                     NSCursor.resizeUpDown.set()
-                } else if !isMiddleMousePanning {
+                } else if !runtime.isMiddleMousePanning {
                     NSCursor.arrow.set()
                 }
             }
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
-                        if playerResizeStartHeight == nil {
+                        if runtime.playerResizeStartHeight == nil {
                             let base = storedPlayerHeight > 0 ? CGFloat(storedPlayerHeight) : playerDefaultHeight
-                            playerResizeStartHeight = clampedPlayerHeight(base)
-                            playerResizeStartGlobalY = value.startLocation.y
+                            runtime.playerResizeStartHeight = clampedPlayerHeight(base)
+                            runtime.playerResizeStartGlobalY = value.startLocation.y
                         }
-                        let base = playerResizeStartHeight ?? currentPlayerHeight
-                        let startY = playerResizeStartGlobalY ?? value.startLocation.y
+                        let base = runtime.playerResizeStartHeight ?? currentPlayerHeight
+                        let startY = runtime.playerResizeStartGlobalY ?? value.startLocation.y
                         let deltaY = value.location.y - startY
                         livePlayerHeight = clampedPlayerHeight(base + deltaY)
                     }
@@ -1314,8 +1320,8 @@ struct ClipToolView: View {
                             storedPlayerHeight = Double(clampedPlayerHeight(livePlayerHeight))
                         }
                         livePlayerHeight = nil
-                        playerResizeStartHeight = nil
-                        playerResizeStartGlobalY = nil
+                        runtime.playerResizeStartHeight = nil
+                        runtime.playerResizeStartGlobalY = nil
                     }
             )
             .onTapGesture(count: 2) {
@@ -1405,7 +1411,7 @@ struct ClipToolView: View {
             captureMarkers: model.captureTimelineMarkers
         ) { newStart in
             viewportStartSeconds = clampedViewportStart(newStart)
-            isViewportManuallyControlled = true
+            runtime.isViewportManuallyControlled = true
         } content: {
             selectionSection
         }
@@ -1437,13 +1443,12 @@ struct ClipToolView: View {
             playheadJumpAnimationToken: playheadJumpAnimationToken,
             playheadSeconds: displayedPlayheadSeconds,
             playheadCopyFlash: playheadCopyFlash,
-            isTimelineHovered: isTimelineHovered,
             captureMarkers: model.captureTimelineMarkers,
             highlightedMarkerID: model.highlightedCaptureTimelineMarkerID,
             highlightedClipBoundary: model.highlightedClipBoundary,
             captureFrameFlashToken: model.captureFrameFlashToken,
             quickExportFlashToken: model.quickExportFlashToken,
-            onTimelineWidthChanged: { timelineInteractiveWidth = $0 },
+            onTimelineWidthChanged: { runtime.timelineInteractiveWidth = $0 },
             onSeek: { seconds, shouldSnapToMarker in
                 let target = shouldSnapToMarker ? snappedMarkerTime(around: seconds) : seconds
                 if shouldSnapToMarker {
@@ -1461,18 +1466,18 @@ struct ClipToolView: View {
             onSetStart: { model.setClipStart($0, undoManager: undoManager) },
             onSetEnd: { model.setClipEnd($0, undoManager: undoManager) },
             onWaveformHoverChanged: { hovering in
-                isWaveformHovered = hovering
+                runtime.isWaveformHovered = hovering
                 if !hovering {
-                    timelinePointerSeconds = nil
+                    runtime.timelinePointerSeconds = nil
                 }
-                if !isMiddleMousePanning {
+                if !runtime.isMiddleMousePanning {
                     updateTimelineCursor()
                 }
             },
-            onWaveformPointerTimeChanged: { timelinePointerSeconds = $0 },
+            onWaveformPointerTimeChanged: { runtime.timelinePointerSeconds = $0 },
             onTimelineHoverChanged: { hovering in
-                isTimelineHovered = hovering
-                if !isMiddleMousePanning {
+                runtime.isTimelineHovered = hovering
+                if !runtime.isMiddleMousePanning {
                     NSCursor.arrow.set()
                 }
             },
@@ -1722,16 +1727,16 @@ struct ClipToolView: View {
             }
 
         return step5.onDisappear {
-            waveformTask?.cancel()
-            keyboardPanTask?.cancel()
-            keyboardPanTask = nil
+            runtime.waveformTask?.cancel()
+            runtime.keyboardPanTask?.cancel()
+            runtime.keyboardPanTask = nil
             syncSharedPlayheadStateIfNeeded(playheadSeconds, force: true, updateAlignment: true)
             removeKeyMonitor()
             removePlayerTimeObserver()
             isOptionKeyPressed = false
-            isMiddleMousePanning = false
-            middleMousePanLastWindowX = nil
-            isWaveformHovered = false
+            runtime.isMiddleMousePanning = false
+            runtime.middleMousePanLastWindowX = nil
+            runtime.isWaveformHovered = false
             stopPlayheadDragAutoPanLoop()
             NSCursor.arrow.set()
             player.pause()
@@ -1742,7 +1747,7 @@ struct ClipToolView: View {
         withLifecycleHandlers(clipBaseContent)
             .background(
                 WindowAccessor { window in
-                    clipWindow = window
+                    runtime.clipWindow = window
                 }
             )
     }
