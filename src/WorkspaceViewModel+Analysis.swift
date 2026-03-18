@@ -94,7 +94,7 @@ extension WorkspaceViewModel {
         clearActivityConsole()
         appendActivityConsole("Analysis started", source: "analysis")
         analyzePhaseText = "Preparing analysis"
-        updateAnalyzeStatusText(fileName: url.lastPathComponent, progress: 0)
+        scheduleAnalyzeFeedbackUpdate(progress: 0, fileName: url.lastPathComponent, immediate: true)
         cancelFlag.reset()
 
         let knownDuration = sourceInfo?.durationSeconds
@@ -213,22 +213,12 @@ extension WorkspaceViewModel {
 
     func setAnalyzeProgress(_ progress: Double, fileName: String) {
         let clamped = min(1, max(0, progress))
-        analyzeProgress = clamped
-        updateAnalyzeStatusText(fileName: fileName, progress: clamped)
-        if var current = analysis {
-            current.progress = clamped
-            analysis = current
-        }
+        scheduleAnalyzeFeedbackUpdate(progress: clamped, fileName: fileName)
     }
 
     func setAnalyzePhase(_ phase: String, fileName: String) {
         analyzePhaseText = phase
-        updateAnalyzeStatusText(fileName: fileName, progress: analyzeProgress)
-    }
-
-    func updateAnalyzeStatusText(fileName: String, progress: Double) {
-        let percent = Int((min(1, max(0, progress)) * 100).rounded())
-        analyzeStatusText = "\(analyzePhaseText)… \(percent)%"
+        scheduleAnalyzeFeedbackUpdate(fileName: fileName, immediate: true)
     }
 
     func appendDetectedBlackSegment(_ segment: Segment) {
@@ -285,6 +275,7 @@ extension WorkspaceViewModel {
         isAnalyzing = false
         isGeneratingTranscript = false
         analyzeTask = nil
+        cancelAnalyzeFeedbackUpdates()
         analyzeProgress = 0
         analyzePhaseText = "Preparing analysis"
 
@@ -369,6 +360,7 @@ extension WorkspaceViewModel {
         isGeneratingTranscript = false
         isAnalyzing = false
         analyzeTask = nil
+        cancelAnalyzeFeedbackUpdates()
         analyzeProgress = 0
         analyzePhaseText = "Preparing analysis"
 

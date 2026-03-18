@@ -31,7 +31,7 @@ extension WorkspaceViewModel {
         clearActivityConsole()
         appendActivityConsole("Transcript generation started", source: "analysis")
         analyzePhaseText = "Transcribing audio"
-        updateAnalyzeStatusText(fileName: url.lastPathComponent, progress: 0)
+        scheduleAnalyzeFeedbackUpdate(progress: 0, fileName: url.lastPathComponent, immediate: true)
         transcriptStatusText = "Generating transcript…"
         uiMessage = transcriptStatusText
         cancelFlag.reset()

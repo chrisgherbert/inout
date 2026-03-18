@@ -72,7 +72,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
     let activityPresentation = ActivityPresentationModel()
-    @Published var analyzePhaseText = "Preparing analysis"
+    var analyzePhaseText = "Preparing analysis"
     @Published var wasCancelled = false
 
     @Published var selectedAudioFormat: AudioFormat = .mp3
@@ -317,8 +317,12 @@ final class WorkspaceViewModel: ObservableObject {
     private let maxActivityConsoleCharacters = 200_000
     private let activityConsoleTrimCharacters = 150_000
     private let activityConsoleFlushIntervalNanos: UInt64 = 100_000_000
+    private let analyzeFeedbackFlushIntervalNanos: UInt64 = 100_000_000
     private var pendingActivityConsoleText = ""
     private var activityConsoleFlushTask: Task<Void, Never>?
+    var activeAnalyzeFeedbackFileName: String?
+    var pendingAnalyzeFeedbackProgress: Double?
+    var analyzeFeedbackFlushTask: Task<Void, Never>?
     let downloaderManager = DownloaderManager.shared
     var cachedFFmpegAvailable = false
     var cachedFFprobeAvailable = false
@@ -767,6 +771,63 @@ final class WorkspaceViewModel: ObservableObject {
                 activityConsoleText = String(activityConsoleText[start...])
             }
         }
+    }
+
+    func scheduleAnalyzeFeedbackUpdate(progress: Double? = nil, fileName: String, immediate: Bool = false) {
+        activeAnalyzeFeedbackFileName = fileName
+        if let progress {
+            pendingAnalyzeFeedbackProgress = min(1, max(0, progress))
+        }
+
+        if immediate {
+            flushAnalyzeFeedbackUpdate()
+            return
+        }
+
+        guard analyzeFeedbackFlushTask == nil else { return }
+        analyzeFeedbackFlushTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let flushDelay = self.analyzeFeedbackFlushIntervalNanos
+            try? await Task.sleep(nanoseconds: flushDelay)
+            self.analyzeFeedbackFlushTask = nil
+            self.flushAnalyzeFeedbackUpdate()
+        }
+    }
+
+    func flushAnalyzeFeedbackUpdate() {
+        guard activeAnalyzeFeedbackFileName != nil else { return }
+
+        let progress = pendingAnalyzeFeedbackProgress ?? analyzeProgress
+        let clamped = min(1, max(0, progress))
+        pendingAnalyzeFeedbackProgress = nil
+
+        if analyzeProgress != clamped {
+            analyzeProgress = clamped
+        }
+
+        let statusText = renderedAnalyzeStatusText(progress: clamped)
+        if analyzeStatusText != statusText {
+            analyzeStatusText = statusText
+        }
+
+        if var current = analysis,
+           case .running = current.status,
+           abs(current.progress - clamped) > 0.0001 {
+            current.progress = clamped
+            analysis = current
+        }
+    }
+
+    func cancelAnalyzeFeedbackUpdates() {
+        analyzeFeedbackFlushTask?.cancel()
+        analyzeFeedbackFlushTask = nil
+        pendingAnalyzeFeedbackProgress = nil
+        activeAnalyzeFeedbackFileName = nil
+    }
+
+    func renderedAnalyzeStatusText(progress: Double) -> String {
+        let percent = Int((min(1, max(0, progress)) * 100).rounded())
+        return "\(analyzePhaseText)… \(percent)%"
     }
 
     func stopCurrentActivity() {
