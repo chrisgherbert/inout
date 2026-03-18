@@ -1297,9 +1297,7 @@ struct ClipToolView: View {
                                 },
                                 onCloseTranscript: {
                                     storedTranscriptSidebarVisible = false
-                                },
-                                onMeasuredFittingWidthChange: nil,
-                                onHorizontalOverflowChange: nil
+                                }
                             )
                         )
                         .frame(width: sidebarWidth, height: currentPlayerHeight)
