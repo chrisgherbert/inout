@@ -98,6 +98,8 @@ struct PlayheadBenchmarkScenarioSummary: Codable {
     let inputEvents: PlayheadCounterSummary
     let visualUpdates: PlayheadCounterSummary
     let inputInterval: PlayheadTimingSummary?
+    let scrubTargetDeltaSeconds: PlayheadTimingSummary?
+    let scrubTargetSpanSeconds: Double
     let visualInterval: PlayheadTimingSummary?
     let inputToVisualLatency: PlayheadTimingSummary?
     let interactiveSeekCompletionLatency: PlayheadTimingSummary?
@@ -144,6 +146,7 @@ final class PlayheadDiagnostics {
         var inputIntervals: [Double] = []
         var visualIntervals: [Double] = []
         var inputToVisualLatencies: [Double] = []
+        var scrubTargetDeltas: [Double] = []
         var interactiveSeekCompletionLatencies: [Double] = []
         var mainThreadPulseIntervals: [Double] = []
         var updateNSViewDurations: [Double] = []
@@ -152,8 +155,11 @@ final class PlayheadDiagnostics {
         var waveformRebuildDurations: [Double] = []
         var lastInputTime: CFTimeInterval?
         var lastVisualTime: CFTimeInterval?
+        var lastInputSeconds: Double?
         var pendingInputTimes: [CFTimeInterval] = []
         var pendingInteractiveSeekStartTimes: [String: CFTimeInterval] = [:]
+        var minInputSeconds = Double.greatestFiniteMagnitude
+        var maxInputSeconds = -Double.greatestFiniteMagnitude
         var inputEvents = 0
         var visualUpdates = 0
         var interactiveSeekRequests = 0
@@ -232,6 +238,12 @@ final class PlayheadDiagnostics {
             scenario.inputIntervals.append(now - last)
         }
         scenario.lastInputTime = now
+        if let lastSeconds = scenario.lastInputSeconds {
+            scenario.scrubTargetDeltas.append(abs(seconds - lastSeconds))
+        }
+        scenario.lastInputSeconds = seconds
+        scenario.minInputSeconds = min(scenario.minInputSeconds, seconds)
+        scenario.maxInputSeconds = max(scenario.maxInputSeconds, seconds)
         scenario.pendingInputTimes.append(now)
         scenario.inputEvents += 1
         currentScenario = scenario
@@ -396,6 +408,10 @@ final class PlayheadDiagnostics {
             inputEvents: counterSummary(count: scenario.inputEvents, duration: duration),
             visualUpdates: counterSummary(count: scenario.visualUpdates, duration: duration),
             inputInterval: timingSummary(scenario.inputIntervals),
+            scrubTargetDeltaSeconds: timingSummary(scenario.scrubTargetDeltas, scale: 1.0),
+            scrubTargetSpanSeconds: scenario.maxInputSeconds.isFinite && scenario.minInputSeconds.isFinite
+                ? max(0, scenario.maxInputSeconds - scenario.minInputSeconds)
+                : 0,
             visualInterval: timingSummary(scenario.visualIntervals),
             inputToVisualLatency: timingSummary(scenario.inputToVisualLatencies),
             interactiveSeekCompletionLatency: timingSummary(scenario.interactiveSeekCompletionLatencies),
@@ -425,14 +441,14 @@ final class PlayheadDiagnostics {
         PlayheadCounterSummary(count: count, perSecond: duration > 0 ? Double(count) / duration : 0)
     }
 
-    private func timingSummary(_ samples: [Double]) -> PlayheadTimingSummary? {
+    private func timingSummary(_ samples: [Double], scale: Double = 1000.0) -> PlayheadTimingSummary? {
         guard !samples.isEmpty else { return nil }
         let sorted = samples.sorted()
         return PlayheadTimingSummary(
-            averageMs: (samples.reduce(0, +) / Double(samples.count)) * 1000.0,
-            p50Ms: percentile(sorted, 0.50) * 1000.0,
-            p95Ms: percentile(sorted, 0.95) * 1000.0,
-            maxMs: (sorted.last ?? 0) * 1000.0
+            averageMs: (samples.reduce(0, +) / Double(samples.count)) * scale,
+            p50Ms: percentile(sorted, 0.50) * scale,
+            p95Ms: percentile(sorted, 0.95) * scale,
+            maxMs: (sorted.last ?? 0) * scale
         )
     }
 

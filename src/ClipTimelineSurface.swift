@@ -63,6 +63,7 @@ final class WaveformRasterHostView: NSView {
     private var isDraggingPlayhead = false
     private var isDraggingStartEdge = false
     private var isDraggingEndEdge = false
+    private var benchmarkPlayheadDragLocationX: CGFloat?
     private var isPointerInside = false
     private var isStartEdgeHovered = false
     private var isEndEdgeHovered = false
@@ -812,6 +813,7 @@ final class WaveformRasterHostView: NSView {
 
     func beginBenchmarkPlayheadDrag(atX x: CGFloat) {
         let point = benchmarkPlayheadPoint(forX: x)
+        benchmarkPlayheadDragLocationX = point.x
         isDraggingStartEdge = false
         isDraggingEndEdge = false
         isDraggingPlayhead = true
@@ -843,6 +845,7 @@ final class WaveformRasterHostView: NSView {
 
     func updateBenchmarkPlayheadDrag(atX x: CGFloat) {
         guard isDraggingPlayhead else { return }
+        benchmarkPlayheadDragLocationX = x
         let point = benchmarkPlayheadPoint(forX: x)
         updateInteractiveDrag(at: point, forceCommit: false)
     }
@@ -871,6 +874,7 @@ final class WaveformRasterHostView: NSView {
         }
         updateInteractiveDrag(at: point, forceCommit: true)
         isDraggingPlayhead = false
+        benchmarkPlayheadDragLocationX = nil
         dragPlayheadSeconds = nil
         lastDragSampleHostTime = 0
         playheadLayer.removeAnimation(forKey: "dragPlayheadPosition")
@@ -881,9 +885,11 @@ final class WaveformRasterHostView: NSView {
 
     func endBenchmarkPlayheadDrag(atX x: CGFloat) {
         guard isDraggingPlayhead else { return }
+        benchmarkPlayheadDragLocationX = x
         let point = benchmarkPlayheadPoint(forX: x)
         updateInteractiveDrag(at: point, forceCommit: true)
         isDraggingPlayhead = false
+        benchmarkPlayheadDragLocationX = nil
         dragPlayheadSeconds = nil
         lastDragSampleHostTime = 0
         playheadLayer.removeAnimation(forKey: "dragPlayheadPosition")
@@ -962,9 +968,16 @@ final class WaveformRasterHostView: NSView {
     }
 
     private func tickLivePlayhead() {
-        if isDraggingPlayhead, let window {
-            let sampledPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            updateInteractiveDrag(at: sampledPoint, forceCommit: false)
+        if isDraggingPlayhead {
+            if let benchmarkPlayheadDragLocationX {
+                let sampledPoint = benchmarkPlayheadPoint(forX: benchmarkPlayheadDragLocationX)
+                updateInteractiveDrag(at: sampledPoint, forceCommit: false)
+                return
+            }
+            if let window {
+                let sampledPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+                updateInteractiveDrag(at: sampledPoint, forceCommit: false)
+            }
             return
         }
 

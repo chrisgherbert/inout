@@ -324,11 +324,14 @@ print(f"Playhead benchmark summary: {output_path}")
 print()
 for scenario in data.get("scenarios", []):
     latency = scenario.get("inputToVisualLatency") or {}
+    scrub_delta = scenario.get("scrubTargetDeltaSeconds") or {}
     seek_completion = scenario.get("interactiveSeekCompletionLatency") or {}
     visual = scenario.get("visualInterval") or {}
     pulse = scenario.get("mainThreadPulse") or {}
     print(
         f"- {scenario['name']}: latency p95 {fmt(latency.get('p95Ms'))} ms, "
+        f"scrub delta p95 {fmt(scrub_delta.get('p95Ms'))} s, "
+        f"scrub span {fmt(scenario.get('scrubTargetSpanSeconds'))} s, "
         f"seek completion p95 {fmt(seek_completion.get('p95Ms'))} ms, "
         f"visual interval p95 {fmt(visual.get('p95Ms'))} ms, "
         f"main-thread pulse p95 {fmt(pulse.get('p95Ms'))} ms, "

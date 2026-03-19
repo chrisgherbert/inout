@@ -929,7 +929,7 @@ struct ClipToolView: View {
                     setTimelineZoomIndex(index)
                 },
                 beginScrubAtRatio: { ratio in
-                    let width = max(1, runtime.timelineInteractiveWidth)
+                    let width = max(1, runtime.waveformHostView?.bounds.width ?? runtime.timelineInteractiveWidth)
                     let x = min(max(0, CGFloat(ratio) * width), width)
                     let target = timeForPlayheadDragLocation(x: x, width: width)
                     if let hostView = runtime.waveformHostView {
@@ -942,7 +942,7 @@ struct ClipToolView: View {
                     }
                 },
                 updateScrubToRatio: { ratio in
-                    let width = max(1, runtime.timelineInteractiveWidth)
+                    let width = max(1, runtime.waveformHostView?.bounds.width ?? runtime.timelineInteractiveWidth)
                     let x = min(max(0, CGFloat(ratio) * width), width)
                     let target = timeForPlayheadDragLocation(x: x, width: width)
                     if let hostView = runtime.waveformHostView {
@@ -954,7 +954,7 @@ struct ClipToolView: View {
                     }
                 },
                 endScrubAtRatio: { ratio in
-                    let width = max(1, runtime.timelineInteractiveWidth)
+                    let width = max(1, runtime.waveformHostView?.bounds.width ?? runtime.timelineInteractiveWidth)
                     let x = min(max(0, CGFloat(ratio) * width), width)
                     let target = timeForPlayheadDragLocation(x: x, width: width)
                     if let hostView = runtime.waveformHostView {
