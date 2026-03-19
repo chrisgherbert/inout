@@ -825,7 +825,7 @@ final class WaveformRasterHostView: NSView {
             super.mouseDragged(with: event)
             return
         }
-        onPlayheadDragEdgePan?(point.x, bounds.width)
+        updateInteractiveDrag(at: point, forceCommit: false)
     }
 
     override func mouseUp(with event: NSEvent) {
