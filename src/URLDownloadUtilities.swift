@@ -66,11 +66,9 @@ enum URLDownloadUtilities {
     }
 
     static func defaultDownloadFileNameTemplate(for preset: URLDownloadPreset, sourceURL: URL) -> String {
-        let host = (sourceURL.host ?? "download")
-            .replacingOccurrences(of: ".", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-        // yt-dlp will expand title/id placeholders. Prefixing with host keeps source context.
-        return "\(host) - %(title)s [%(id)s].\(preset.outputExtension)"
+        _ = preset
+        _ = sourceURL
+        return "%(title)s [%(id)s].%(ext)s"
     }
 
     static func promptURLDownloadDestination(
@@ -78,21 +76,18 @@ enum URLDownloadUtilities {
         sourceURL: URL,
         fileManager: FileManager = .default
     ) -> URL? {
-        let panel = NSSavePanel()
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
         panel.canCreateDirectories = true
-        panel.allowsOtherFileTypes = false
-        panel.allowedFileTypes = [preset.outputExtension]
-        panel.nameFieldStringValue = defaultDownloadFileNameTemplate(for: preset, sourceURL: sourceURL)
-        panel.title = "Save Downloaded Media"
-        panel.prompt = "Save"
+        panel.allowsMultipleSelection = false
+        panel.title = "Choose Download Folder"
+        panel.prompt = "Choose Folder"
         if let defaultDirectory = defaultDownloadDirectoryURL(fileManager: fileManager) {
             panel.directoryURL = defaultDirectory
         }
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        if url.pathExtension.isEmpty {
-            return url.appendingPathExtension(preset.outputExtension)
-        }
-        return url
+        return url.appendingPathComponent(defaultDownloadFileNameTemplate(for: preset, sourceURL: sourceURL))
     }
 
     static func resolveURLDownloadDestination(
