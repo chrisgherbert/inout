@@ -24,6 +24,7 @@ struct WaveformView: View {
     let onSeek: (Double, Bool) -> Void
     let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
+    let onClipBoundaryDragStateChanged: (Bool) -> Void
     let onSetStart: (Double) -> Void
     let onSetEnd: (Double) -> Void
     let onHoverChanged: (Bool) -> Void
@@ -57,6 +58,7 @@ struct WaveformView: View {
             },
             onInteractiveSeek: onSeek,
             onPlayheadDragStateChanged: onPlayheadDragStateChanged,
+            onClipBoundaryDragStateChanged: onClipBoundaryDragStateChanged,
             onPlayheadDragEdgePan: onPlayheadDragEdgePan,
             onSetStart: onSetStart,
             onSetEnd: onSetEnd,

@@ -49,6 +49,7 @@ final class WaveformRasterHostView: NSView {
     var onMarkerSeek: ((Double) -> Void)?
     var onInteractiveSeek: ((Double, Bool) -> Void)?
     var onPlayheadDragStateChanged: ((Bool) -> Void)?
+    var onClipBoundaryDragStateChanged: ((Bool) -> Void)?
     var onPlayheadDragEdgePan: ((CGFloat, CGFloat) -> Void)?
     var onSetStart: ((Double) -> Void)?
     var onSetEnd: ((Double) -> Void)?
@@ -776,6 +777,7 @@ final class WaveformRasterHostView: NSView {
         let endDistance = abs(point.x - xPosition(for: clipEndSeconds))
         if startDistance <= edgeHoverProximity && startDistance <= endDistance {
             isDraggingStartEdge = true
+            onClipBoundaryDragStateChanged?(true)
             isStartEdgeHovered = true
             isEndEdgeHovered = false
             updateTimelineDecorationLayers()
@@ -785,6 +787,7 @@ final class WaveformRasterHostView: NSView {
         }
         if endDistance <= edgeHoverProximity {
             isDraggingEndEdge = true
+            onClipBoundaryDragStateChanged?(true)
             isEndEdgeHovered = true
             isStartEdgeHovered = false
             updateTimelineDecorationLayers()
@@ -826,6 +829,7 @@ final class WaveformRasterHostView: NSView {
         if isDraggingStartEdge {
             onSetStart?(min(max(0, timeValue(forX: point.x)), clipEndSeconds))
             isDraggingStartEdge = false
+            onClipBoundaryDragStateChanged?(false)
             updateHoverState(at: point)
             updateTimelineDecorationLayers()
             return
@@ -833,6 +837,7 @@ final class WaveformRasterHostView: NSView {
         if isDraggingEndEdge {
             onSetEnd?(max(min(totalDurationSeconds, timeValue(forX: point.x)), clipStartSeconds))
             isDraggingEndEdge = false
+            onClipBoundaryDragStateChanged?(false)
             updateHoverState(at: point)
             updateTimelineDecorationLayers()
             return
@@ -954,6 +959,7 @@ final class WaveformRasterCoordinator {
     var lastHighlightedMarkerID: UUID?
     var lastMarkerLayoutSignature: Int?
     var lastQuickExportFlashToken: Int = 0
+    var lastStaticTimelineSignature: Int?
 
     func setZoomRenderBuckets(_ buckets: [Double]) {
         let normalized = Array(Set(buckets.map { max(1, $0) })).sorted()
@@ -983,6 +989,7 @@ final class WaveformRasterCoordinator {
         lastAppliedBounds = .zero
         lastAppliedZoomBucket = -1
         lastMarkerLayoutSignature = nil
+        lastStaticTimelineSignature = nil
         return true
     }
 
@@ -1018,12 +1025,32 @@ final class WaveformRasterCoordinator {
             startIndex = min(max(0, startIndex), n)
             endIndex = min(max(startIndex, endIndex), n)
             var peak = 0.0
+            var sumSquares = 0.0
+            var sampleCounter = 0
             var i = startIndex
             while i <= endIndex {
-                peak = max(peak, samples[i])
+                let sample = samples[i]
+                peak = max(peak, sample)
+                sumSquares += sample * sample
+                sampleCounter += 1
                 i += 1
             }
-            peaks[x] = peak
+
+            guard sampleCounter > 0 else {
+                peaks[x] = 0
+                continue
+            }
+
+            // When zoomed out, a pure max envelope overstates brief spikes and stops
+            // matching the perceived loudness of the audio. Blend toward RMS for
+            // downsampled buckets, but keep some transient energy so short events
+            // still show up.
+            if endIndex > startIndex {
+                let rms = sqrt(sumSquares / Double(sampleCounter))
+                peaks[x] = max(rms, peak * 0.4)
+            } else {
+                peaks[x] = peak
+            }
         }
         return peaks
     }
@@ -1126,6 +1153,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let onMarkerSeek: (Double) -> Void
     let onInteractiveSeek: (Double, Bool) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
+    let onClipBoundaryDragStateChanged: (Bool) -> Void
     let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
     let onSetStart: (Double) -> Void
     let onSetEnd: (Double) -> Void
@@ -1163,6 +1191,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         view.onMarkerSeek = onMarkerSeek
         view.onInteractiveSeek = onInteractiveSeek
         view.onPlayheadDragStateChanged = onPlayheadDragStateChanged
+        view.onClipBoundaryDragStateChanged = onClipBoundaryDragStateChanged
         view.onPlayheadDragEdgePan = onPlayheadDragEdgePan
         view.onSetStart = onSetStart
         view.onSetEnd = onSetEnd
@@ -1175,6 +1204,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.onMarkerSeek = onMarkerSeek
         nsView.onInteractiveSeek = onInteractiveSeek
         nsView.onPlayheadDragStateChanged = onPlayheadDragStateChanged
+        nsView.onClipBoundaryDragStateChanged = onClipBoundaryDragStateChanged
         nsView.onPlayheadDragEdgePan = onPlayheadDragEdgePan
         nsView.onSetStart = onSetStart
         nsView.onSetEnd = onSetEnd
@@ -1188,91 +1218,35 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.highlightedClipBoundary = highlightedClipBoundary
         context.coordinator.setZoomRenderBuckets(renderBuckets)
 
-        let didRebuildImage = context.coordinator.rebuildImageIfNeeded(
-            sessionID: sourceSessionID,
-            samples: samples,
-            isDarkAppearance: isDarkAppearance
-        )
-
-        nsView.updateTimelineDecorationLayers()
-
-        guard !context.coordinator.cachedSamples.isEmpty else {
-            nsView.waveformLayer.contents = nil
-            return
-        }
-
         let duration = max(0.0001, totalDurationSeconds)
         let rawStartNorm = min(max(0, visibleStartSeconds / duration), 1.0)
         let rawEndNorm = min(max(rawStartNorm + 0.000001, visibleEndSeconds / duration), 1.0)
         let zoomBucket = context.coordinator.bestZoomRenderBucket(for: zoomLevel)
-        let image = context.coordinator.image(for: zoomBucket)
+        var staticTimelineHasher = Hasher()
+        staticTimelineHasher.combine(sourceSessionID)
+        staticTimelineHasher.combine(samples.count)
+        staticTimelineHasher.combine(isDarkAppearance)
+        staticTimelineHasher.combine(Int((totalDurationSeconds * 1000).rounded()))
+        staticTimelineHasher.combine(Int((visibleStartSeconds * 1000).rounded()))
+        staticTimelineHasher.combine(Int((visibleEndSeconds * 1000).rounded()))
+        staticTimelineHasher.combine(Int((clipStartSeconds * 1000).rounded()))
+        staticTimelineHasher.combine(Int((clipEndSeconds * 1000).rounded()))
+        staticTimelineHasher.combine(Int((zoomBucket * 1000).rounded()))
+        staticTimelineHasher.combine(highlightedMarkerID)
+        staticTimelineHasher.combine(highlightedClipBoundary)
+        staticTimelineHasher.combine(Int((nsView.bounds.width * 10).rounded()))
+        staticTimelineHasher.combine(Int((nsView.bounds.height * 10).rounded()))
+        staticTimelineHasher.combine(captureMarkers.count)
+        for marker in captureMarkers {
+            staticTimelineHasher.combine(marker.id)
+            staticTimelineHasher.combine(Int((marker.seconds * 1000).rounded()))
+        }
+        let staticTimelineSignature = staticTimelineHasher.finalize()
+        let needsFullTimelineUpdate = context.coordinator.lastStaticTimelineSignature != staticTimelineSignature
+        var image: CGImage?
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-
-        if let image,
-           (didRebuildImage || context.coordinator.lastAppliedZoomBucket != zoomBucket || nsView.waveformLayer.contents == nil) {
-            nsView.waveformLayer.contents = image
-            context.coordinator.lastAppliedZoomBucket = zoomBucket
-            nsView.waveformLayer.magnificationFilter = zoomBucket >= 32 ? .nearest : .linear
-            nsView.waveformLayer.minificationFilter = .linear
-        }
-
-        guard let activeImage = image else {
-            nsView.waveformLayer.contents = nil
-            CATransaction.commit()
-            return
-        }
-        _ = activeImage
-        let newContentsRect = CGRect(
-            x: rawStartNorm,
-            y: 0,
-            width: max(0.000001, rawEndNorm - rawStartNorm),
-            height: 1
-        )
-
-        if !newContentsRect.equalTo(context.coordinator.lastAppliedContentsRect) {
-            let oldRect = context.coordinator.lastAppliedContentsRect
-            let now = CACurrentMediaTime()
-            let lastUpdate = context.coordinator.lastContentsRectUpdateTime
-            // If updates are arriving rapidly, treat as continuous interaction
-            // (drag/scroll) and avoid heavy catch-up animations.
-            let isContinuousViewportInteraction = lastUpdate > 0 && (now - lastUpdate) < 0.08
-            if oldRect != .null {
-                let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
-                let deltaWidth = abs(newContentsRect.width - oldRect.width)
-                // Smooth both viewport pans and zoom resizes for discrete jumps.
-                if (deltaX > 0.01 || deltaWidth > 0.01) && !isContinuousViewportInteraction {
-                    let anim = CABasicAnimation(keyPath: "contentsRect")
-                    anim.fromValue = oldRect
-                    anim.toValue = newContentsRect
-                    anim.duration = 0.20
-                    anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    anim.isRemovedOnCompletion = true
-                    nsView.waveformLayer.add(anim, forKey: "viewportRecenter")
-                }
-            }
-            nsView.waveformLayer.contentsRect = newContentsRect
-            context.coordinator.lastAppliedContentsRect = newContentsRect
-
-            if oldRect != .null {
-                let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
-                if deltaX > 0.01 && !isContinuousViewportInteraction {
-                    let normWidth = max(0.000001, newContentsRect.width)
-                    let markerScrollShiftX = CGFloat((newContentsRect.origin.x - oldRect.origin.x) / normWidth) * nsView.bounds.width
-                    if markerScrollShiftX != 0 {
-                        let markerPan = CABasicAnimation(keyPath: "sublayerTransform.translation.x")
-                        markerPan.fromValue = markerScrollShiftX
-                        markerPan.toValue = 0
-                        markerPan.duration = 0.22
-                        markerPan.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                        markerPan.isRemovedOnCompletion = true
-                        nsView.markerContainerLayer.add(markerPan, forKey: "viewportRecenterMarkers")
-                    }
-                }
-            }
-            context.coordinator.lastContentsRectUpdateTime = now
-        }
 
         let timelineRect = nsView.timelineRect()
 
@@ -1283,6 +1257,80 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             nsView.waveformLayer.frame = nsView.waveformClipLayer.bounds
             nsView.markerContainerLayer.frame = timelineRect
             context.coordinator.lastAppliedBounds = nsView.bounds
+        }
+
+        if needsFullTimelineUpdate {
+            let didRebuildImage = context.coordinator.rebuildImageIfNeeded(
+                sessionID: sourceSessionID,
+                samples: samples,
+                isDarkAppearance: isDarkAppearance
+            )
+
+            nsView.updateTimelineDecorationLayers()
+
+            if !context.coordinator.cachedSamples.isEmpty {
+                image = context.coordinator.image(for: zoomBucket)
+            }
+
+            if let image,
+               (didRebuildImage || context.coordinator.lastAppliedZoomBucket != zoomBucket || nsView.waveformLayer.contents == nil) {
+                nsView.waveformLayer.contents = image
+                context.coordinator.lastAppliedZoomBucket = zoomBucket
+                nsView.waveformLayer.magnificationFilter = zoomBucket >= 32 ? .nearest : .linear
+                nsView.waveformLayer.minificationFilter = .linear
+            }
+
+            if image == nil {
+                nsView.waveformLayer.contents = nil
+            } else {
+                let newContentsRect = CGRect(
+                    x: rawStartNorm,
+                    y: 0,
+                    width: max(0.000001, rawEndNorm - rawStartNorm),
+                    height: 1
+                )
+
+                if !newContentsRect.equalTo(context.coordinator.lastAppliedContentsRect) {
+                    let oldRect = context.coordinator.lastAppliedContentsRect
+                    let now = CACurrentMediaTime()
+                    let lastUpdate = context.coordinator.lastContentsRectUpdateTime
+                    let isContinuousViewportInteraction = lastUpdate > 0 && (now - lastUpdate) < 0.08
+                    if oldRect != .null {
+                        let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
+                        let deltaWidth = abs(newContentsRect.width - oldRect.width)
+                        if (deltaX > 0.01 || deltaWidth > 0.01) && !isContinuousViewportInteraction {
+                            let anim = CABasicAnimation(keyPath: "contentsRect")
+                            anim.fromValue = oldRect
+                            anim.toValue = newContentsRect
+                            anim.duration = 0.20
+                            anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                            anim.isRemovedOnCompletion = true
+                            nsView.waveformLayer.add(anim, forKey: "viewportRecenter")
+                        }
+                    }
+                    nsView.waveformLayer.contentsRect = newContentsRect
+                    context.coordinator.lastAppliedContentsRect = newContentsRect
+
+                    if oldRect != .null {
+                        let deltaX = abs(newContentsRect.origin.x - oldRect.origin.x)
+                        if deltaX > 0.01 && !isContinuousViewportInteraction {
+                            let normWidth = max(0.000001, newContentsRect.width)
+                            let markerScrollShiftX = CGFloat((newContentsRect.origin.x - oldRect.origin.x) / normWidth) * nsView.bounds.width
+                            if markerScrollShiftX != 0 {
+                                let markerPan = CABasicAnimation(keyPath: "sublayerTransform.translation.x")
+                                markerPan.fromValue = markerScrollShiftX
+                                markerPan.toValue = 0
+                                markerPan.duration = 0.22
+                                markerPan.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                                markerPan.isRemovedOnCompletion = true
+                                nsView.markerContainerLayer.add(markerPan, forKey: "viewportRecenterMarkers")
+                            }
+                        }
+                    }
+                    context.coordinator.lastContentsRectUpdateTime = now
+                }
+            }
+            context.coordinator.lastStaticTimelineSignature = staticTimelineSignature
         }
 
         let visibleDuration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
@@ -1370,88 +1418,90 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             context.coordinator.lastQuickExportFlashToken = quickExportFlashToken
         }
 
-        let markerContainer = nsView.markerContainerLayer
-        let visibleMarkers = captureMarkers.enumerated().filter { _, marker in
-            marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
-        }
-        var markerLayoutHasher = Hasher()
-        markerLayoutHasher.combine(visibleMarkers.count)
-        markerLayoutHasher.combine(highlightedMarkerID)
-        markerLayoutHasher.combine(Int((nsView.bounds.width * backingScale).rounded()))
-        markerLayoutHasher.combine(Int((nsView.bounds.height * backingScale).rounded()))
-        for (_, marker) in visibleMarkers {
-            markerLayoutHasher.combine(marker.id)
-            markerLayoutHasher.combine(Int((snapToPixel(xPosition(for: marker.seconds)) * backingScale).rounded()))
-        }
-        let markerLayoutSignature = markerLayoutHasher.finalize()
-
-        if context.coordinator.lastMarkerLayoutSignature != markerLayoutSignature {
-            var markerHotspots: [WaveformRasterHostView.MarkerHotspot] = []
-            var markerLayersByID: [UUID: CALayer] = [:]
-            markerContainer.sublayers = visibleMarkers.map { _, marker in
-                let markerX = snapToPixel(xPosition(for: marker.seconds))
-                markerHotspots.append(.init(id: marker.id, seconds: marker.seconds, x: markerX))
-                let isHighlighted = marker.id == highlightedMarkerID
-                let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
-
-                let pin = CALayer()
-                pin.frame = CGRect(
-                    x: markerX - (isHighlighted ? 4.5 : 4.0),
-                    y: -2,
-                    width: isHighlighted ? 9 : 8,
-                    height: timelineRect.height + 6
-                )
-                pin.setValue(isHighlighted, forKey: "isHighlighted")
-                pin.isGeometryFlipped = true
-
-                let head = CALayer()
-                head.backgroundColor = pinColor.cgColor
-                head.frame = CGRect(x: 0, y: 0, width: isHighlighted ? 9 : 8, height: isHighlighted ? 9 : 8)
-                head.cornerRadius = head.bounds.width / 2
-                pin.addSublayer(head)
-
-                let stem = CALayer()
-                stem.backgroundColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 0.96 : 0.8).cgColor
-                let stemWidth: CGFloat = isHighlighted ? 2.6 : 2.0
-                stem.frame = CGRect(x: (head.bounds.width - stemWidth) / 2.0, y: head.frame.maxY, width: stemWidth, height: timelineRect.height + 4)
-                pin.addSublayer(stem)
-
-                pin.shadowColor = NSColor.systemOrange.cgColor
-                pin.shadowOpacity = isHighlighted ? 0.6 : 0
-                pin.shadowRadius = isHighlighted ? 4 : 0
-                markerLayersByID[marker.id] = pin
-                return pin
+        if needsFullTimelineUpdate {
+            let markerContainer = nsView.markerContainerLayer
+            let visibleMarkers = captureMarkers.enumerated().filter { _, marker in
+                marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
             }
-            nsView.markerHotspots = markerHotspots
-            nsView.markerLayersByID = markerLayersByID
-            context.coordinator.lastMarkerLayoutSignature = markerLayoutSignature
-        }
-        nsView.applyMarkerHoverState(animated: false)
+            var markerLayoutHasher = Hasher()
+            markerLayoutHasher.combine(visibleMarkers.count)
+            markerLayoutHasher.combine(highlightedMarkerID)
+            markerLayoutHasher.combine(Int((nsView.bounds.width * backingScale).rounded()))
+            markerLayoutHasher.combine(Int((nsView.bounds.height * backingScale).rounded()))
+            for (_, marker) in visibleMarkers {
+                markerLayoutHasher.combine(marker.id)
+                markerLayoutHasher.combine(Int((snapToPixel(xPosition(for: marker.seconds)) * backingScale).rounded()))
+            }
+            let markerLayoutSignature = markerLayoutHasher.finalize()
 
-        if highlightedMarkerID != context.coordinator.lastHighlightedMarkerID,
-           let highlightedMarkerID,
-           let visibleIndex = visibleMarkers.firstIndex(where: { $0.element.id == highlightedMarkerID }),
-           let markerLayers = markerContainer.sublayers,
-           visibleIndex >= 0, visibleIndex < markerLayers.count {
-            let pinLayer = markerLayers[visibleIndex]
-            let glow = CABasicAnimation(keyPath: "shadowOpacity")
-            glow.fromValue = 0.0
-            glow.toValue = 0.6
-            glow.duration = 0.16
-            glow.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            glow.isRemovedOnCompletion = true
-            pinLayer.add(glow, forKey: "markerGlow")
+            if context.coordinator.lastMarkerLayoutSignature != markerLayoutSignature {
+                var markerHotspots: [WaveformRasterHostView.MarkerHotspot] = []
+                var markerLayersByID: [UUID: CALayer] = [:]
+                markerContainer.sublayers = visibleMarkers.map { _, marker in
+                    let markerX = snapToPixel(xPosition(for: marker.seconds))
+                    markerHotspots.append(.init(id: marker.id, seconds: marker.seconds, x: markerX))
+                    let isHighlighted = marker.id == highlightedMarkerID
+                    let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
 
-            let pulse = CABasicAnimation(keyPath: "transform.scale")
-            pulse.fromValue = 1.0
-            pulse.toValue = 1.09
-            pulse.duration = 0.10
-            pulse.autoreverses = true
-            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            pulse.isRemovedOnCompletion = true
-            pinLayer.add(pulse, forKey: "markerPulse")
+                    let pin = CALayer()
+                    pin.frame = CGRect(
+                        x: markerX - (isHighlighted ? 4.5 : 4.0),
+                        y: -2,
+                        width: isHighlighted ? 9 : 8,
+                        height: timelineRect.height + 6
+                    )
+                    pin.setValue(isHighlighted, forKey: "isHighlighted")
+                    pin.isGeometryFlipped = true
+
+                    let head = CALayer()
+                    head.backgroundColor = pinColor.cgColor
+                    head.frame = CGRect(x: 0, y: 0, width: isHighlighted ? 9 : 8, height: isHighlighted ? 9 : 8)
+                    head.cornerRadius = head.bounds.width / 2
+                    pin.addSublayer(head)
+
+                    let stem = CALayer()
+                    stem.backgroundColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 0.96 : 0.8).cgColor
+                    let stemWidth: CGFloat = isHighlighted ? 2.6 : 2.0
+                    stem.frame = CGRect(x: (head.bounds.width - stemWidth) / 2.0, y: head.frame.maxY, width: stemWidth, height: timelineRect.height + 4)
+                    pin.addSublayer(stem)
+
+                    pin.shadowColor = NSColor.systemOrange.cgColor
+                    pin.shadowOpacity = isHighlighted ? 0.6 : 0
+                    pin.shadowRadius = isHighlighted ? 4 : 0
+                    markerLayersByID[marker.id] = pin
+                    return pin
+                }
+                nsView.markerHotspots = markerHotspots
+                nsView.markerLayersByID = markerLayersByID
+                context.coordinator.lastMarkerLayoutSignature = markerLayoutSignature
+            }
+            nsView.applyMarkerHoverState(animated: false)
+
+            if highlightedMarkerID != context.coordinator.lastHighlightedMarkerID,
+               let highlightedMarkerID,
+               let visibleIndex = visibleMarkers.firstIndex(where: { $0.element.id == highlightedMarkerID }),
+               let markerLayers = markerContainer.sublayers,
+               visibleIndex >= 0, visibleIndex < markerLayers.count {
+                let pinLayer = markerLayers[visibleIndex]
+                let glow = CABasicAnimation(keyPath: "shadowOpacity")
+                glow.fromValue = 0.0
+                glow.toValue = 0.6
+                glow.duration = 0.16
+                glow.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                glow.isRemovedOnCompletion = true
+                pinLayer.add(glow, forKey: "markerGlow")
+
+                let pulse = CABasicAnimation(keyPath: "transform.scale")
+                pulse.fromValue = 1.0
+                pulse.toValue = 1.09
+                pulse.duration = 0.10
+                pulse.autoreverses = true
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                pulse.isRemovedOnCompletion = true
+                pinLayer.add(pulse, forKey: "markerPulse")
+            }
+            context.coordinator.lastHighlightedMarkerID = highlightedMarkerID
         }
-        context.coordinator.lastHighlightedMarkerID = highlightedMarkerID
 
         CATransaction.commit()
     }

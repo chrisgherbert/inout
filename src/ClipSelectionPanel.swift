@@ -37,6 +37,7 @@ struct ClipSelectionPanel: View, Equatable {
     let onSeek: (Double, Bool) -> Void
     let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
+    let onClipBoundaryDragStateChanged: (Bool) -> Void
     let onSetStart: (Double) -> Void
     let onSetEnd: (Double) -> Void
     let onWaveformHoverChanged: (Bool) -> Void
@@ -118,6 +119,7 @@ struct ClipSelectionPanel: View, Equatable {
                     onSeek: onSeek,
                     onPlayheadDragEdgePan: onPlayheadDragEdgePan,
                     onPlayheadDragStateChanged: onPlayheadDragStateChanged,
+                    onClipBoundaryDragStateChanged: onClipBoundaryDragStateChanged,
                     onSetStart: onSetStart,
                     onSetEnd: onSetEnd,
                     onHoverChanged: onWaveformHoverChanged,

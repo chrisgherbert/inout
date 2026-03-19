@@ -16,6 +16,10 @@ private final class ClipToolRuntimeState: ObservableObject {
     var scrollMonitor: Any?
     var mouseDownMonitor: Any?
     var middleMousePanMonitor: Any?
+    var manualViewportPanTask: Task<Void, Never>?
+    var manualViewportPanTargetStartSeconds: Double?
+    var manualViewportPanResponseFactor: Double = 0.38
+    var clipBoundaryVisualSmoothingTask: Task<Void, Never>?
     var isViewportManuallyControlled = false
     var isTimelineHovered = false
     var isWaveformHovered = false
@@ -27,7 +31,6 @@ private final class ClipToolRuntimeState: ObservableObject {
     var playheadDragLocationX: CGFloat?
     var playheadDragWidth: CGFloat = 0
     var playheadDragAutoPanTask: Task<Void, Never>?
-    var keyboardPanTask: Task<Void, Never>?
     var lastInteractiveSeekCommitTimestamp: CFTimeInterval = 0
     var lastInteractiveReadoutSyncTimestamp: CFTimeInterval = 0
     var lastSharedPlayheadSyncTimestamp: CFTimeInterval = 0
@@ -44,6 +47,11 @@ private final class ClipToolRuntimeState: ObservableObject {
 }
 
 struct ClipToolView: View {
+    private enum ClipBoundaryDragKind {
+        case start
+        case end
+    }
+
     @ObservedObject var model: WorkspaceViewModel
     @ObservedObject var clipTimelinePresentation: ClipTimelinePresentationModel
     let isCompactLayout: Bool
@@ -65,6 +73,12 @@ struct ClipToolView: View {
     @State private var isPlayheadDragActive = false
     @State private var playheadCopyFlash = false
     @State private var dragVisualPlayheadSeconds: Double?
+    @State private var isClipBoundaryDragActive = false
+    @State private var activeClipBoundaryDragKind: ClipBoundaryDragKind?
+    @State private var pendingClipStartSeconds: Double = 0
+    @State private var pendingClipEndSeconds: Double = 0
+    @State private var visualClipStartSeconds: Double = 0
+    @State private var visualClipEndSeconds: Double = 0
     @State private var clipContentHeight: CGFloat = 0
     @SceneStorage("clip.playerHeight") private var storedPlayerHeight: Double = 0
     @SceneStorage("clip.transcriptSidebarWidth") private var storedTranscriptSidebarWidth: Double = 440
@@ -85,6 +99,14 @@ struct ClipToolView: View {
     @FocusState private var isImportURLFieldFocused: Bool
 
     private var clip: ClipTimelinePresentationModel { clipTimelinePresentation }
+
+    private var displayedClipStartSeconds: Double {
+        isClipBoundaryDragActive ? visualClipStartSeconds : clip.clipStartSeconds
+    }
+
+    private var displayedClipEndSeconds: Double {
+        isClipBoundaryDragActive ? visualClipEndSeconds : clip.clipEndSeconds
+    }
 
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
@@ -127,6 +149,7 @@ struct ClipToolView: View {
     }
 
     private func setTimelineZoomIndex(_ index: Int) {
+        stopManualViewportPan()
         let clamped = min(max(0, index), allowedTimelineZoomLevels.count - 1)
         let next = allowedTimelineZoomLevels[clamped]
         guard abs(timelineZoom - next) > 0.0001 else { return }
@@ -230,11 +253,12 @@ struct ClipToolView: View {
                     }
 
                     if player.rate != 0 {
-                        // While playing, do not forcibly override manual viewport panning.
-                        // Follow only when viewport is not currently under manual control,
-                        // and throttle follow updates to avoid layout churn.
+                        // While playing, keep manual viewport control until the playhead actually
+                        // leaves the visible window. At that point, reveal it with a larger step
+                        // instead of continuous auto-scrolling.
+                        let playheadOffscreen = newPlayhead < visibleStartSeconds || newPlayhead > visibleEndSeconds
                         let shouldFollow = !runtime.isViewportManuallyControlled
-                        if shouldFollow {
+                        if shouldFollow || playheadOffscreen {
                             let now = CACurrentMediaTime()
                             if (now - runtime.lastPlaybackFollowUpdateTimestamp) >= (1.0 / 20.0) {
                                 updateViewportForPlayhead(shouldFollow: true)
@@ -297,6 +321,7 @@ struct ClipToolView: View {
         let restored = max(0, min(clip.clipPlayheadSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
         playheadSeconds = restored
         syncVisualPlayheadImmediately(restored)
+        stopManualViewportPan()
         viewportStartSeconds = 0
         clampTimelineZoomToAllowedLevels()
         player.seek(to: CMTime(seconds: restored, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
@@ -328,8 +353,94 @@ struct ClipToolView: View {
         }
     }
 
+    private func syncDisplayedClipRangeImmediately() {
+        pendingClipStartSeconds = clip.clipStartSeconds
+        pendingClipEndSeconds = clip.clipEndSeconds
+        visualClipStartSeconds = pendingClipStartSeconds
+        visualClipEndSeconds = pendingClipEndSeconds
+    }
+
+    private func stopClipBoundaryVisualSmoothing() {
+        runtime.clipBoundaryVisualSmoothingTask?.cancel()
+        runtime.clipBoundaryVisualSmoothingTask = nil
+    }
+
+    private func startClipBoundaryVisualSmoothingIfNeeded() {
+        guard runtime.clipBoundaryVisualSmoothingTask == nil else { return }
+        runtime.clipBoundaryVisualSmoothingTask = Task { @MainActor in
+            while !Task.isCancelled && isClipBoundaryDragActive {
+                let targetStart = pendingClipStartSeconds
+                let targetEnd = pendingClipEndSeconds
+                let secondsPerPixel = zoomedWindowDuration / Double(max(1, runtime.timelineInteractiveWidth))
+                let settleThreshold = max(secondsPerPixel * 0.25, 1.0 / 480.0)
+
+                let startDelta = targetStart - visualClipStartSeconds
+                let endDelta = targetEnd - visualClipEndSeconds
+
+                if abs(startDelta) <= settleThreshold {
+                    visualClipStartSeconds = targetStart
+                } else {
+                    visualClipStartSeconds += startDelta * 0.58
+                }
+
+                if abs(endDelta) <= settleThreshold {
+                    visualClipEndSeconds = targetEnd
+                } else {
+                    visualClipEndSeconds += endDelta * 0.58
+                }
+
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+
+            runtime.clipBoundaryVisualSmoothingTask = nil
+        }
+    }
+
+    private func setClipBoundaryDragActive(_ active: Bool) {
+        guard isClipBoundaryDragActive != active else { return }
+        isClipBoundaryDragActive = active
+        if active {
+            activeClipBoundaryDragKind = nil
+            syncDisplayedClipRangeImmediately()
+            startClipBoundaryVisualSmoothingIfNeeded()
+        } else {
+            stopClipBoundaryVisualSmoothing()
+            if let dragKind = activeClipBoundaryDragKind {
+                switch dragKind {
+                case .start:
+                    model.setClipStart(pendingClipStartSeconds, undoManager: undoManager)
+                case .end:
+                    model.setClipEnd(pendingClipEndSeconds, undoManager: undoManager)
+                }
+            }
+            activeClipBoundaryDragKind = nil
+            syncDisplayedClipRangeImmediately()
+        }
+    }
+
+    private func previewClipStartDuringDrag(_ time: Double) {
+        let clamped = min(max(0, time), pendingClipEndSeconds)
+        activeClipBoundaryDragKind = .start
+        pendingClipStartSeconds = clamped
+        if !isClipBoundaryDragActive {
+            model.setClipStart(clamped, undoManager: undoManager)
+            syncDisplayedClipRangeImmediately()
+        }
+    }
+
+    private func previewClipEndDuringDrag(_ time: Double) {
+        let clamped = max(min(totalDurationSeconds, time), pendingClipStartSeconds)
+        activeClipBoundaryDragKind = .end
+        pendingClipEndSeconds = clamped
+        if !isClipBoundaryDragActive {
+            model.setClipEnd(clamped, undoManager: undoManager)
+            syncDisplayedClipRangeImmediately()
+        }
+    }
+
     private func seekPlayer(to time: Double) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        stopManualViewportPan()
         runtime.lastInteractiveSeekSeconds = -1
         dragVisualPlayheadSeconds = nil
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
@@ -390,6 +501,7 @@ struct ClipToolView: View {
 
     private func seekPlayerAndFocusViewport(to time: Double, focusViewport: Bool = true) {
         let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        stopManualViewportPan()
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
         syncSharedPlayheadStateIfNeeded(clamped, force: true)
@@ -539,14 +651,57 @@ struct ClipToolView: View {
     private func animateViewportRecenter(to start: Double) {
         let clamped = clampedViewportStart(start)
         guard abs(clamped - viewportStartSeconds) > 0.0001 else { return }
+        stopManualViewportPan()
         withAnimation(.easeOut(duration: 0.22)) {
             viewportStartSeconds = clamped
         }
     }
 
+    private func stopManualViewportPan() {
+        runtime.manualViewportPanTask?.cancel()
+        runtime.manualViewportPanTask = nil
+        runtime.manualViewportPanTargetStartSeconds = nil
+    }
+
+    private func startManualViewportPanLoopIfNeeded() {
+        guard runtime.manualViewportPanTask == nil else { return }
+        runtime.manualViewportPanTask = Task { @MainActor in
+            while !Task.isCancelled {
+                guard let target = runtime.manualViewportPanTargetStartSeconds else { break }
+                let current = viewportStartSeconds
+                let delta = target - current
+                let secondsPerPixel = zoomedWindowDuration / Double(max(1, runtime.timelineInteractiveWidth))
+                let settleThreshold = max(secondsPerPixel * 0.35, 0.0001)
+                let responseFactor = min(max(runtime.manualViewportPanResponseFactor, 0.05), 0.95)
+
+                if abs(delta) <= settleThreshold {
+                    viewportStartSeconds = target
+                    runtime.manualViewportPanTargetStartSeconds = nil
+                    break
+                }
+
+                viewportStartSeconds = clampedViewportStart(current + (delta * responseFactor))
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+
+            runtime.manualViewportPanTask = nil
+        }
+    }
+
+    private func smoothlyPanViewport(toStart targetStart: Double, responseFactor: Double) {
+        let target = clampedViewportStart(targetStart)
+        let baseStart = runtime.manualViewportPanTargetStartSeconds ?? viewportStartSeconds
+        guard abs(target - baseStart) > (zoomedWindowDuration / 2500.0) else { return }
+        runtime.isViewportManuallyControlled = true
+        runtime.manualViewportPanResponseFactor = responseFactor
+        runtime.manualViewportPanTargetStartSeconds = target
+        startManualViewportPanLoopIfNeeded()
+    }
+
     private func updateViewportForPlayhead(shouldFollow: Bool) {
         if timelineZoom <= 1 {
             if abs(viewportStartSeconds) > 0.000_001 {
+                stopManualViewportPan()
                 viewportStartSeconds = 0
             }
             if runtime.isViewportManuallyControlled {
@@ -559,6 +714,7 @@ struct ClipToolView: View {
         var start = clampedViewportStart(viewportStartSeconds)
         guard shouldFollow else {
             if abs(viewportStartSeconds - start) > 0.000_001 {
+                stopManualViewportPan()
                 viewportStartSeconds = start
             }
             return
@@ -567,7 +723,12 @@ struct ClipToolView: View {
         let end = start + window
         // Follow mode: keep playhead visible and recenter if it leaves the viewport.
         if playheadSeconds < start || playheadSeconds > end {
-            animateViewportRecenter(to: playheadSeconds - (window / 2))
+            if player.rate != 0 {
+                let pageRevealFraction = playheadSeconds > end ? 0.25 : 0.75
+                animateViewportRecenter(to: playheadSeconds - (window * pageRevealFraction))
+            } else {
+                animateViewportRecenter(to: playheadSeconds - (window / 2))
+            }
             return
         }
 
@@ -580,21 +741,28 @@ struct ClipToolView: View {
         }
         let clamped = clampedViewportStart(start)
         if abs(viewportStartSeconds - clamped) > 0.000_001 {
+            stopManualViewportPan()
             viewportStartSeconds = clamped
         }
     }
 
-    private func panViewport(byPoints points: CGFloat) {
+    private func panViewport(byPoints points: CGFloat, smoothly: Bool, responseFactor: Double = 0.38) {
         guard timelineZoom > 1 else { return }
         let width = max(1, runtime.timelineInteractiveWidth)
         let secondsPerPoint = zoomedWindowDuration / Double(width)
+        let baseStart = smoothly ? (runtime.manualViewportPanTargetStartSeconds ?? viewportStartSeconds) : viewportStartSeconds
         // Natural-feeling pan: swipe left reveals later timeline content.
-        let nextStart = clampedViewportStart(viewportStartSeconds - (Double(points) * secondsPerPoint))
-        if abs(nextStart - viewportStartSeconds) < (zoomedWindowDuration / 2500.0) {
+        let nextStart = clampedViewportStart(baseStart - (Double(points) * secondsPerPoint))
+        if abs(nextStart - baseStart) < (zoomedWindowDuration / 2500.0) {
             return
         }
-        viewportStartSeconds = nextStart
         runtime.isViewportManuallyControlled = true
+        if smoothly {
+            smoothlyPanViewport(toStart: nextStart, responseFactor: responseFactor)
+        } else {
+            stopManualViewportPan()
+            viewportStartSeconds = nextStart
+        }
     }
 
     private func autoPanViewportIfNeededForPlayheadDrag(x: CGFloat, width: CGFloat) -> Bool {
@@ -611,10 +779,11 @@ struct ClipToolView: View {
         }
 
         if abs(panPoints) >= 0.5 {
-            let previous = viewportStartSeconds
-            panViewport(byPoints: panPoints)
-            return abs(viewportStartSeconds - previous) > 0.00001
+            // Edge auto-pan should feel continuous, but still track the drag closely.
+            panViewport(byPoints: panPoints, smoothly: true, responseFactor: 0.72)
+            return true
         }
+        stopManualViewportPan()
         return false
     }
 
@@ -654,11 +823,13 @@ struct ClipToolView: View {
     private func setPlayheadDragActive(_ active: Bool) {
         isPlayheadDragActive = active
         if active {
+            stopManualViewportPan()
             runtime.lastInteractiveSeekCommitTimestamp = 0
             runtime.lastInteractiveReadoutSyncTimestamp = 0
             startPlayheadDragAutoPanLoopIfNeeded()
         } else {
             stopPlayheadDragAutoPanLoop()
+            stopManualViewportPan()
             if let x = runtime.playheadDragLocationX, runtime.playheadDragWidth > 0 {
                 seekPlayerInteractive(to: timeForPlayheadDragLocation(x: x, width: runtime.playheadDragWidth), forceCommit: true)
             }
@@ -689,27 +860,9 @@ struct ClipToolView: View {
         guard timelineZoom > 1 else { return }
         let step = max(0.05, zoomedWindowDuration * 0.10)
         let delta = towardLaterTime ? step : -step
-        let nextStart = clampedViewportStart(viewportStartSeconds + delta)
-        guard abs(nextStart - viewportStartSeconds) > 0.000001 else { return }
-
-        runtime.keyboardPanTask?.cancel()
-        let fromStart = viewportStartSeconds
-        let toStart = nextStart
-        runtime.keyboardPanTask = Task { @MainActor in
-            let animationDuration = 0.16
-            let startTime = CACurrentMediaTime()
-            while !Task.isCancelled {
-                let elapsed = CACurrentMediaTime() - startTime
-                let t = min(1.0, max(0.0, elapsed / animationDuration))
-                let eased = 1.0 - pow(1.0 - t, 3.0) // cubic ease-out
-                viewportStartSeconds = fromStart + ((toStart - fromStart) * eased)
-                if t >= 1.0 { break }
-                try? await Task.sleep(nanoseconds: 16_000_000)
-            }
-            viewportStartSeconds = toStart
-            runtime.keyboardPanTask = nil
-        }
-        runtime.isViewportManuallyControlled = true
+        let baseStart = runtime.manualViewportPanTargetStartSeconds ?? viewportStartSeconds
+        let nextStart = clampedViewportStart(baseStart + delta)
+        smoothlyPanViewport(toStart: nextStart, responseFactor: 0.55)
     }
 
     private func copyPlayheadTimecode() {
@@ -939,7 +1092,7 @@ struct ClipToolView: View {
                 return nil
             }
 
-            panViewport(byPoints: panPoints)
+            panViewport(byPoints: panPoints, smoothly: true)
             return nil
         }
     }
@@ -998,7 +1151,7 @@ struct ClipToolView: View {
                 let lastX = runtime.middleMousePanLastWindowX ?? currentX
                 let deltaX = currentX - lastX
                 runtime.middleMousePanLastWindowX = currentX
-                panViewport(byPoints: deltaX)
+                panViewport(byPoints: deltaX, smoothly: true)
                 return nil
             case .otherMouseUp:
                 guard runtime.isMiddleMousePanning else { return event }
@@ -1464,6 +1617,7 @@ struct ClipToolView: View {
             clipEndSeconds: clip.clipEndSeconds,
             captureMarkers: clip.captureTimelineMarkers
         ) { newStart in
+            stopManualViewportPan()
             viewportStartSeconds = clampedViewportStart(newStart)
             runtime.isViewportManuallyControlled = true
         } content: {
@@ -1475,8 +1629,8 @@ struct ClipToolView: View {
         ClipSelectionPanel(
             player: player,
             sourceSessionID: model.sourceSessionID,
-            clipStartSeconds: clip.clipStartSeconds,
-            clipEndSeconds: clip.clipEndSeconds,
+            clipStartSeconds: displayedClipStartSeconds,
+            clipEndSeconds: displayedClipEndSeconds,
             clipDurationSeconds: model.clipDurationSeconds,
             hasVideoTrack: model.hasVideoTrack,
             clipStartText: $clipTimelinePresentation.clipStartText,
@@ -1517,8 +1671,11 @@ struct ClipToolView: View {
             onPlayheadDragStateChanged: { isActive in
                 setPlayheadDragActive(isActive)
             },
-            onSetStart: { model.setClipStart($0, undoManager: undoManager) },
-            onSetEnd: { model.setClipEnd($0, undoManager: undoManager) },
+            onClipBoundaryDragStateChanged: { isActive in
+                setClipBoundaryDragActive(isActive)
+            },
+            onSetStart: { previewClipStartDuringDrag($0) },
+            onSetEnd: { previewClipEndDuringDrag($0) },
             onWaveformHoverChanged: { hovering in
                 runtime.isWaveformHovered = hovering
                 if !hovering {
@@ -1722,6 +1879,7 @@ struct ClipToolView: View {
     private func withLifecycleHandlers<V: View>(_ view: V) -> some View {
         let step1 = view.onAppear {
             resetPlayerHeightToDefaultIfNeeded()
+            syncDisplayedClipRangeImmediately()
             loadPlayerItem()
             installPlayerTimeObserverIfNeeded()
             installKeyMonitor()
@@ -1749,6 +1907,14 @@ struct ClipToolView: View {
         }
 
         let step4 = step3
+            .onChange(of: clip.clipStartSeconds) { _ in
+                guard !isClipBoundaryDragActive else { return }
+                syncDisplayedClipRangeImmediately()
+            }
+            .onChange(of: clip.clipEndSeconds) { _ in
+                guard !isClipBoundaryDragActive else { return }
+                syncDisplayedClipRangeImmediately()
+            }
             .onChange(of: displayedPlayheadSeconds) { newValue in
                 guard shouldDriveClipTranscriptSidebarTime, !isPlayheadDragActive else { return }
                 clipTranscriptSidebarTimeSeconds = newValue
@@ -1812,8 +1978,11 @@ struct ClipToolView: View {
 
         return step5.onDisappear {
             runtime.waveformTask?.cancel()
-            runtime.keyboardPanTask?.cancel()
-            runtime.keyboardPanTask = nil
+            stopManualViewportPan()
+            stopClipBoundaryVisualSmoothing()
+            isClipBoundaryDragActive = false
+            activeClipBoundaryDragKind = nil
+            syncDisplayedClipRangeImmediately()
             syncSharedPlayheadStateIfNeeded(playheadSeconds, force: true, updateAlignment: true)
             removeKeyMonitor()
             removePlayerTimeObserver()
