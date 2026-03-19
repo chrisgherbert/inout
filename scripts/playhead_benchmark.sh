@@ -17,6 +17,8 @@ PROGRESS_PATH="$DEFAULT_PROGRESS"
 BASELINE_PATH=""
 SAMPLE_PATH="$DEFAULT_SAMPLE"
 SCENARIOS="slow_drag,fast_scrub,back_and_forth,edge_auto_pan"
+TRANSCRIPT_STRESS=""
+DISABLE_TRANSCRIPT_BATCHING=0
 TIMEOUT_SECONDS=120
 SHOULD_BUILD=1
 MAX_ATTEMPTS=2
@@ -30,6 +32,10 @@ Options:
   --output PATH        Write benchmark JSON to PATH.
   --baseline PATH      Compare the run against an existing benchmark JSON.
   --scenarios CSV      Override scenarios (comma-separated).
+  --transcript-stress N
+                       Simulate transcript preview updates at N segments/sec during the run.
+  --disable-transcript-batching
+                       Benchmark with preview segments published immediately instead of batched.
   --timeout SECONDS    Benchmark timeout. Default: ${TIMEOUT_SECONDS}
   --skip-build         Reuse the existing app build.
   --help               Show this help.
@@ -59,6 +65,14 @@ while [[ $# -gt 0 ]]; do
     --scenarios)
       SCENARIOS="$2"
       shift 2
+      ;;
+    --transcript-stress)
+      TRANSCRIPT_STRESS="$2"
+      shift 2
+      ;;
+    --disable-transcript-batching)
+      DISABLE_TRANSCRIPT_BATCHING=1
+      shift
       ;;
     --timeout)
       TIMEOUT_SECONDS="$2"
@@ -176,11 +190,19 @@ while (( ATTEMPT <= MAX_ATTEMPTS )); do
   kill_existing_app_instances
 
   echo "Running playhead benchmark against $MEDIA_PATH (attempt ${ATTEMPT}/${MAX_ATTEMPTS})"
-  open -n -W -a "$APP" "$MEDIA_PATH" --args \
-    --playhead-benchmark \
-    --playhead-benchmark-output "$OUTPUT_PATH" \
-    --playhead-benchmark-progress "$PROGRESS_PATH" \
-    --playhead-benchmark-scenarios "$SCENARIOS" >/dev/null 2>&1 &
+  app_args=(
+    --playhead-benchmark
+    --playhead-benchmark-output "$OUTPUT_PATH"
+    --playhead-benchmark-progress "$PROGRESS_PATH"
+    --playhead-benchmark-scenarios "$SCENARIOS"
+  )
+  if [[ -n "$TRANSCRIPT_STRESS" ]]; then
+    app_args+=(--playhead-benchmark-transcript-stress "$TRANSCRIPT_STRESS")
+  fi
+  if (( DISABLE_TRANSCRIPT_BATCHING )); then
+    app_args+=(--playhead-benchmark-disable-transcript-batching)
+  fi
+  open -n -W -a "$APP" "$MEDIA_PATH" --args "${app_args[@]}" >/dev/null 2>&1 &
   APP_PID=$!
 
   TIMED_OUT=0

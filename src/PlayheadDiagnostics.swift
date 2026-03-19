@@ -9,6 +9,8 @@ struct PlayheadBenchmarkConfig {
     let progressURL: URL?
     let exitWhenDone: Bool
     let scenarios: [PlayheadBenchmarkScenario]
+    let transcriptStressSegmentsPerSecond: Double
+    let disableTranscriptPreviewBatching: Bool
 
     private init() {
         let env = ProcessInfo.processInfo.environment
@@ -45,6 +47,20 @@ struct PlayheadBenchmarkConfig {
         } else {
             scenarios = PlayheadBenchmarkScenario.defaultScenarios
         }
+
+        let rawTranscriptStress = env["INOUT_PLAYHEAD_BENCHMARK_TRANSCRIPT_STRESS"] ?? Self.argumentValue(named: "--playhead-benchmark-transcript-stress", in: args)
+        if let rawTranscriptStress,
+           let parsed = Double(rawTranscriptStress),
+           parsed.isFinite,
+           parsed > 0 {
+            transcriptStressSegmentsPerSecond = parsed
+        } else {
+            transcriptStressSegmentsPerSecond = 0
+        }
+
+        disableTranscriptPreviewBatching =
+            env["INOUT_PLAYHEAD_BENCHMARK_DISABLE_TRANSCRIPT_BATCHING"] == "1" ||
+            args.contains("--playhead-benchmark-disable-transcript-batching")
     }
 
     private static func argumentValue(named name: String, in args: [String]) -> String? {
@@ -410,6 +426,7 @@ final class PlayheadBenchmarkCoordinator {
         let beginScrubAtRatio: (Double) -> Void
         let updateScrubToRatio: (Double) -> Void
         let endScrubAtRatio: (Double) -> Void
+        let setTranscriptStressRate: (Double?) -> Void
     }
 
     private let config = PlayheadBenchmarkConfig.shared
@@ -446,6 +463,13 @@ final class PlayheadBenchmarkCoordinator {
         }
 
         PlayheadDiagnostics.shared.writeProgress(stage: "ready", scenario: nil)
+        if config.transcriptStressSegmentsPerSecond > 0 {
+            driver.setTranscriptStressRate(config.transcriptStressSegmentsPerSecond)
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        defer {
+            driver.setTranscriptStressRate(nil)
+        }
 
         for scenario in config.scenarios {
             await runScenario(scenario, driver: driver)

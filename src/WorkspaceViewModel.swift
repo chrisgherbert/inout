@@ -337,7 +337,12 @@ final class WorkspaceViewModel: ObservableObject {
     var exportTask: Task<Void, Never>?
     var captureMarkerHighlightClearTask: Task<Void, Never>?
     var clipBoundaryHighlightClearTask: Task<Void, Never>?
+    var transcriptPreviewFlushTask: Task<Void, Never>?
+    var benchmarkTranscriptStressTask: Task<Void, Never>?
+    var transcriptGenerationRelay: TranscriptGenerationRelay?
     let cancelFlag = CancellationFlag()
+    var pendingTranscriptPreviewSegments: [TranscriptSegment] = []
+    var isInteractiveTimelineScrubbing = false
     var activeExportSession: AVAssetExportSession?
     var activeProcess: Process?
     var activeClipExportRunToken: UUID?
@@ -456,6 +461,8 @@ final class WorkspaceViewModel: ObservableObject {
         }
         captureMarkerHighlightClearTask?.cancel()
         clipBoundaryHighlightClearTask?.cancel()
+        transcriptPreviewFlushTask?.cancel()
+        benchmarkTranscriptStressTask?.cancel()
     }
 
     private func updateDockProgressIndicator() {
@@ -475,11 +482,13 @@ final class WorkspaceViewModel: ObservableObject {
         let flagsWithValues: Set<String> = [
             "--playhead-benchmark-output",
             "--playhead-benchmark-progress",
-            "--playhead-benchmark-scenarios"
+            "--playhead-benchmark-scenarios",
+            "--playhead-benchmark-transcript-stress"
         ]
         let flagsWithoutValues: Set<String> = [
             "--playhead-benchmark",
-            "--playhead-benchmark-no-exit"
+            "--playhead-benchmark-no-exit",
+            "--playhead-benchmark-disable-transcript-batching"
         ]
 
         var index = 0
@@ -932,6 +941,9 @@ final class WorkspaceViewModel: ObservableObject {
 
     func flushAnalyzeFeedbackUpdate() {
         guard activeAnalyzeFeedbackFileName != nil else { return }
+        if PlayheadDiagnostics.shared.isScenarioActive {
+            PlayheadDiagnostics.shared.noteModelWrite("analyze_feedback_flush")
+        }
 
         let progress = pendingAnalyzeFeedbackProgress ?? analyzeProgress
         let clamped = min(1, max(0, progress))

@@ -902,6 +902,7 @@ struct TranscriptTableView: NSViewRepresentable {
         tableView.allowsMultipleSelection = allowsMultipleSelection
         tableView.selectionHighlightStyle = showsPlaybackIndicator ? .none : .regular
         if shouldReload {
+            PlayheadDiagnostics.shared.noteModelWrite("transcript_table_reload")
             tableView.reloadData()
             context.coordinator.updateColumnWidths(in: nsView)
         } else {

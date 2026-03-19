@@ -358,6 +358,7 @@ extension WorkspaceViewModel {
     func applyTranscriptGenerationResult(
         _ result: Result<[TranscriptSegment], DetectionError>
     ) {
+        resetTranscriptPreviewPipeline()
         isGeneratingTranscript = false
         isAnalyzing = false
         analyzeTask = nil

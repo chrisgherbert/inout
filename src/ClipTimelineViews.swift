@@ -831,6 +831,7 @@ struct ClipToolView: View {
 
     private func setPlayheadDragActive(_ active: Bool) {
         isPlayheadDragActive = active
+        model.setInteractiveTimelineScrubbing(active)
         if active {
             stopManualViewportPan()
             runtime.lastInteractiveSeekCommitTimestamp = 0
@@ -939,6 +940,13 @@ struct ClipToolView: View {
                     PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_end", seconds: target)
                     updatePlayheadDragLocation(x, width: width)
                     setPlayheadDragActive(false)
+                },
+                setTranscriptStressRate: { rate in
+                    if let rate, rate > 0 {
+                        model.startBenchmarkTranscriptPreviewStress(ratePerSecond: rate)
+                    } else {
+                        model.stopBenchmarkTranscriptPreviewStress()
+                    }
                 }
             )
         )

@@ -167,6 +167,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 
     private func refreshTranscriptRows() {
+        PlayheadDiagnostics.shared.noteModelWrite("transcript_sidebar_refresh")
         transcriptRows = makeTranscriptRows()
         transcriptRowsVersion &+= 1
         refreshSearchMatches()
