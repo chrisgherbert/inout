@@ -295,9 +295,12 @@ def metric(doc):
         return sum(values) / len(values) if values else None
     return {
         "avg_input_to_visual_p95_ms": avg([s.get("inputToVisualLatency", {}).get("p95Ms") if s.get("inputToVisualLatency") else None for s in scenarios]),
+        "avg_interactive_seek_completion_p95_ms": avg([s.get("interactiveSeekCompletionLatency", {}).get("p95Ms") if s.get("interactiveSeekCompletionLatency") else None for s in scenarios]),
         "avg_visual_interval_p95_ms": avg([s.get("visualInterval", {}).get("p95Ms") if s.get("visualInterval") else None for s in scenarios]),
         "avg_main_thread_p95_ms": avg([s.get("mainThreadPulse", {}).get("p95Ms") if s.get("mainThreadPulse") else None for s in scenarios]),
         "total_stalls_over_25ms": sum(s.get("mainThreadStallsOver25Ms", 0) for s in scenarios),
+        "interactive_seek_completions_per_second": avg([s.get("interactiveSeekCompletions", {}).get("perSecond") for s in scenarios]),
+        "interactive_seek_cancelled_count": sum(s.get("interactiveSeekCancelledCount", 0) for s in scenarios),
         "mini_map_per_second": avg([s.get("miniMapBodyEvaluations", {}).get("perSecond") for s in scenarios]),
         "utility_row_per_second": avg([s.get("utilityRowBodyEvaluations", {}).get("perSecond") for s in scenarios]),
         "selection_panel_per_second": avg([s.get("selectionPanelBodyEvaluations", {}).get("perSecond") for s in scenarios]),
@@ -321,10 +324,12 @@ print(f"Playhead benchmark summary: {output_path}")
 print()
 for scenario in data.get("scenarios", []):
     latency = scenario.get("inputToVisualLatency") or {}
+    seek_completion = scenario.get("interactiveSeekCompletionLatency") or {}
     visual = scenario.get("visualInterval") or {}
     pulse = scenario.get("mainThreadPulse") or {}
     print(
         f"- {scenario['name']}: latency p95 {fmt(latency.get('p95Ms'))} ms, "
+        f"seek completion p95 {fmt(seek_completion.get('p95Ms'))} ms, "
         f"visual interval p95 {fmt(visual.get('p95Ms'))} ms, "
         f"main-thread pulse p95 {fmt(pulse.get('p95Ms'))} ms, "
         f"stalls>25ms {scenario.get('mainThreadStallsOver25Ms', 0)}, "

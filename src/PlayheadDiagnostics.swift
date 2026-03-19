@@ -100,6 +100,7 @@ struct PlayheadBenchmarkScenarioSummary: Codable {
     let inputInterval: PlayheadTimingSummary?
     let visualInterval: PlayheadTimingSummary?
     let inputToVisualLatency: PlayheadTimingSummary?
+    let interactiveSeekCompletionLatency: PlayheadTimingSummary?
     let mainThreadPulse: PlayheadTimingSummary?
     let mainThreadStallsOver25Ms: Int
     let layoutPasses: PlayheadCounterSummary
@@ -111,6 +112,9 @@ struct PlayheadBenchmarkScenarioSummary: Codable {
     let miniMapBodyEvaluations: PlayheadCounterSummary
     let utilityRowBodyEvaluations: PlayheadCounterSummary
     let selectionPanelBodyEvaluations: PlayheadCounterSummary
+    let interactiveSeekRequests: PlayheadCounterSummary
+    let interactiveSeekCompletions: PlayheadCounterSummary
+    let interactiveSeekCancelledCount: Int
     let updateNSViewDuration: PlayheadTimingSummary?
     let decorationDuration: PlayheadTimingSummary?
     let markerLayoutDuration: PlayheadTimingSummary?
@@ -140,6 +144,7 @@ final class PlayheadDiagnostics {
         var inputIntervals: [Double] = []
         var visualIntervals: [Double] = []
         var inputToVisualLatencies: [Double] = []
+        var interactiveSeekCompletionLatencies: [Double] = []
         var mainThreadPulseIntervals: [Double] = []
         var updateNSViewDurations: [Double] = []
         var decorationDurations: [Double] = []
@@ -148,8 +153,12 @@ final class PlayheadDiagnostics {
         var lastInputTime: CFTimeInterval?
         var lastVisualTime: CFTimeInterval?
         var pendingInputTimes: [CFTimeInterval] = []
+        var pendingInteractiveSeekStartTimes: [String: CFTimeInterval] = [:]
         var inputEvents = 0
         var visualUpdates = 0
+        var interactiveSeekRequests = 0
+        var interactiveSeekCompletions = 0
+        var interactiveSeekCancelledCount = 0
         var mainThreadStallsOver25Ms = 0
         var layoutPasses = 0
         var updateNSViewPasses = 0
@@ -245,6 +254,26 @@ final class PlayheadDiagnostics {
         currentScenario = scenario
         _ = source
         _ = seconds
+    }
+
+    func noteInteractiveSeekRequested(id: String) {
+        guard var scenario = currentScenario else { return }
+        scenario.pendingInteractiveSeekStartTimes[id] = CACurrentMediaTime()
+        scenario.interactiveSeekRequests += 1
+        currentScenario = scenario
+    }
+
+    func noteInteractiveSeekCompleted(id: String, finished: Bool) {
+        guard var scenario = currentScenario else { return }
+        let now = CACurrentMediaTime()
+        let start = scenario.pendingInteractiveSeekStartTimes.removeValue(forKey: id)
+        if finished, let start {
+            scenario.interactiveSeekCompletions += 1
+            scenario.interactiveSeekCompletionLatencies.append(now - start)
+        } else if !finished {
+            scenario.interactiveSeekCancelledCount += 1
+        }
+        currentScenario = scenario
     }
 
     func noteLayoutPass(source: String) {
@@ -369,6 +398,7 @@ final class PlayheadDiagnostics {
             inputInterval: timingSummary(scenario.inputIntervals),
             visualInterval: timingSummary(scenario.visualIntervals),
             inputToVisualLatency: timingSummary(scenario.inputToVisualLatencies),
+            interactiveSeekCompletionLatency: timingSummary(scenario.interactiveSeekCompletionLatencies),
             mainThreadPulse: timingSummary(scenario.mainThreadPulseIntervals),
             mainThreadStallsOver25Ms: scenario.mainThreadStallsOver25Ms,
             layoutPasses: counterSummary(count: scenario.layoutPasses, duration: duration),
@@ -380,6 +410,9 @@ final class PlayheadDiagnostics {
             miniMapBodyEvaluations: counterSummary(count: scenario.miniMapBodyEvaluations, duration: duration),
             utilityRowBodyEvaluations: counterSummary(count: scenario.utilityRowBodyEvaluations, duration: duration),
             selectionPanelBodyEvaluations: counterSummary(count: scenario.selectionPanelBodyEvaluations, duration: duration),
+            interactiveSeekRequests: counterSummary(count: scenario.interactiveSeekRequests, duration: duration),
+            interactiveSeekCompletions: counterSummary(count: scenario.interactiveSeekCompletions, duration: duration),
+            interactiveSeekCancelledCount: scenario.interactiveSeekCancelledCount,
             updateNSViewDuration: timingSummary(scenario.updateNSViewDurations),
             decorationDuration: timingSummary(scenario.decorationDurations),
             markerLayoutDuration: timingSummary(scenario.markerLayoutDurations),

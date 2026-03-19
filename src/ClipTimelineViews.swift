@@ -35,6 +35,7 @@ private final class ClipToolRuntimeState: ObservableObject {
     var lastInteractiveReadoutSyncTimestamp: CFTimeInterval = 0
     var lastSharedPlayheadSyncTimestamp: CFTimeInterval = 0
     var timelinePointerSeconds: Double?
+    weak var waveformHostView: WaveformRasterHostView?
     weak var clipWindow: NSWindow?
     var playerTimeObserverToken: Any?
     var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
@@ -463,17 +464,24 @@ struct ClipToolView: View {
 
         // Coalesce tiny drag deltas so scrubbing stays responsive without flooding seeks.
         if runtime.lastInteractiveSeekSeconds >= 0, abs(clamped - runtime.lastInteractiveSeekSeconds) < (1.0 / 120.0) {
+            PlayheadDiagnostics.shared.noteModelWrite("interactive_seek_delta_coalesced")
             return
         }
         runtime.lastInteractiveSeekSeconds = clamped
 
         let tolerance = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+        let seekID = UUID().uuidString
         PlayheadDiagnostics.shared.noteModelWrite("interactive_player_seek")
+        PlayheadDiagnostics.shared.noteInteractiveSeekRequested(id: seekID)
         player.seek(
             to: CMTime(seconds: clamped, preferredTimescale: 600),
             toleranceBefore: tolerance,
             toleranceAfter: tolerance
-        )
+        ) { finished in
+            Task { @MainActor in
+                PlayheadDiagnostics.shared.noteInteractiveSeekCompleted(id: seekID, finished: finished)
+            }
+        }
         playheadSeconds = clamped
         syncSharedPlayheadStateIfNeeded(clamped, force: false, updateAlignment: false)
         playheadVisualSeconds = clamped
@@ -492,8 +500,12 @@ struct ClipToolView: View {
         }
 
         let commitInterval = 1.0 / 30.0
-        guard forceCommit || (now - runtime.lastInteractiveSeekCommitTimestamp) >= commitInterval else { return }
+        guard forceCommit || (now - runtime.lastInteractiveSeekCommitTimestamp) >= commitInterval else {
+            PlayheadDiagnostics.shared.noteModelWrite("interactive_seek_rate_limited")
+            return
+        }
         runtime.lastInteractiveSeekCommitTimestamp = now
+        PlayheadDiagnostics.shared.noteModelWrite("interactive_seek_commit_gate_pass")
         commitInteractiveSeek(to: clamped)
     }
 
@@ -911,7 +923,7 @@ struct ClipToolView: View {
         guard PlayheadDiagnostics.shared.isEnabled else { return }
         PlayheadBenchmarkCoordinator.shared.register(
             driver: .init(
-                isReady: { isBenchmarkReady },
+                isReady: { isBenchmarkReady && runtime.waveformHostView != nil },
                 maxZoomIndex: { max(0, allowedTimelineZoomLevels.count - 1) },
                 setZoomIndex: { index in
                     setTimelineZoomIndex(index)
@@ -920,26 +932,38 @@ struct ClipToolView: View {
                     let width = max(1, runtime.timelineInteractiveWidth)
                     let x = min(max(0, CGFloat(ratio) * width), width)
                     let target = timeForPlayheadDragLocation(x: x, width: width)
-                    PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_begin", seconds: target)
-                    setPlayheadDragActive(true)
-                    updatePlayheadDragLocation(x, width: width)
-                    seekPlayerInteractive(to: target, forceCommit: true)
+                    if let hostView = runtime.waveformHostView {
+                        hostView.beginBenchmarkPlayheadDrag(atX: x)
+                    } else {
+                        PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_begin", seconds: target)
+                        setPlayheadDragActive(true)
+                        updatePlayheadDragLocation(x, width: width)
+                        seekPlayerInteractive(to: target, forceCommit: true)
+                    }
                 },
                 updateScrubToRatio: { ratio in
                     let width = max(1, runtime.timelineInteractiveWidth)
                     let x = min(max(0, CGFloat(ratio) * width), width)
                     let target = timeForPlayheadDragLocation(x: x, width: width)
-                    PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_step", seconds: target)
-                    updatePlayheadDragLocation(x, width: width)
-                    seekPlayerInteractive(to: target)
+                    if let hostView = runtime.waveformHostView {
+                        hostView.updateBenchmarkPlayheadDrag(atX: x)
+                    } else {
+                        PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_step", seconds: target)
+                        updatePlayheadDragLocation(x, width: width)
+                        seekPlayerInteractive(to: target)
+                    }
                 },
                 endScrubAtRatio: { ratio in
                     let width = max(1, runtime.timelineInteractiveWidth)
                     let x = min(max(0, CGFloat(ratio) * width), width)
                     let target = timeForPlayheadDragLocation(x: x, width: width)
-                    PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_end", seconds: target)
-                    updatePlayheadDragLocation(x, width: width)
-                    setPlayheadDragActive(false)
+                    if let hostView = runtime.waveformHostView {
+                        hostView.endBenchmarkPlayheadDrag(atX: x)
+                    } else {
+                        PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_end", seconds: target)
+                        updatePlayheadDragLocation(x, width: width)
+                        setPlayheadDragActive(false)
+                    }
                 },
                 setTranscriptStressRate: { rate in
                     if let rate, rate > 0 {
@@ -1745,6 +1769,7 @@ struct ClipToolView: View {
                 }
             },
             onWaveformPointerTimeChanged: { runtime.timelinePointerSeconds = $0 },
+            onWaveformHostViewAvailable: { runtime.waveformHostView = $0 },
             onTimelineHoverChanged: { hovering in
                 runtime.isTimelineHovered = hovering
                 if !runtime.isMiddleMousePanning {

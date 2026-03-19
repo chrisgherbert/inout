@@ -42,6 +42,7 @@ struct ClipSelectionPanel: View, Equatable {
     let onSetEnd: (Double) -> Void
     let onWaveformHoverChanged: (Bool) -> Void
     let onWaveformPointerTimeChanged: (Double?) -> Void
+    let onWaveformHostViewAvailable: (WaveformRasterHostView) -> Void
     let onTimelineHoverChanged: (Bool) -> Void
     let onCopyPlayheadTimecode: () -> Void
     let onJumpToStart: () -> Void
@@ -124,7 +125,8 @@ struct ClipSelectionPanel: View, Equatable {
                     onSetStart: onSetStart,
                     onSetEnd: onSetEnd,
                     onHoverChanged: onWaveformHoverChanged,
-                    onPointerTimeChanged: onWaveformPointerTimeChanged
+                    onPointerTimeChanged: onWaveformPointerTimeChanged,
+                    onHostViewAvailable: onWaveformHostViewAvailable
                 )
                 .frame(height: isCompactLayout ? 68 : 82)
                 .padding(.horizontal, 6)

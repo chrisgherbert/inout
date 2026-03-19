@@ -29,6 +29,7 @@ struct WaveformView: View {
     let onSetEnd: (Double) -> Void
     let onHoverChanged: (Bool) -> Void
     let onPointerTimeChanged: (Double?) -> Void
+    let onHostViewAvailable: (WaveformRasterHostView) -> Void
 
     @State private var isPlayheadCaptureFlashing = false
 
@@ -63,7 +64,8 @@ struct WaveformView: View {
             onSetStart: onSetStart,
             onSetEnd: onSetEnd,
             onHoverChanged: onHoverChanged,
-            onPointerTimeChanged: onPointerTimeChanged
+            onPointerTimeChanged: onPointerTimeChanged,
+            onHostViewAvailable: onHostViewAvailable
         )
         .overlay(alignment: .bottomLeading) {
             Text(formatSeconds(visibleStartSeconds))

@@ -676,6 +676,7 @@ final class WaveformRasterHostView: NSView {
         let commitInterval = 1.0 / 30.0
         guard forceCommit || (now - lastDragCommitTimestamp) >= commitInterval else { return }
         lastDragCommitTimestamp = now
+        PlayheadDiagnostics.shared.noteModelWrite("host_interactive_seek_dispatch")
         onInteractiveSeek?(target, forceCommit)
     }
 
@@ -809,6 +810,18 @@ final class WaveformRasterHostView: NSView {
         updateLivePlaybackTimerState()
     }
 
+    func beginBenchmarkPlayheadDrag(atX x: CGFloat) {
+        let point = benchmarkPlayheadPoint(forX: x)
+        isDraggingStartEdge = false
+        isDraggingEndEdge = false
+        isDraggingPlayhead = true
+        lastDragCommitTimestamp = 0
+        lastDragSampleHostTime = 0
+        onPlayheadDragStateChanged?(true)
+        updateInteractiveDrag(at: point, forceCommit: true)
+        updateLivePlaybackTimerState()
+    }
+
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if isDraggingStartEdge {
@@ -825,6 +838,12 @@ final class WaveformRasterHostView: NSView {
             super.mouseDragged(with: event)
             return
         }
+        updateInteractiveDrag(at: point, forceCommit: false)
+    }
+
+    func updateBenchmarkPlayheadDrag(atX x: CGFloat) {
+        guard isDraggingPlayhead else { return }
+        let point = benchmarkPlayheadPoint(forX: x)
         updateInteractiveDrag(at: point, forceCommit: false)
     }
 
@@ -850,6 +869,19 @@ final class WaveformRasterHostView: NSView {
             super.mouseUp(with: event)
             return
         }
+        updateInteractiveDrag(at: point, forceCommit: true)
+        isDraggingPlayhead = false
+        dragPlayheadSeconds = nil
+        lastDragSampleHostTime = 0
+        playheadLayer.removeAnimation(forKey: "dragPlayheadPosition")
+        playheadLayer.removeAnimation(forKey: "dragPlayheadOpacity")
+        onPlayheadDragStateChanged?(false)
+        updateLivePlaybackTimerState()
+    }
+
+    func endBenchmarkPlayheadDrag(atX x: CGFloat) {
+        guard isDraggingPlayhead else { return }
+        let point = benchmarkPlayheadPoint(forX: x)
         updateInteractiveDrag(at: point, forceCommit: true)
         isDraggingPlayhead = false
         dragPlayheadSeconds = nil
@@ -921,6 +953,12 @@ final class WaveformRasterHostView: NSView {
         }
 
         startLivePlaybackTimerIfNeeded()
+    }
+
+    private func benchmarkPlayheadPoint(forX x: CGFloat) -> NSPoint {
+        let clampedX = min(max(0, x), bounds.width)
+        let y = timelineVerticalOffset + (timelineHeight * 0.5)
+        return NSPoint(x: clampedX, y: y)
     }
 
     private func tickLivePlayhead() {
@@ -1169,6 +1207,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let onSetEnd: (Double) -> Void
     let onHoverChanged: (Bool) -> Void
     let onPointerTimeChanged: (Double?) -> Void
+    let onHostViewAvailable: (WaveformRasterHostView) -> Void
 
     static func == (lhs: WaveformRasterLayerView, rhs: WaveformRasterLayerView) -> Bool {
         lhs.sourceSessionID == rhs.sourceSessionID &&
@@ -1207,6 +1246,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         view.onSetEnd = onSetEnd
         view.onHoverChanged = onHoverChanged
         view.onPointerTimeChanged = onPointerTimeChanged
+        onHostViewAvailable(view)
         return view
     }
 
@@ -1221,6 +1261,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.onSetEnd = onSetEnd
         nsView.onHoverChanged = onHoverChanged
         nsView.onPointerTimeChanged = onPointerTimeChanged
+        onHostViewAvailable(nsView)
         nsView.player = player
         nsView.clipStartSeconds = clipStartSeconds
         nsView.clipEndSeconds = clipEndSeconds
