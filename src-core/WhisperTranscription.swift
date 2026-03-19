@@ -415,6 +415,11 @@ public func transcribeAudioWithWhisper(
         onTranscriptSegment(segment)
     }
 
+    let whisperSegmentationArguments = [
+        "-ml", "80",
+        "-sow"
+    ]
+
     let whisperResult = runSynchronousProcessWithProgress(
         executableURL: whisperURL,
         arguments: [
@@ -423,7 +428,7 @@ public func transcribeAudioWithWhisper(
             "-of", outputPrefix.path,
             "-oj",
             "-pp"
-        ],
+        ] + whisperSegmentationArguments,
         shouldCancel: shouldCancel,
         progressHandler: progressHandler,
         source: "whisper",
@@ -445,7 +450,7 @@ public func transcribeAudioWithWhisper(
                 "-of", outputPrefix.path,
                 "-oj",
                 "-pp"
-            ],
+            ] + whisperSegmentationArguments,
             shouldCancel: shouldCancel,
             progressHandler: progressHandler,
             source: "whisper",
