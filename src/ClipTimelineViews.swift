@@ -108,6 +108,14 @@ struct ClipToolView: View {
         isClipBoundaryDragActive ? visualClipEndSeconds : clip.clipEndSeconds
     }
 
+    private var isBenchmarkReady: Bool {
+        PlayheadDiagnostics.shared.isEnabled &&
+        model.sourceURL != nil &&
+        !isWaveformLoading &&
+        runtime.timelineInteractiveWidth > 0 &&
+        player.currentItem != nil
+    }
+
     private var allowedTimelineZoomLevels: [Double] {
         let duration = totalDurationSeconds
         if duration <= 300 {
@@ -460,6 +468,7 @@ struct ClipToolView: View {
         runtime.lastInteractiveSeekSeconds = clamped
 
         let tolerance = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+        PlayheadDiagnostics.shared.noteModelWrite("interactive_player_seek")
         player.seek(
             to: CMTime(seconds: clamped, preferredTimescale: 600),
             toleranceBefore: tolerance,
@@ -885,12 +894,51 @@ struct ClipToolView: View {
         let syncInterval = 1.0 / 20.0
         guard force || (now - runtime.lastSharedPlayheadSyncTimestamp) >= syncInterval else { return }
         if abs(clip.clipPlayheadSeconds - seconds) > (1.0 / 240.0) {
+            PlayheadDiagnostics.shared.noteModelWrite("shared_playhead_write")
             clip.clipPlayheadSeconds = seconds
         }
         if updateAlignment {
             model.selectTimelineMarkerIfAligned(near: seconds)
         }
         runtime.lastSharedPlayheadSyncTimestamp = now
+    }
+
+    private func registerBenchmarkDriverIfNeeded() {
+        guard PlayheadDiagnostics.shared.isEnabled else { return }
+        PlayheadBenchmarkCoordinator.shared.register(
+            driver: .init(
+                isReady: { isBenchmarkReady },
+                maxZoomIndex: { max(0, allowedTimelineZoomLevels.count - 1) },
+                setZoomIndex: { index in
+                    setTimelineZoomIndex(index)
+                },
+                beginScrubAtRatio: { ratio in
+                    let width = max(1, runtime.timelineInteractiveWidth)
+                    let x = min(max(0, CGFloat(ratio) * width), width)
+                    let target = timeForPlayheadDragLocation(x: x, width: width)
+                    PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_begin", seconds: target)
+                    setPlayheadDragActive(true)
+                    updatePlayheadDragLocation(x, width: width)
+                    seekPlayerInteractive(to: target, forceCommit: true)
+                },
+                updateScrubToRatio: { ratio in
+                    let width = max(1, runtime.timelineInteractiveWidth)
+                    let x = min(max(0, CGFloat(ratio) * width), width)
+                    let target = timeForPlayheadDragLocation(x: x, width: width)
+                    PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_step", seconds: target)
+                    updatePlayheadDragLocation(x, width: width)
+                    seekPlayerInteractive(to: target)
+                },
+                endScrubAtRatio: { ratio in
+                    let width = max(1, runtime.timelineInteractiveWidth)
+                    let x = min(max(0, CGFloat(ratio) * width), width)
+                    let target = timeForPlayheadDragLocation(x: x, width: width)
+                    PlayheadDiagnostics.shared.noteScrubInput(source: "benchmark_end", seconds: target)
+                    updatePlayheadDragLocation(x, width: width)
+                    setPlayheadDragActive(false)
+                }
+            )
+        )
     }
 
     private var visibleStartSeconds: Double {
@@ -1878,6 +1926,9 @@ struct ClipToolView: View {
 
     private func withLifecycleHandlers<V: View>(_ view: V) -> some View {
         let step1 = view.onAppear {
+            if PlayheadDiagnostics.shared.isEnabled {
+                PlayheadDiagnostics.shared.writeProgress(stage: "clip_view_appeared", scenario: nil)
+            }
             resetPlayerHeightToDefaultIfNeeded()
             syncDisplayedClipRangeImmediately()
             loadPlayerItem()
@@ -1890,10 +1941,12 @@ struct ClipToolView: View {
             if shouldDriveClipTranscriptSidebarTime {
                 clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
             }
+            registerBenchmarkDriverIfNeeded()
         }
 
         let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
             loadPlayerItem()
+            registerBenchmarkDriverIfNeeded()
         }
 
         let step3 = step2.onChange(of: model.clipEncodingMode) { mode in
@@ -1933,6 +1986,12 @@ struct ClipToolView: View {
                 if format == .webm {
                     model.clipAdvancedVideoCodec = .h264
                 }
+            }
+            .onChange(of: runtime.timelineInteractiveWidth) { _ in
+                registerBenchmarkDriverIfNeeded()
+            }
+            .onChange(of: isWaveformLoading) { _ in
+                registerBenchmarkDriverIfNeeded()
             }
 
         let step5 = step4

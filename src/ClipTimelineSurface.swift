@@ -349,6 +349,7 @@ final class WaveformRasterHostView: NSView {
         let visible = targetFrame.midX >= -6 && targetFrame.midX <= (bounds.width + 6)
         playheadLayer.opacity = visible ? 1.0 : 0.0
         CATransaction.commit()
+        PlayheadDiagnostics.shared.noteVisualPlayheadUpdate(source: "host_apply_displayed_playhead", seconds: seconds)
     }
 
     private func predictedPlaybackSeconds(at hostTime: CFTimeInterval) -> Double {
@@ -453,6 +454,7 @@ final class WaveformRasterHostView: NSView {
     }
 
     func updateTimelineDecorationLayers() {
+        let diagnosticsStart = CACurrentMediaTime()
         var hasher = Hasher()
         hasher.combine(Int((bounds.width * 10).rounded()))
         hasher.combine(Int((bounds.height * 10).rounded()))
@@ -626,6 +628,7 @@ final class WaveformRasterHostView: NSView {
         )
         endBoundaryPulseLayer.opacity = targetEndPulseOpacity
         lastEndBoundaryPulseOpacity = targetEndPulseOpacity
+        PlayheadDiagnostics.shared.noteDecorationUpdate(duration: CACurrentMediaTime() - diagnosticsStart)
     }
 
     private func animateLayerOpacityIfNeeded(_ layer: CALayer, from oldValue: Float, to newValue: Float, duration: CFTimeInterval) {
@@ -662,6 +665,7 @@ final class WaveformRasterHostView: NSView {
 
     private func updateInteractiveDrag(at point: NSPoint, forceCommit: Bool) {
         let target = timeValue(forX: point.x)
+        PlayheadDiagnostics.shared.noteScrubInput(source: "host_interactive_drag", seconds: target)
         dragPlayheadSeconds = target
         animateDraggedPlayhead(to: target, forceDisplaySync: forceCommit && lastDragSampleHostTime == 0)
         onPlayheadDragEdgePan?(point.x, bounds.width)
@@ -864,6 +868,7 @@ final class WaveformRasterHostView: NSView {
         waveformLayer.frame = waveformClipLayer.bounds
         markerContainerLayer.frame = timelineRect()
         updateTimelineDecorationLayers()
+        PlayheadDiagnostics.shared.noteLayoutPass(source: "waveform_host_layout")
     }
 
     private func startLivePlaybackTimerIfNeeded() {
@@ -998,6 +1003,7 @@ final class WaveformRasterCoordinator {
             return cached
         }
         guard !cachedSamples.isEmpty else { return nil }
+        let diagnosticsStart = CACurrentMediaTime()
         let width = Int(min(98_304, max(4_096, (1_024.0 * zoomBucket).rounded())))
         let peaks = makePeaks(samples: cachedSamples, targetWidth: width)
         guard let image = makeWaveformImage(
@@ -1010,6 +1016,10 @@ final class WaveformRasterCoordinator {
             return nil
         }
         cachedBucketImages[zoomBucket] = image
+        let rebuildDuration = CACurrentMediaTime() - diagnosticsStart
+        Task { @MainActor in
+            PlayheadDiagnostics.shared.noteWaveformImageRebuild(duration: rebuildDuration)
+        }
         return image
     }
 
@@ -1201,6 +1211,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     }
 
     func updateNSView(_ nsView: WaveformRasterHostView, context: Context) {
+        let diagnosticsStart = CACurrentMediaTime()
         nsView.onMarkerSeek = onMarkerSeek
         nsView.onInteractiveSeek = onInteractiveSeek
         nsView.onPlayheadDragStateChanged = onPlayheadDragStateChanged
@@ -1435,6 +1446,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             let markerLayoutSignature = markerLayoutHasher.finalize()
 
             if context.coordinator.lastMarkerLayoutSignature != markerLayoutSignature {
+                let markerLayoutStart = CACurrentMediaTime()
                 var markerHotspots: [WaveformRasterHostView.MarkerHotspot] = []
                 var markerLayersByID: [UUID: CALayer] = [:]
                 markerContainer.sublayers = visibleMarkers.map { _, marker in
@@ -1474,6 +1486,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                 nsView.markerHotspots = markerHotspots
                 nsView.markerLayersByID = markerLayersByID
                 context.coordinator.lastMarkerLayoutSignature = markerLayoutSignature
+                PlayheadDiagnostics.shared.noteMarkerLayout(duration: CACurrentMediaTime() - markerLayoutStart)
             }
             nsView.applyMarkerHoverState(animated: false)
 
@@ -1504,5 +1517,6 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         }
 
         CATransaction.commit()
+        PlayheadDiagnostics.shared.noteUpdateNSView(duration: CACurrentMediaTime() - diagnosticsStart, didFullTimelineUpdate: needsFullTimelineUpdate)
     }
 }

@@ -140,6 +140,7 @@ private struct TimelineMiniMapView: View {
     }
 
     var body: some View {
+        let _ = PlayheadDiagnostics.shared.noteMiniMapBodyEvaluation()
         GeometryReader { proxy in
             let width = max(1, proxy.size.width)
             let height = proxy.size.height

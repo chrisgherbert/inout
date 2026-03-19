@@ -147,6 +147,9 @@ struct ContentView: View {
             lastPendingQueuedCount = pendingQueuedCount
         }
         .onAppear {
+            if PlayheadBenchmarkConfig.shared.enabled {
+                PlayheadDiagnostics.shared.writeProgress(stage: "content_view_appeared", scenario: nil)
+            }
             lastQueuedCount = model.queuedJobs.count
             lastPendingQueuedCount = model.queuedJobs.filter { $0.status == .queued }.count
             updateURLDownloadOnboardingPresentation()
@@ -198,6 +201,11 @@ struct ContentView: View {
     }
 
     private func updateURLDownloadOnboardingPresentation() {
+        if PlayheadBenchmarkConfig.shared.enabled {
+            showURLDownloadSetupSheet = false
+            return
+        }
+
         if model.urlDownloadSetupComplete {
             urlDownloadSetupCompleted = true
             showURLDownloadSetupSheet = false

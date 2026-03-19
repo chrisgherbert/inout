@@ -31,6 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if PlayheadBenchmarkConfig.shared.enabled {
+            PlayheadDiagnostics.shared.writeProgress(stage: "app_launched", scenario: nil)
+        }
+        guard !PlayheadBenchmarkConfig.shared.enabled else { return }
         Task { @MainActor in
             AppUpdateChecker.shared.performInitialCheckIfNeeded()
         }

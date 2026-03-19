@@ -76,6 +76,7 @@ struct ClipSelectionPanel: View, Equatable {
     }
 
     var body: some View {
+        let _ = PlayheadDiagnostics.shared.noteSelectionPanelBodyEvaluation()
         VStack(alignment: .leading, spacing: 10) {
             if isWaveformLoading {
                 WaveformLoadingPlaceholder(

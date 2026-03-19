@@ -22,6 +22,7 @@ struct ClipPlayerUtilityRow: View {
     @State private var isZoomInHovered = false
 
     var body: some View {
+        let _ = PlayheadDiagnostics.shared.noteUtilityRowBodyEvaluation()
         ZStack {
             HStack(spacing: 6) {
                 ControlGroup {
