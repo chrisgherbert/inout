@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if PlayheadBenchmarkConfig.shared.enabled {
             PlayheadDiagnostics.shared.writeProgress(stage: "app_launched", scenario: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
         guard !PlayheadBenchmarkConfig.shared.enabled else { return }
         Task { @MainActor in

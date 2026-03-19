@@ -380,6 +380,9 @@ extension WorkspaceViewModel {
 
     func setSource(_ url: URL) {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
+        if PlayheadBenchmarkConfig.shared.enabled {
+            PlayheadDiagnostics.shared.writeProgress(stage: "set_source_begin", scenario: nil)
+        }
 
         if (isAnalyzing || isExporting) && sourceURL?.path != url.path {
             guard confirmReplaceSourceDuringActiveJob(newURL: url) else { return }
@@ -414,6 +417,9 @@ extension WorkspaceViewModel {
         clipPlayheadSeconds = 0
         clearActivityConsole()
         resetClipRange()
+        if PlayheadBenchmarkConfig.shared.enabled {
+            PlayheadDiagnostics.shared.writeProgress(stage: "set_source_complete", scenario: nil)
+        }
     }
 
     private func confirmReplaceSourceDuringActiveJob(newURL: URL) -> Bool {

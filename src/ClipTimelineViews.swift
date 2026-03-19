@@ -475,7 +475,7 @@ struct ClipToolView: View {
             toleranceAfter: tolerance
         )
         playheadSeconds = clamped
-        syncSharedPlayheadStateIfNeeded(clamped, force: true)
+        syncSharedPlayheadStateIfNeeded(clamped, force: false, updateAlignment: false)
         playheadVisualSeconds = clamped
         updateViewportForPlayhead(shouldFollow: false)
     }
@@ -890,6 +890,9 @@ struct ClipToolView: View {
     }
 
     private func syncSharedPlayheadStateIfNeeded(_ seconds: Double, force: Bool, updateAlignment: Bool = true) {
+        if isPlayheadDragActive && !force {
+            return
+        }
         let now = CACurrentMediaTime()
         let syncInterval = 1.0 / 20.0
         guard force || (now - runtime.lastSharedPlayheadSyncTimestamp) >= syncInterval else { return }

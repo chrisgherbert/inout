@@ -12,21 +12,32 @@ struct PlayheadBenchmarkConfig {
 
     private init() {
         let env = ProcessInfo.processInfo.environment
-        enabled = env["INOUT_PLAYHEAD_BENCHMARK"] == "1"
+        let args = Array(CommandLine.arguments.dropFirst())
+
+        enabled = env["INOUT_PLAYHEAD_BENCHMARK"] == "1" || args.contains("--playhead-benchmark")
+
         if let outputPath = env["INOUT_PLAYHEAD_BENCHMARK_OUTPUT"], !outputPath.isEmpty {
+            outputURL = URL(fileURLWithPath: outputPath)
+        } else if let outputPath = Self.argumentValue(named: "--playhead-benchmark-output", in: args), !outputPath.isEmpty {
             outputURL = URL(fileURLWithPath: outputPath)
         } else {
             outputURL = nil
         }
+
         if let progressPath = env["INOUT_PLAYHEAD_BENCHMARK_PROGRESS_OUTPUT"], !progressPath.isEmpty {
+            progressURL = URL(fileURLWithPath: progressPath)
+        } else if let progressPath = Self.argumentValue(named: "--playhead-benchmark-progress", in: args), !progressPath.isEmpty {
             progressURL = URL(fileURLWithPath: progressPath)
         } else if let outputURL {
             progressURL = outputURL.deletingPathExtension().appendingPathExtension("progress.json")
         } else {
             progressURL = nil
         }
-        exitWhenDone = env["INOUT_PLAYHEAD_BENCHMARK_EXIT"] != "0"
-        if let rawScenarios = env["INOUT_PLAYHEAD_BENCHMARK_SCENARIOS"], !rawScenarios.isEmpty {
+
+        exitWhenDone = env["INOUT_PLAYHEAD_BENCHMARK_EXIT"] != "0" && !args.contains("--playhead-benchmark-no-exit")
+
+        let rawScenarios = env["INOUT_PLAYHEAD_BENCHMARK_SCENARIOS"] ?? Self.argumentValue(named: "--playhead-benchmark-scenarios", in: args)
+        if let rawScenarios, !rawScenarios.isEmpty {
             let parsed = rawScenarios
                 .split(separator: ",")
                 .compactMap { PlayheadBenchmarkScenario(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
@@ -34,6 +45,13 @@ struct PlayheadBenchmarkConfig {
         } else {
             scenarios = PlayheadBenchmarkScenario.defaultScenarios
         }
+    }
+
+    private static func argumentValue(named name: String, in args: [String]) -> String? {
+        guard let index = args.firstIndex(of: name), args.indices.contains(index + 1) else {
+            return nil
+        }
+        return args[index + 1]
     }
 }
 

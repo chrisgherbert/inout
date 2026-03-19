@@ -9,14 +9,17 @@ FIXTURE_DIR="$ARTIFACT_DIR/fixtures"
 DEFAULT_FIXTURE="$FIXTURE_DIR/playhead-benchmark-fixture.mp4"
 DEFAULT_OUTPUT="$ARTIFACT_DIR/latest.json"
 DEFAULT_PROGRESS="$ARTIFACT_DIR/latest.progress.json"
+DEFAULT_SAMPLE="$ARTIFACT_DIR/latest.sample.txt"
 
 MEDIA_PATH=""
 OUTPUT_PATH="$DEFAULT_OUTPUT"
 PROGRESS_PATH="$DEFAULT_PROGRESS"
 BASELINE_PATH=""
+SAMPLE_PATH="$DEFAULT_SAMPLE"
 SCENARIOS="slow_drag,fast_scrub,back_and_forth,edge_auto_pan"
 TIMEOUT_SECONDS=120
 SHOULD_BUILD=1
+MAX_ATTEMPTS=2
 
 usage() {
   cat <<USAGE
@@ -33,6 +36,10 @@ Options:
 USAGE
 }
 
+absolute_path() {
+  python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).expanduser().resolve())' "$1"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --media)
@@ -42,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --output)
       OUTPUT_PATH="$2"
       PROGRESS_PATH="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).with_suffix(".progress.json"))' "$2")"
+      SAMPLE_PATH="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).with_suffix(".sample.txt"))' "$2")"
       shift 2
       ;;
     --baseline)
@@ -72,6 +80,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+OUTPUT_PATH="$(absolute_path "$OUTPUT_PATH")"
+PROGRESS_PATH="$(absolute_path "$PROGRESS_PATH")"
+if [[ -n "$BASELINE_PATH" ]]; then
+  BASELINE_PATH="$(absolute_path "$BASELINE_PATH")"
+fi
+
 mkdir -p "$ARTIFACT_DIR" "$FIXTURE_DIR"
 
 choose_ffmpeg() {
@@ -88,6 +102,19 @@ choose_ffmpeg() {
   exit 1
 }
 
+kill_existing_app_instances() {
+  local pids
+  pids="$(pgrep -f "$APP_EXE" || true)"
+  if [[ -n "$pids" ]]; then
+    echo "Stopping existing benchmark app process(es)..."
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      kill "$pid" >/dev/null 2>&1 || true
+    done <<< "$pids"
+    sleep 1
+  fi
+}
+
 generate_fixture() {
   local ffmpeg_bin="$1"
   local fixture="$2"
@@ -102,6 +129,16 @@ generate_fixture() {
     -c:v libx264 -preset veryfast -pix_fmt yuv420p \
     -c:a aac -b:a 160k \
     "$fixture" >/dev/null 2>&1
+}
+
+capture_sample_if_possible() {
+  local pid="$1"
+  local sample_path="$2"
+  if ! command -v sample >/dev/null 2>&1; then
+    return
+  fi
+  echo "Capturing sample to $sample_path" >&2
+  sample "$pid" 1 1 -file "$sample_path" >/dev/null 2>&1 || true
 }
 
 if (( SHOULD_BUILD )); then
@@ -121,6 +158,8 @@ if [[ -z "$MEDIA_PATH" ]]; then
   MEDIA_PATH="$DEFAULT_FIXTURE"
 fi
 
+MEDIA_PATH="$(absolute_path "$MEDIA_PATH")"
+
 if [[ ! -f "$MEDIA_PATH" ]]; then
   echo "ERROR: media file not found at $MEDIA_PATH" >&2
   exit 1
@@ -128,36 +167,75 @@ fi
 
 rm -f "$OUTPUT_PATH"
 rm -f "$PROGRESS_PATH"
+rm -f "$SAMPLE_PATH"
 
-echo "Running playhead benchmark against $MEDIA_PATH"
-INOUT_PLAYHEAD_BENCHMARK=1 \
-INOUT_PLAYHEAD_BENCHMARK_OUTPUT="$OUTPUT_PATH" \
-INOUT_PLAYHEAD_BENCHMARK_PROGRESS_OUTPUT="$PROGRESS_PATH" \
-INOUT_PLAYHEAD_BENCHMARK_EXIT=1 \
-INOUT_PLAYHEAD_BENCHMARK_SCENARIOS="$SCENARIOS" \
-"$APP_EXE" "$MEDIA_PATH" >/dev/null 2>&1 &
-APP_PID=$!
+ATTEMPT=1
+while (( ATTEMPT <= MAX_ATTEMPTS )); do
+  rm -f "$OUTPUT_PATH" "$PROGRESS_PATH"
+  rm -f "$SAMPLE_PATH"
+  kill_existing_app_instances
 
-SECONDS_WAITED=0
-while kill -0 "$APP_PID" 2>/dev/null; do
-  if [[ -f "$OUTPUT_PATH" ]]; then
-    break
-  fi
-  if (( SECONDS_WAITED >= TIMEOUT_SECONDS )); then
-    echo "ERROR: benchmark timed out after ${TIMEOUT_SECONDS}s" >&2
+  echo "Running playhead benchmark against $MEDIA_PATH (attempt ${ATTEMPT}/${MAX_ATTEMPTS})"
+  open -n -W -a "$APP" "$MEDIA_PATH" --args \
+    --playhead-benchmark \
+    --playhead-benchmark-output "$OUTPUT_PATH" \
+    --playhead-benchmark-progress "$PROGRESS_PATH" \
+    --playhead-benchmark-scenarios "$SCENARIOS" >/dev/null 2>&1 &
+  APP_PID=$!
+
+  TIMED_OUT=0
+  SECONDS_WAITED=0
+  while kill -0 "$APP_PID" 2>/dev/null; do
+    if [[ -f "$OUTPUT_PATH" ]]; then
+      break
+    fi
+    if (( SECONDS_WAITED >= TIMEOUT_SECONDS )); then
+      TIMED_OUT=1
+      break
+    fi
+    sleep 1
+    ((SECONDS_WAITED += 1))
+  done
+
+  if (( TIMED_OUT )); then
+    echo "Benchmark attempt ${ATTEMPT} timed out after ${TIMEOUT_SECONDS}s" >&2
     if [[ -f "$PROGRESS_PATH" ]]; then
       echo "Last benchmark progress:" >&2
       cat "$PROGRESS_PATH" >&2
     fi
+    capture_sample_if_possible "$APP_PID" "$SAMPLE_PATH"
+    kill_existing_app_instances
     kill "$APP_PID" >/dev/null 2>&1 || true
     wait "$APP_PID" >/dev/null 2>&1 || true
+    if (( ATTEMPT < MAX_ATTEMPTS )); then
+      echo "Retrying benchmark..." >&2
+      ((ATTEMPT += 1))
+      sleep 2
+      continue
+    fi
     exit 1
   fi
-  sleep 1
-  ((SECONDS_WAITED += 1))
-done
 
-wait "$APP_PID"
+  wait "$APP_PID"
+
+  if [[ -f "$OUTPUT_PATH" ]]; then
+    break
+  fi
+
+  echo "Benchmark attempt ${ATTEMPT} exited without producing output." >&2
+  if [[ -f "$PROGRESS_PATH" ]]; then
+    echo "Last benchmark progress:" >&2
+    cat "$PROGRESS_PATH" >&2
+  fi
+  capture_sample_if_possible "$APP_PID" "$SAMPLE_PATH"
+  if (( ATTEMPT < MAX_ATTEMPTS )); then
+    echo "Retrying benchmark..." >&2
+    ((ATTEMPT += 1))
+    sleep 2
+    continue
+  fi
+  exit 1
+done
 
 if [[ ! -f "$OUTPUT_PATH" ]]; then
   echo "ERROR: benchmark did not produce output at $OUTPUT_PATH" >&2

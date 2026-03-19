@@ -403,6 +403,9 @@ final class WorkspaceViewModel: ObservableObject {
     private var presentationModelCancellables: Set<AnyCancellable> = []
 
     init() {
+        if PlayheadBenchmarkConfig.shared.enabled {
+            PlayheadDiagnostics.shared.writeProgress(stage: "workspace_init_begin", scenario: nil)
+        }
         clipTimelinePresentation.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
@@ -431,11 +434,19 @@ final class WorkspaceViewModel: ObservableObject {
         loadPreferences()
         refreshExternalToolAvailabilityCache()
         refreshDownloaderStatus()
-        if let firstArg = CommandLine.arguments.dropFirst().first {
-            let url = URL(fileURLWithPath: firstArg)
+        if let mediaPath = Self.commandLineMediaPath() {
+            let url = URL(fileURLWithPath: mediaPath)
             if FileManager.default.fileExists(atPath: url.path) {
-                setSource(url)
+                if PlayheadBenchmarkConfig.shared.enabled {
+                    PlayheadDiagnostics.shared.writeProgress(stage: "cli_source_queued", scenario: nil)
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.setSource(url)
+                }
             }
+        }
+        if PlayheadBenchmarkConfig.shared.enabled {
+            PlayheadDiagnostics.shared.writeProgress(stage: "workspace_init_complete", scenario: nil)
         }
     }
 
@@ -457,6 +468,37 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
         DockProgressController.shared.clear()
+    }
+
+    private static func commandLineMediaPath() -> String? {
+        let args = Array(CommandLine.arguments.dropFirst())
+        let flagsWithValues: Set<String> = [
+            "--playhead-benchmark-output",
+            "--playhead-benchmark-progress",
+            "--playhead-benchmark-scenarios"
+        ]
+        let flagsWithoutValues: Set<String> = [
+            "--playhead-benchmark",
+            "--playhead-benchmark-no-exit"
+        ]
+
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            if flagsWithoutValues.contains(arg) {
+                index += 1
+                continue
+            }
+            if flagsWithValues.contains(arg) {
+                index += 2
+                continue
+            }
+            if FileManager.default.fileExists(atPath: arg) {
+                return arg
+            }
+            index += 1
+        }
+        return nil
     }
 
     private func loadPreferences() {

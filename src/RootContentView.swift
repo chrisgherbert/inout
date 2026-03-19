@@ -59,6 +59,9 @@ struct ContentView: View {
     @State private var showURLDownloadSetupSheet = false
 
     @MainActor init() {
+        if PlayheadBenchmarkConfig.shared.enabled {
+            PlayheadDiagnostics.shared.writeProgress(stage: "content_view_init", scenario: nil)
+        }
         _model = StateObject(wrappedValue: WorkspaceViewModel())
     }
 
