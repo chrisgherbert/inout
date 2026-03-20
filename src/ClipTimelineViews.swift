@@ -38,8 +38,10 @@ private final class ClipToolRuntimeState: ObservableObject {
     weak var waveformHostView: WaveformRasterHostView?
     weak var clipWindow: NSWindow?
     var playerTimeObserverToken: Any?
+    var selectionPlaybackBoundaryObserverToken: Any?
     var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
     var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
+    var selectionPlaybackEndSeconds: Double?
     var playerResizeStartHeight: CGFloat?
     var playerResizeStartGlobalY: CGFloat?
     var transcriptSidebarResizeStartWidth: CGFloat?
@@ -261,6 +263,20 @@ struct ClipToolView: View {
                         }
                     }
 
+                    if let selectionPlaybackEndSeconds = runtime.selectionPlaybackEndSeconds,
+                       player.rate != 0,
+                       newPlayhead >= (selectionPlaybackEndSeconds - (1.0 / 240.0)) {
+                        player.pause()
+                        let clampedEnd = max(clip.clipStartSeconds, min(selectionPlaybackEndSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
+                        let endTime = CMTime(seconds: clampedEnd, preferredTimescale: 600)
+                        player.seek(to: endTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                        playheadSeconds = clampedEnd
+                        playheadVisualSeconds = clampedEnd
+                        syncSharedPlayheadStateIfNeeded(clampedEnd, force: true, updateAlignment: true)
+                        clearSelectionPlaybackState()
+                        return
+                    }
+
                     if player.rate != 0 {
                         // While playing, keep manual viewport control until the playhead actually
                         // leaves the visible window. At that point, reveal it with a larger step
@@ -294,6 +310,38 @@ struct ClipToolView: View {
         runtime.playerTimeObserverToken = nil
         runtime.lastPlaybackUIUpdateTimestamp = 0
         runtime.lastPlaybackFollowUpdateTimestamp = 0
+        clearSelectionPlaybackState()
+    }
+
+    private func clearSelectionPlaybackState() {
+        if let token = runtime.selectionPlaybackBoundaryObserverToken {
+            player.removeTimeObserver(token)
+            runtime.selectionPlaybackBoundaryObserverToken = nil
+        }
+        runtime.selectionPlaybackEndSeconds = nil
+    }
+
+    private func installSelectionPlaybackBoundaryObserver(endSeconds: Double) {
+        if let token = runtime.selectionPlaybackBoundaryObserverToken {
+            player.removeTimeObserver(token)
+            runtime.selectionPlaybackBoundaryObserverToken = nil
+        }
+
+        runtime.selectionPlaybackEndSeconds = endSeconds
+        let endTime = CMTime(seconds: endSeconds, preferredTimescale: 600)
+        runtime.selectionPlaybackBoundaryObserverToken = player.addBoundaryTimeObserver(
+            forTimes: [NSValue(time: endTime)],
+            queue: .main
+        ) {
+            MainActor.assumeIsolated {
+                player.pause()
+                player.seek(to: endTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                playheadSeconds = endSeconds
+                playheadVisualSeconds = endSeconds
+                syncSharedPlayheadStateIfNeeded(endSeconds, force: true, updateAlignment: true)
+                clearSelectionPlaybackState()
+            }
+        }
     }
 
     private func loadPlayerItem() {
@@ -548,12 +596,34 @@ struct ClipToolView: View {
     }
 
     private func togglePlayback() {
+        clearSelectionPlaybackState()
         if player.rate != 0 {
             player.pause()
             syncSharedPlayheadStateIfNeeded(playheadSeconds, force: true, updateAlignment: true)
         } else {
             player.playImmediately(atRate: 1.0)
         }
+    }
+
+    private func playSelectionOnly() {
+        guard model.clipDurationSeconds > 0 else {
+            NSSound.beep()
+            return
+        }
+
+        let selectionStart = max(0, min(clip.clipStartSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let selectionEnd = max(selectionStart + 0.001, min(clip.clipEndSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
+
+        if player.rate != 0, runtime.selectionPlaybackEndSeconds != nil {
+            player.pause()
+            syncSharedPlayheadStateIfNeeded(playheadSeconds, force: true, updateAlignment: true)
+            clearSelectionPlaybackState()
+            return
+        }
+
+        installSelectionPlaybackBoundaryObserver(endSeconds: selectionEnd)
+        seekPlayer(to: selectionStart)
+        player.playImmediately(atRate: 1.0)
     }
 
     private func nextShuttleRate(from currentAbsRate: Float) -> Float {
@@ -591,6 +661,7 @@ struct ClipToolView: View {
     }
 
     private func pausePlayback() {
+        clearSelectionPlaybackState()
         if player.rate != 0 {
             player.pause()
         }
@@ -1008,6 +1079,13 @@ struct ClipToolView: View {
 
             if NSApp.keyWindow?.firstResponder is NSTextView {
                 return event
+            }
+
+            if flags.contains(.control) && !flags.contains(.command) && !flags.contains(.option) && !flags.contains(.shift) {
+                if event.keyCode == 49 {
+                    playSelectionOnly()
+                    return nil
+                }
             }
 
             if flags.isDisjoint(with: [.command, .option, .control, .shift]) {
