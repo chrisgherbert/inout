@@ -2,6 +2,36 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 
+private final class CachedTimelineThumbnailFrameBox {
+    let image: CGImage
+
+    init(image: CGImage) {
+        self.image = image
+    }
+}
+
+private enum TimelineThumbnailFrameCache {
+    static let shared: NSCache<NSString, CachedTimelineThumbnailFrameBox> = {
+        let cache = NSCache<NSString, CachedTimelineThumbnailFrameBox>()
+        cache.countLimit = 640
+        cache.totalCostLimit = 96 * 1024 * 1024
+        return cache
+    }()
+
+    static func image(forKey key: String) -> CGImage? {
+        shared.object(forKey: key as NSString)?.image
+    }
+
+    static func insert(_ image: CGImage, forKey key: String) {
+        let estimatedCost = max(1, image.width * image.height * 4)
+        shared.setObject(
+            CachedTimelineThumbnailFrameBox(image: image),
+            forKey: key as NSString,
+            cost: estimatedCost
+        )
+    }
+}
+
 func timelineThumbnailStripCacheKey(
     for url: URL,
     visibleStartSeconds: Double,
@@ -12,6 +42,19 @@ func timelineThumbnailStripCacheKey(
     let startFrameBucket = Int((visibleStartSeconds * 30.0).rounded())
     let endFrameBucket = Int((visibleEndSeconds * 30.0).rounded())
     return "\(url.path)|\(startFrameBucket)|\(endFrameBucket)|\(pixelWidth)x\(pixelHeight)"
+}
+
+private func timelineThumbnailFrameCacheKey(
+    for url: URL,
+    requestedSeconds: Double,
+    bucketSeconds: Double,
+    decodeMaximumSize: CGSize
+) -> String {
+    let safeBucket = max(1.0 / 120.0, bucketSeconds)
+    let timeBucket = Int((requestedSeconds / safeBucket).rounded())
+    let widthBucket = Int((decodeMaximumSize.width / 24.0).rounded()) * 24
+    let heightBucket = Int((decodeMaximumSize.height / 24.0).rounded()) * 24
+    return "\(url.path)|t\(timeBucket)|s\(widthBucket)x\(heightBucket)"
 }
 
 private func makeThumbnailGenerator(
@@ -63,6 +106,22 @@ private func aspectFillRect(for image: CGImage, in destinationRect: CGRect) -> C
     )
 }
 
+private func thumbnailDecodeMaximumSize(
+    aspectRatio: CGFloat,
+    tileWidth: CGFloat,
+    pixelHeight: Int
+) -> CGSize {
+    let destinationHeight = max(1, CGFloat(pixelHeight))
+    let overscan: CGFloat = 1.12
+
+    // Decode close to the final on-screen size, while leaving modest headroom
+    // for aspect-fill cropping and small quality losses during scaling.
+    let targetHeight = destinationHeight * overscan
+    let targetWidth = max(tileWidth, targetHeight * max(0.4, aspectRatio))
+
+    return CGSize(width: ceil(targetWidth), height: ceil(targetHeight))
+}
+
 func generateTimelineThumbnailStripImage(
     fileURL: URL,
     visibleStartSeconds: Double,
@@ -89,14 +148,23 @@ func generateTimelineThumbnailStripImage(
     let outputWidth = pixelWidth
     let toleranceSeconds = max(1.0 / 30.0, min(0.45, (visibleDuration / Double(tileCount)) * 0.35))
     let tolerance = CMTime(seconds: toleranceSeconds, preferredTimescale: 600)
+    let decodeMaximumSize = thumbnailDecodeMaximumSize(
+        aspectRatio: aspectRatio,
+        tileWidth: tileWidth,
+        pixelHeight: pixelHeight
+    )
+    let frameReuseBucketSeconds = max(
+        1.0 / 24.0,
+        min(0.5, (visibleDuration / Double(tileCount)) * 0.45)
+    )
     let strictGenerator = makeThumbnailGenerator(
         asset: asset,
-        maximumSize: CGSize(width: tileWidth * 2.0, height: CGFloat(pixelHeight * 2)),
+        maximumSize: decodeMaximumSize,
         tolerance: tolerance
     )
     let fallbackGenerator = makeThumbnailGenerator(
         asset: asset,
-        maximumSize: CGSize(width: tileWidth * 2.0, height: CGFloat(pixelHeight * 2)),
+        maximumSize: decodeMaximumSize,
         tolerance: .positiveInfinity
     )
 
@@ -116,12 +184,28 @@ func generateTimelineThumbnailStripImage(
         let fraction = (Double(index) + 0.5) / Double(tileCount)
         let requestedSeconds = safeVisibleStart + (visibleDuration * fraction)
         let clampedSeconds = max(0, min(requestedSeconds, safeEndTime))
+        let frameCacheKey = timelineThumbnailFrameCacheKey(
+            for: fileURL,
+            requestedSeconds: clampedSeconds,
+            bucketSeconds: frameReuseBucketSeconds,
+            decodeMaximumSize: decodeMaximumSize
+        )
+
+        if let cached = TimelineThumbnailFrameCache.image(forKey: frameCacheKey) {
+            images[index] = cached
+            continue
+        }
+
         let requestTime = CMTime(seconds: clampedSeconds, preferredTimescale: 600)
-        images[index] = copyThumbnailImage(
+        let image = copyThumbnailImage(
             strictGenerator: strictGenerator,
             fallbackGenerator: fallbackGenerator,
             time: requestTime
         )
+        if let image {
+            TimelineThumbnailFrameCache.insert(image, forKey: frameCacheKey)
+        }
+        images[index] = image
     }
 
     guard images.contains(where: { $0 != nil }) else { return nil }
