@@ -5,7 +5,6 @@ import InOutCore
 import UniformTypeIdentifiers
 import UserNotifications
 import Foundation
-import Combine
 
 enum ClipExportQueueStatus: String, Equatable {
     case queued
@@ -408,18 +407,10 @@ final class WorkspaceViewModel: ObservableObject {
     var cachedWhisperCLIAvailable = false
     var cachedWhisperModelAvailable = false
     var cachedWhisperAvailable = false
-    private var presentationModelCancellables: Set<AnyCancellable> = []
-
     init() {
         if PlayheadBenchmarkConfig.shared.enabled {
             PlayheadDiagnostics.shared.writeProgress(stage: "workspace_init_begin", scenario: nil)
         }
-        clipTimelinePresentation.objectWillChange
-            .sink { [weak self] _ in
-                self?.objectWillChange.send()
-            }
-            .store(in: &presentationModelCancellables)
-
         sourcePresentation.sourceURL = sourceURL
         sourcePresentation.sourceSessionID = sourceSessionID
         sourcePresentation.analysis = analysis
