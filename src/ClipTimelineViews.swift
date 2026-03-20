@@ -1015,6 +1015,14 @@ struct ClipToolView: View {
                     togglePlayback()
                     return nil
                 }
+                if chars == "=" || chars == "+" {
+                    adjustTimelineZoom(by: 1)
+                    return nil
+                }
+                if chars == "-" || chars == "_" {
+                    adjustTimelineZoom(by: -1)
+                    return nil
+                }
                 if chars == "k" {
                     pausePlayback()
                     return nil
@@ -1160,22 +1168,27 @@ struct ClipToolView: View {
             let dx = event.scrollingDeltaX
             let dy = event.scrollingDeltaY
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let acceleratedModifier = flags.contains(.shift) || flags.contains(.command)
-            let panPoints: CGFloat
+            let usesHorizontalModifier = flags.contains(.shift) || flags.contains(.command)
+
+            let sourceDelta: CGFloat
             if abs(dx) >= 0.1 {
-                panPoints = dx
-            } else if acceleratedModifier && abs(dy) >= 0.1 {
-                panPoints = dy * 2.5
+                sourceDelta = dx
+            } else if usesHorizontalModifier && abs(dy) >= 0.1 {
+                sourceDelta = dy
             } else {
                 return event
             }
 
+            // Match typical app behavior more closely:
+            // precise devices already report point-like deltas, while wheel mice report line steps.
+            let panPoints = event.hasPreciseScrollingDeltas ? sourceDelta : (sourceDelta * 14.0)
+
             // Ignore tiny jitter deltas to reduce needless redraw churn.
-            if abs(panPoints) < 0.45 {
+            if abs(panPoints) < (event.hasPreciseScrollingDeltas ? 0.45 : 1.0) {
                 return nil
             }
 
-            panViewport(byPoints: panPoints, smoothly: true)
+            panViewport(byPoints: panPoints, smoothly: true, responseFactor: 0.48)
             return nil
         }
     }
