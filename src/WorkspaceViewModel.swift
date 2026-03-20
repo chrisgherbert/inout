@@ -388,7 +388,10 @@ final class WorkspaceViewModel: ObservableObject {
     var queuedAnalysisConfigs: [UUID: QueuedAnalysisConfig] = [:]
     var waveformCache: [String: [Double]] = [:]
     var waveformCacheOrder: [String] = []
+    var timelineThumbnailStripCache: [String: CGImage] = [:]
+    var timelineThumbnailStripCacheOrder: [String] = []
     private let maxWaveformCacheEntries = 6
+    private let maxTimelineThumbnailStripCacheEntries = 18
     private let maxActivityConsoleCharacters = 200_000
     private let activityConsoleTrimCharacters = 150_000
     private let activityConsoleFlushIntervalNanos: UInt64 = 100_000_000
@@ -1010,6 +1013,25 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func waveformCacheKey(for url: URL, sampleCount: Int) -> String {
         "\(url.path)|\(sampleCount)"
+    }
+
+    func timelineThumbnailStripImageFromCache(forKey key: String) -> CGImage? {
+        guard let image = timelineThumbnailStripCache[key] else { return nil }
+        timelineThumbnailStripCacheOrder.removeAll { $0 == key }
+        timelineThumbnailStripCacheOrder.append(key)
+        return image
+    }
+
+    func cacheTimelineThumbnailStripImage(_ image: CGImage, forKey key: String) {
+        timelineThumbnailStripCache[key] = image
+        timelineThumbnailStripCacheOrder.removeAll { $0 == key }
+        timelineThumbnailStripCacheOrder.append(key)
+
+        if timelineThumbnailStripCacheOrder.count > maxTimelineThumbnailStripCacheEntries,
+           let oldest = timelineThumbnailStripCacheOrder.first {
+            timelineThumbnailStripCache.removeValue(forKey: oldest)
+            timelineThumbnailStripCacheOrder.removeFirst()
+        }
     }
 
     func notifyCompletion(_ title: String, message: String) {

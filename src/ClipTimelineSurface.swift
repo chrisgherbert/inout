@@ -25,6 +25,10 @@ final class WaveformRasterHostView: NSView {
     let endEdgeGlowLayer = CAGradientLayer()
     let startBoundaryPulseLayer = CAGradientLayer()
     let endBoundaryPulseLayer = CAGradientLayer()
+    let thumbnailClipLayer = CALayer()
+    let thumbnailPlaceholderLayer = CAGradientLayer()
+    let thumbnailLayer = CALayer()
+    let thumbnailSeparatorLayer = CALayer()
     let waveformClipLayer = CALayer()
     let waveformLayer = CALayer()
     let markerContainerLayer = CALayer()
@@ -35,6 +39,8 @@ final class WaveformRasterHostView: NSView {
     var totalDurationSeconds: Double = 0
     var visibleStartSeconds: Double = 0
     var visibleEndSeconds: Double = 1
+    var showsThumbnailStrip = false
+    var thumbnailStripHeight: CGFloat = 0
     var modelPlayheadSeconds: Double = 0
     var playheadDisplayWidth: CGFloat = 2
     var isDarkAppearance = false
@@ -164,6 +170,50 @@ final class WaveformRasterHostView: NSView {
             edgeLayer.endPoint = CGPoint(x: 1, y: 0.5)
             surfaceLayer.addSublayer(edgeLayer)
         }
+        thumbnailClipLayer.masksToBounds = true
+        thumbnailClipLayer.cornerCurve = .continuous
+        thumbnailClipLayer.cornerRadius = UIRadius.small
+        thumbnailClipLayer.backgroundColor = NSColor.black.withAlphaComponent(0.14).cgColor
+        thumbnailClipLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "opacity": NSNull(),
+            "backgroundColor": NSNull()
+        ]
+        thumbnailPlaceholderLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "colors": NSNull(),
+            "opacity": NSNull()
+        ]
+        thumbnailPlaceholderLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        thumbnailPlaceholderLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        thumbnailPlaceholderLayer.colors = [
+            NSColor.white.withAlphaComponent(0.05).cgColor,
+            NSColor.white.withAlphaComponent(0.09).cgColor,
+            NSColor.white.withAlphaComponent(0.05).cgColor
+        ]
+        thumbnailPlaceholderLayer.locations = [0, 0.5, 1]
+        thumbnailPlaceholderLayer.opacity = 0
+        thumbnailLayer.contentsGravity = .resize
+        thumbnailLayer.magnificationFilter = .linear
+        thumbnailLayer.minificationFilter = .trilinear
+        thumbnailLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        thumbnailLayer.actions = [
+            "contents": NSNull(),
+            "contentsRect": NSNull(),
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "opacity": NSNull()
+        ]
+        thumbnailSeparatorLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "backgroundColor": NSNull(),
+            "opacity": NSNull()
+        ]
+        thumbnailSeparatorLayer.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
+        thumbnailSeparatorLayer.opacity = 0
         waveformClipLayer.masksToBounds = true
         waveformClipLayer.cornerCurve = .continuous
         waveformClipLayer.cornerRadius = UIRadius.small
@@ -192,6 +242,10 @@ final class WaveformRasterHostView: NSView {
             "shadowOpacity": NSNull(),
             "shadowRadius": NSNull()
         ]
+        thumbnailClipLayer.addSublayer(thumbnailPlaceholderLayer)
+        thumbnailClipLayer.addSublayer(thumbnailLayer)
+        surfaceLayer.addSublayer(thumbnailClipLayer)
+        surfaceLayer.addSublayer(thumbnailSeparatorLayer)
         waveformClipLayer.addSublayer(waveformLayer)
         surfaceLayer.addSublayer(waveformClipLayer)
         surfaceLayer.addSublayer(markerContainerLayer)
@@ -235,6 +289,7 @@ final class WaveformRasterHostView: NSView {
     private var rulerGap: CGFloat { 2 }
     private var markerTopGutter: CGFloat { 8 }
     private var markerBottomGutter: CGFloat { 8 }
+    private var thumbnailGap: CGFloat { showsThumbnailStrip ? 4 : 0 }
     private var timelineVerticalOffset: CGFloat { rulerHeight + rulerGap + markerTopGutter }
     private var timelineHeight: CGFloat {
         max(1, bounds.height - rulerHeight - rulerGap - markerTopGutter - markerBottomGutter)
@@ -279,6 +334,28 @@ final class WaveformRasterHostView: NSView {
 
     func timelineRect() -> CGRect {
         CGRect(x: 0, y: timelineVerticalOffset, width: bounds.width, height: timelineHeight)
+    }
+
+    func thumbnailStripRect() -> CGRect {
+        let fullRect = timelineRect()
+        guard showsThumbnailStrip, thumbnailStripHeight > 0 else { return .zero }
+        let maxHeight = max(0, fullRect.height - 18)
+        let stripHeight = min(thumbnailStripHeight, maxHeight)
+        guard stripHeight > 0 else { return .zero }
+        return CGRect(x: fullRect.minX, y: fullRect.minY, width: fullRect.width, height: stripHeight)
+    }
+
+    func waveformRect() -> CGRect {
+        let fullRect = timelineRect()
+        let stripRect = thumbnailStripRect()
+        guard !stripRect.isEmpty else { return fullRect }
+        let waveformY = stripRect.maxY + thumbnailGap
+        return CGRect(
+            x: fullRect.minX,
+            y: waveformY,
+            width: fullRect.width,
+            height: max(1, fullRect.maxY - waveformY)
+        )
     }
 
     private func updateCursorForInteraction() {
@@ -902,7 +979,17 @@ final class WaveformRasterHostView: NSView {
         super.layout()
         surfaceLayer.frame = bounds
         backgroundLayer.frame = bounds
-        waveformClipLayer.frame = timelineRect()
+        let thumbnailRect = thumbnailStripRect()
+        thumbnailClipLayer.frame = thumbnailRect
+        thumbnailPlaceholderLayer.frame = thumbnailClipLayer.bounds
+        thumbnailLayer.frame = thumbnailClipLayer.bounds
+        thumbnailSeparatorLayer.frame = CGRect(
+            x: 0,
+            y: thumbnailRect.maxY + 1,
+            width: bounds.width,
+            height: 1
+        )
+        waveformClipLayer.frame = waveformRect()
         waveformLayer.frame = waveformClipLayer.bounds
         markerContainerLayer.frame = timelineRect()
         updateTimelineDecorationLayers()
@@ -1016,6 +1103,10 @@ final class WaveformRasterCoordinator {
     var lastMarkerLayoutSignature: Int?
     var lastQuickExportFlashToken: Int = 0
     var lastStaticTimelineSignature: Int?
+    var lastThumbnailStripRevision: Int = -1
+    var lastThumbnailStripLoading = false
+    var lastShowsThumbnailStrip = false
+    var lastThumbnailStripHeight: CGFloat = -1
 
     func setZoomRenderBuckets(_ buckets: [Double]) {
         let normalized = Array(Set(buckets.map { max(1, $0) })).sorted()
@@ -1046,6 +1137,10 @@ final class WaveformRasterCoordinator {
         lastAppliedZoomBucket = -1
         lastMarkerLayoutSignature = nil
         lastStaticTimelineSignature = nil
+        lastThumbnailStripRevision = -1
+        lastThumbnailStripLoading = false
+        lastShowsThumbnailStrip = false
+        lastThumbnailStripHeight = -1
         return true
     }
 
@@ -1211,6 +1306,14 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let highlightedMarkerID: UUID?
     let highlightedClipBoundary: ClipBoundaryHighlight?
     let quickExportFlashToken: Int
+    let showsThumbnailStrip: Bool
+    let thumbnailStripHeight: CGFloat
+    let thumbnailStripImage: CGImage?
+    let thumbnailStripRevision: Int
+    let isThumbnailStripLoading: Bool
+    let thumbnailStripSourceStartSeconds: Double
+    let thumbnailStripSourceEndSeconds: Double
+    let thumbnailStripSourceVisibleDurationSeconds: Double
     let onMarkerSeek: (Double) -> Void
     let onInteractiveSeek: (Double, Bool) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
@@ -1241,6 +1344,13 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         lhs.captureMarkers == rhs.captureMarkers &&
         lhs.highlightedMarkerID == rhs.highlightedMarkerID &&
         lhs.highlightedClipBoundary == rhs.highlightedClipBoundary &&
+        lhs.showsThumbnailStrip == rhs.showsThumbnailStrip &&
+        abs(lhs.thumbnailStripHeight - rhs.thumbnailStripHeight) < 0.0001 &&
+        lhs.thumbnailStripRevision == rhs.thumbnailStripRevision &&
+        lhs.isThumbnailStripLoading == rhs.isThumbnailStripLoading &&
+        abs(lhs.thumbnailStripSourceStartSeconds - rhs.thumbnailStripSourceStartSeconds) < 0.0001 &&
+        abs(lhs.thumbnailStripSourceEndSeconds - rhs.thumbnailStripSourceEndSeconds) < 0.0001 &&
+        abs(lhs.thumbnailStripSourceVisibleDurationSeconds - rhs.thumbnailStripSourceVisibleDurationSeconds) < 0.0001 &&
         lhs.quickExportFlashToken == rhs.quickExportFlashToken
     }
 
@@ -1281,6 +1391,11 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.modelPlayheadSeconds = playheadSeconds
         nsView.isDarkAppearance = isDarkAppearance
         nsView.highlightedClipBoundary = highlightedClipBoundary
+        let thumbnailGeometryChanged =
+            nsView.showsThumbnailStrip != showsThumbnailStrip ||
+            abs(nsView.thumbnailStripHeight - thumbnailStripHeight) > 0.0001
+        nsView.showsThumbnailStrip = showsThumbnailStrip
+        nsView.thumbnailStripHeight = thumbnailStripHeight
         context.coordinator.setZoomRenderBuckets(renderBuckets)
 
         let duration = max(0.0001, totalDurationSeconds)
@@ -1297,6 +1412,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         staticTimelineHasher.combine(Int((clipStartSeconds * 1000).rounded()))
         staticTimelineHasher.combine(Int((clipEndSeconds * 1000).rounded()))
         staticTimelineHasher.combine(Int((zoomBucket * 1000).rounded()))
+        staticTimelineHasher.combine(showsThumbnailStrip)
+        staticTimelineHasher.combine(Int((thumbnailStripHeight * 10).rounded()))
         staticTimelineHasher.combine(highlightedMarkerID)
         staticTimelineHasher.combine(highlightedClipBoundary)
         staticTimelineHasher.combine(Int((nsView.bounds.width * 10).rounded()))
@@ -1314,14 +1431,84 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         CATransaction.setDisableActions(true)
 
         let timelineRect = nsView.timelineRect()
+        let thumbnailRect = nsView.thumbnailStripRect()
+        let waveformRect = nsView.waveformRect()
 
-        if !nsView.bounds.equalTo(context.coordinator.lastAppliedBounds) {
+        if !nsView.bounds.equalTo(context.coordinator.lastAppliedBounds) || thumbnailGeometryChanged {
             nsView.surfaceLayer.frame = nsView.bounds
             nsView.backgroundLayer.frame = nsView.bounds
-            nsView.waveformClipLayer.frame = timelineRect
+            nsView.thumbnailClipLayer.frame = thumbnailRect
+            nsView.thumbnailPlaceholderLayer.frame = nsView.thumbnailClipLayer.bounds
+            nsView.thumbnailLayer.frame = nsView.thumbnailClipLayer.bounds
+            nsView.thumbnailSeparatorLayer.frame = CGRect(
+                x: 0,
+                y: thumbnailRect.maxY + 1,
+                width: nsView.bounds.width,
+                height: 1
+            )
+            nsView.waveformClipLayer.frame = waveformRect
             nsView.waveformLayer.frame = nsView.waveformClipLayer.bounds
             nsView.markerContainerLayer.frame = timelineRect
             context.coordinator.lastAppliedBounds = nsView.bounds
+        }
+
+        let needsThumbnailUpdate =
+            context.coordinator.lastThumbnailStripRevision != thumbnailStripRevision ||
+            context.coordinator.lastThumbnailStripLoading != isThumbnailStripLoading ||
+            context.coordinator.lastShowsThumbnailStrip != showsThumbnailStrip ||
+            abs(context.coordinator.lastThumbnailStripHeight - thumbnailStripHeight) > 0.0001 ||
+            thumbnailGeometryChanged
+
+        if needsThumbnailUpdate {
+            nsView.thumbnailClipLayer.isHidden = !showsThumbnailStrip
+            nsView.thumbnailSeparatorLayer.opacity = showsThumbnailStrip ? 1.0 : 0.0
+            if showsThumbnailStrip {
+                nsView.thumbnailClipLayer.backgroundColor = NSColor.black.withAlphaComponent(isThumbnailStripLoading ? 0.18 : 0.12).cgColor
+                let shouldCrossfadeThumbnails =
+                    thumbnailStripImage != nil &&
+                    nsView.thumbnailLayer.contents != nil &&
+                    context.coordinator.lastThumbnailStripRevision >= 0 &&
+                    context.coordinator.lastThumbnailStripRevision != thumbnailStripRevision
+                if shouldCrossfadeThumbnails {
+                    let transition = CATransition()
+                    transition.type = .fade
+                    transition.duration = 0.12
+                    transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    transition.isRemovedOnCompletion = true
+                    nsView.thumbnailLayer.add(transition, forKey: "thumbnailCrossfade")
+                }
+                nsView.thumbnailLayer.contents = thumbnailStripImage
+                nsView.thumbnailLayer.opacity = thumbnailStripImage == nil ? 0.0 : 1.0
+                nsView.thumbnailPlaceholderLayer.opacity = thumbnailStripImage == nil ? 1.0 : 0.0
+            } else {
+                nsView.thumbnailLayer.contents = nil
+                nsView.thumbnailLayer.opacity = 0.0
+                nsView.thumbnailPlaceholderLayer.opacity = 0.0
+            }
+            context.coordinator.lastThumbnailStripRevision = thumbnailStripRevision
+            context.coordinator.lastThumbnailStripLoading = isThumbnailStripLoading
+            context.coordinator.lastShowsThumbnailStrip = showsThumbnailStrip
+            context.coordinator.lastThumbnailStripHeight = thumbnailStripHeight
+        }
+
+        if showsThumbnailStrip,
+           nsView.thumbnailLayer.contents != nil {
+            let sourceDuration = max(0.0001, thumbnailStripSourceEndSeconds - thumbnailStripSourceStartSeconds)
+            let currentVisibleDuration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
+            let sourceVisibleDuration = max(0.0001, thumbnailStripSourceVisibleDurationSeconds)
+            let isZoomStale = abs(sourceVisibleDuration - currentVisibleDuration) > 0.0001
+            let displayVisibleDuration = (isThumbnailStripLoading && isZoomStale) ? sourceVisibleDuration : currentVisibleDuration
+            let pointsPerSecond = max(1, thumbnailRect.width) / CGFloat(displayVisibleDuration)
+            let displayWidth = max(1, CGFloat(sourceDuration) * pointsPerSecond)
+            let originX = CGFloat(thumbnailStripSourceStartSeconds - visibleStartSeconds) * pointsPerSecond
+            nsView.thumbnailLayer.frame = CGRect(
+                x: originX,
+                y: 0,
+                width: displayWidth,
+                height: thumbnailRect.height
+            )
+        } else {
+            nsView.thumbnailLayer.frame = nsView.thumbnailClipLayer.bounds
         }
 
         if needsFullTimelineUpdate {

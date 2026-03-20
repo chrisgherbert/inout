@@ -21,6 +21,14 @@ struct WaveformView: View {
     let highlightedClipBoundary: ClipBoundaryHighlight?
     let captureFrameFlashToken: Int
     let quickExportFlashToken: Int
+    let showsThumbnailStrip: Bool
+    let thumbnailStripHeight: CGFloat
+    let thumbnailStripImage: CGImage?
+    let thumbnailStripRevision: Int
+    let isThumbnailStripLoading: Bool
+    let thumbnailStripSourceStartSeconds: Double
+    let thumbnailStripSourceEndSeconds: Double
+    let thumbnailStripSourceVisibleDurationSeconds: Double
     let onSeek: (Double, Bool) -> Void
     let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
@@ -54,6 +62,14 @@ struct WaveformView: View {
             highlightedMarkerID: highlightedMarkerID,
             highlightedClipBoundary: highlightedClipBoundary,
             quickExportFlashToken: quickExportFlashToken,
+            showsThumbnailStrip: showsThumbnailStrip,
+            thumbnailStripHeight: thumbnailStripHeight,
+            thumbnailStripImage: thumbnailStripImage,
+            thumbnailStripRevision: thumbnailStripRevision,
+            isThumbnailStripLoading: isThumbnailStripLoading,
+            thumbnailStripSourceStartSeconds: thumbnailStripSourceStartSeconds,
+            thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,
+            thumbnailStripSourceVisibleDurationSeconds: thumbnailStripSourceVisibleDurationSeconds,
             onMarkerSeek: { seconds in
                 onSeek(seconds, true)
             },

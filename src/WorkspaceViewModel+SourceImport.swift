@@ -394,6 +394,8 @@ extension WorkspaceViewModel {
 
         waveformCache.removeAll(keepingCapacity: false)
         waveformCacheOrder.removeAll(keepingCapacity: false)
+        timelineThumbnailStripCache.removeAll(keepingCapacity: false)
+        timelineThumbnailStripCacheOrder.removeAll(keepingCapacity: false)
         clearQueuedJobs()
 
         sourceURL = url
@@ -447,6 +449,8 @@ extension WorkspaceViewModel {
         isGeneratingTranscript = false
         waveformCache.removeAll(keepingCapacity: false)
         waveformCacheOrder.removeAll(keepingCapacity: false)
+        timelineThumbnailStripCache.removeAll(keepingCapacity: false)
+        timelineThumbnailStripCacheOrder.removeAll(keepingCapacity: false)
         clearQueuedJobs()
         outputURL = nil
         captureTimelineMarkers = []

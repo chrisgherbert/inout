@@ -11,6 +11,8 @@ import UserNotifications
 @MainActor
 private final class ClipToolRuntimeState: ObservableObject {
     var waveformTask: Task<Void, Never>?
+    var thumbnailStripTask: Task<CGImage?, Never>?
+    var thumbnailStripDebounceTask: Task<Void, Never>?
     var keyMonitor: Any?
     var flagsMonitor: Any?
     var scrollMonitor: Any?
@@ -43,6 +45,7 @@ private final class ClipToolRuntimeState: ObservableObject {
     var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
     var lastTranscriptSidebarPlaybackUpdateTimestamp: CFTimeInterval = 0
     var selectionPlaybackEndSeconds: Double?
+    var lastThumbnailStripRequestKey: String?
     var playerResizeStartHeight: CGFloat?
     var playerResizeStartGlobalY: CGFloat?
     var transcriptSidebarResizeStartWidth: CGFloat?
@@ -68,6 +71,14 @@ struct ClipToolView: View {
     @State private var playerDurationSeconds: Double = 0
     @State private var waveformSamples: [Double] = []
     @State private var isWaveformLoading = false
+    @State private var thumbnailStripImage: CGImage?
+    @State private var thumbnailStripRevision: Int = 0
+    @State private var isThumbnailStripLoading = false
+    @State private var thumbnailStripSourceStartSeconds: Double = 0
+    @State private var thumbnailStripSourceEndSeconds: Double = 0
+    @State private var thumbnailStripSourceVisibleDurationSeconds: Double = 0
+    @State private var thumbnailStripSourceViewportWidth: CGFloat = 0
+    @State private var timelineInteractiveWidth: CGFloat = 1
     @State private var timelineZoom: Double = 1.0
     @State private var viewportStartSeconds: Double = 0
     @State private var isOptionKeyPressed = false
@@ -112,11 +123,22 @@ struct ClipToolView: View {
         isClipBoundaryDragActive ? visualClipEndSeconds : clip.clipEndSeconds
     }
 
+    private var thumbnailStripHeight: CGFloat {
+        model.hasVideoTrack ? (isCompactLayout ? 36 : 44) : 0
+    }
+
+    private var timelinePanelHeight: CGFloat {
+        if model.hasVideoTrack {
+            return isCompactLayout ? 104 : 126
+        }
+        return isCompactLayout ? 68 : 82
+    }
+
     private var isBenchmarkReady: Bool {
         PlayheadDiagnostics.shared.isEnabled &&
         model.sourceURL != nil &&
         !isWaveformLoading &&
-        runtime.timelineInteractiveWidth > 0 &&
+        timelineInteractiveWidth > 0 &&
         player.currentItem != nil
     }
 
@@ -409,6 +431,142 @@ struct ClipToolView: View {
                 self.waveformSamples = samples
                 self.isWaveformLoading = false
             }
+        }
+    }
+
+    private func clearThumbnailStrip() {
+        runtime.thumbnailStripTask?.cancel()
+        runtime.thumbnailStripTask = nil
+        runtime.thumbnailStripDebounceTask?.cancel()
+        runtime.thumbnailStripDebounceTask = nil
+        runtime.lastThumbnailStripRequestKey = nil
+        thumbnailStripImage = nil
+        thumbnailStripRevision &+= 1
+        thumbnailStripSourceStartSeconds = 0
+        thumbnailStripSourceEndSeconds = 0
+        thumbnailStripSourceVisibleDurationSeconds = 0
+        thumbnailStripSourceViewportWidth = 0
+        isThumbnailStripLoading = false
+    }
+
+    private func thumbnailGenerationRange() -> (start: Double, end: Double)? {
+        guard visibleEndSeconds > visibleStartSeconds, totalDurationSeconds > 0 else { return nil }
+        let visibleDuration = visibleEndSeconds - visibleStartSeconds
+        let padding = visibleDuration * 0.35
+        let start = max(0, visibleStartSeconds - padding)
+        let end = min(totalDurationSeconds, visibleEndSeconds + padding)
+        guard end > start else { return nil }
+        return (start, end)
+    }
+
+    private func scheduleThumbnailStripGeneration(immediate: Bool = false) {
+        guard model.hasVideoTrack,
+              let sourceURL = model.sourceURL,
+              timelineInteractiveWidth > 0,
+              thumbnailStripHeight > 0,
+              visibleEndSeconds > visibleStartSeconds else {
+            clearThumbnailStrip()
+            return
+        }
+
+        let visibleDuration = visibleEndSeconds - visibleStartSeconds
+        let viewportWidth = timelineInteractiveWidth
+        if thumbnailStripImage != nil,
+           thumbnailStripSourceEndSeconds > thumbnailStripSourceStartSeconds {
+            let refreshInset = visibleDuration * 0.15
+            let sourceVisibleDuration = max(0.0001, thumbnailStripSourceVisibleDurationSeconds)
+            let sourceViewportWidth = max(1, thumbnailStripSourceViewportWidth)
+            let zoomRatio = max(sourceVisibleDuration, visibleDuration) / min(sourceVisibleDuration, visibleDuration)
+            let widthRatio = max(sourceViewportWidth, viewportWidth) / min(sourceViewportWidth, max(1, viewportWidth))
+            let widthDelta = abs(sourceViewportWidth - viewportWidth)
+            let needsRefresh =
+                visibleStartSeconds < thumbnailStripSourceStartSeconds ||
+                visibleEndSeconds > thumbnailStripSourceEndSeconds ||
+                visibleStartSeconds < (thumbnailStripSourceStartSeconds + refreshInset) ||
+                visibleEndSeconds > (thumbnailStripSourceEndSeconds - refreshInset) ||
+                zoomRatio > 1.12 ||
+                widthRatio > 1.02 ||
+                widthDelta >= 12
+            if !needsRefresh {
+                return
+            }
+        }
+
+        guard let generationRange = thumbnailGenerationRange() else {
+            clearThumbnailStrip()
+            return
+        }
+        let generationDuration = generationRange.end - generationRange.start
+
+        let scale = runtime.clipWindow?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let widthRatio = max(1.0, generationDuration / visibleDuration)
+        let pixelWidth = max(1, Int((timelineInteractiveWidth * scale * widthRatio).rounded()))
+        let pixelHeight = max(1, Int((thumbnailStripHeight * scale).rounded()))
+        let requestKey = timelineThumbnailStripCacheKey(
+            for: sourceURL,
+            visibleStartSeconds: generationRange.start,
+            visibleEndSeconds: generationRange.end,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
+        )
+        let visibleStart = generationRange.start
+        let visibleEnd = generationRange.end
+        let totalDuration = totalDurationSeconds
+
+        if runtime.lastThumbnailStripRequestKey == requestKey,
+           thumbnailStripImage != nil || isThumbnailStripLoading {
+            return
+        }
+        runtime.lastThumbnailStripRequestKey = requestKey
+
+        if let cached = model.timelineThumbnailStripImageFromCache(forKey: requestKey) {
+            thumbnailStripImage = cached
+            thumbnailStripRevision &+= 1
+            thumbnailStripSourceStartSeconds = visibleStart
+            thumbnailStripSourceEndSeconds = visibleEnd
+            thumbnailStripSourceVisibleDurationSeconds = visibleDuration
+            thumbnailStripSourceViewportWidth = viewportWidth
+            isThumbnailStripLoading = false
+            return
+        }
+
+        runtime.thumbnailStripDebounceTask?.cancel()
+        runtime.thumbnailStripTask?.cancel()
+        isThumbnailStripLoading = true
+
+        let debounceNanoseconds: UInt64 = immediate ? 0 : 150_000_000
+        runtime.thumbnailStripDebounceTask = Task { @MainActor in
+            if debounceNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: debounceNanoseconds)
+            }
+            guard !Task.isCancelled else { return }
+
+            runtime.thumbnailStripTask?.cancel()
+            runtime.thumbnailStripTask = Task.detached(priority: .utility) {
+                generateTimelineThumbnailStripImage(
+                    fileURL: sourceURL,
+                    visibleStartSeconds: visibleStart,
+                    visibleEndSeconds: visibleEnd,
+                    totalDurationSeconds: totalDuration,
+                    pixelWidth: pixelWidth,
+                    pixelHeight: pixelHeight,
+                    shouldCancel: { Task.isCancelled }
+                )
+            }
+
+            let image = await runtime.thumbnailStripTask?.value
+            guard !Task.isCancelled, runtime.lastThumbnailStripRequestKey == requestKey else { return }
+
+            if let image {
+                model.cacheTimelineThumbnailStripImage(image, forKey: requestKey)
+                thumbnailStripImage = image
+                thumbnailStripRevision &+= 1
+                thumbnailStripSourceStartSeconds = visibleStart
+                thumbnailStripSourceEndSeconds = visibleEnd
+                thumbnailStripSourceVisibleDurationSeconds = visibleDuration
+                thumbnailStripSourceViewportWidth = viewportWidth
+            }
+            isThumbnailStripLoading = false
         }
     }
 
@@ -1832,6 +1990,8 @@ struct ClipToolView: View {
             clipEndSeconds: displayedClipEndSeconds,
             clipDurationSeconds: model.clipDurationSeconds,
             hasVideoTrack: model.hasVideoTrack,
+            timelinePanelHeight: timelinePanelHeight,
+            thumbnailStripHeight: thumbnailStripHeight,
             clipStartText: $clipTimelinePresentation.clipStartText,
             clipEndText: $clipTimelinePresentation.clipEndText,
             onCommitClipStartText: { model.commitClipStartText(undoManager: undoManager) },
@@ -1840,6 +2000,12 @@ struct ClipToolView: View {
             reduceTransparency: reduceTransparency,
             isWaveformLoading: isWaveformLoading,
             waveformSamples: waveformSamples,
+            thumbnailStripImage: thumbnailStripImage,
+            thumbnailStripRevision: thumbnailStripRevision,
+            isThumbnailStripLoading: isThumbnailStripLoading,
+            thumbnailStripSourceStartSeconds: thumbnailStripSourceStartSeconds,
+            thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,
+            thumbnailStripSourceVisibleDurationSeconds: thumbnailStripSourceVisibleDurationSeconds,
             allowedTimelineZoomLevels: allowedTimelineZoomLevels,
             timelineZoom: timelineZoom,
             totalDurationSeconds: totalDurationSeconds,
@@ -1855,7 +2021,10 @@ struct ClipToolView: View {
             highlightedClipBoundary: clip.highlightedClipBoundary,
             captureFrameFlashToken: clip.captureFrameFlashToken,
             quickExportFlashToken: clip.quickExportFlashToken,
-            onTimelineWidthChanged: { runtime.timelineInteractiveWidth = $0 },
+            onTimelineWidthChanged: { width in
+                runtime.timelineInteractiveWidth = width
+                timelineInteractiveWidth = width
+            },
             onSeek: { seconds, shouldSnapToMarker in
                 let target = shouldSnapToMarker ? snappedMarkerTime(around: seconds) : seconds
                 if shouldSnapToMarker {
@@ -2090,6 +2259,7 @@ struct ClipToolView: View {
             installScrollMonitor()
             installMouseDownMonitor()
             installMiddleMousePanMonitor()
+            scheduleThumbnailStripGeneration(immediate: true)
             if shouldDriveClipTranscriptSidebarTime {
                 syncClipTranscriptSidebarTimeIfNeeded(displayedPlayheadSeconds, force: true)
             }
@@ -2097,7 +2267,9 @@ struct ClipToolView: View {
         }
 
         let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
+            clearThumbnailStrip()
             loadPlayerItem()
+            scheduleThumbnailStripGeneration(immediate: true)
             registerBenchmarkDriverIfNeeded()
         }
 
@@ -2139,11 +2311,21 @@ struct ClipToolView: View {
                     model.clipAdvancedVideoCodec = .h264
                 }
             }
-            .onChange(of: runtime.timelineInteractiveWidth) { _ in
+            .onChange(of: timelineInteractiveWidth) { _ in
+                scheduleThumbnailStripGeneration()
                 registerBenchmarkDriverIfNeeded()
             }
             .onChange(of: isWaveformLoading) { _ in
                 registerBenchmarkDriverIfNeeded()
+            }
+            .onChange(of: visibleStartSeconds) { _ in
+                scheduleThumbnailStripGeneration()
+            }
+            .onChange(of: visibleEndSeconds) { _ in
+                scheduleThumbnailStripGeneration()
+            }
+            .onChange(of: model.hasVideoTrack) { _ in
+                scheduleThumbnailStripGeneration(immediate: true)
             }
 
         let step5 = step4
@@ -2189,6 +2371,8 @@ struct ClipToolView: View {
 
         return step5.onDisappear {
             runtime.waveformTask?.cancel()
+            runtime.thumbnailStripTask?.cancel()
+            runtime.thumbnailStripDebounceTask?.cancel()
             stopManualViewportPan()
             stopClipBoundaryVisualSmoothing()
             isClipBoundaryDragActive = false

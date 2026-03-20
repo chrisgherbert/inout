@@ -10,6 +10,8 @@ struct ClipSelectionPanel: View, Equatable {
     let clipEndSeconds: Double
     let clipDurationSeconds: Double
     let hasVideoTrack: Bool
+    let timelinePanelHeight: CGFloat
+    let thumbnailStripHeight: CGFloat
     @Binding var clipStartText: String
     @Binding var clipEndText: String
     let onCommitClipStartText: () -> Void
@@ -18,6 +20,12 @@ struct ClipSelectionPanel: View, Equatable {
     let reduceTransparency: Bool
     let isWaveformLoading: Bool
     let waveformSamples: [Double]
+    let thumbnailStripImage: CGImage?
+    let thumbnailStripRevision: Int
+    let isThumbnailStripLoading: Bool
+    let thumbnailStripSourceStartSeconds: Double
+    let thumbnailStripSourceEndSeconds: Double
+    let thumbnailStripSourceVisibleDurationSeconds: Double
     let allowedTimelineZoomLevels: [Double]
     let timelineZoom: Double
     let totalDurationSeconds: Double
@@ -55,10 +63,17 @@ struct ClipSelectionPanel: View, Equatable {
         abs(lhs.clipEndSeconds - rhs.clipEndSeconds) < 0.0001 &&
         abs(lhs.clipDurationSeconds - rhs.clipDurationSeconds) < 0.0001 &&
         lhs.hasVideoTrack == rhs.hasVideoTrack &&
+        abs(lhs.timelinePanelHeight - rhs.timelinePanelHeight) < 0.0001 &&
+        abs(lhs.thumbnailStripHeight - rhs.thumbnailStripHeight) < 0.0001 &&
         lhs.isCompactLayout == rhs.isCompactLayout &&
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.isWaveformLoading == rhs.isWaveformLoading &&
         lhs.waveformSamples.count == rhs.waveformSamples.count &&
+        lhs.thumbnailStripRevision == rhs.thumbnailStripRevision &&
+        lhs.isThumbnailStripLoading == rhs.isThumbnailStripLoading &&
+        abs(lhs.thumbnailStripSourceStartSeconds - rhs.thumbnailStripSourceStartSeconds) < 0.0001 &&
+        abs(lhs.thumbnailStripSourceEndSeconds - rhs.thumbnailStripSourceEndSeconds) < 0.0001 &&
+        abs(lhs.thumbnailStripSourceVisibleDurationSeconds - rhs.thumbnailStripSourceVisibleDurationSeconds) < 0.0001 &&
         lhs.allowedTimelineZoomLevels == rhs.allowedTimelineZoomLevels &&
         abs(lhs.timelineZoom - rhs.timelineZoom) < 0.0001 &&
         abs(lhs.totalDurationSeconds - rhs.totalDurationSeconds) < 0.0001 &&
@@ -81,11 +96,12 @@ struct ClipSelectionPanel: View, Equatable {
         VStack(alignment: .leading, spacing: 10) {
             if isWaveformLoading {
                 WaveformLoadingPlaceholder(
+                    hasVideoTrack: hasVideoTrack,
                     isCompactLayout: isCompactLayout,
                     reduceTransparency: reduceTransparency
                 )
                 .frame(maxWidth: .infinity)
-                .frame(height: isCompactLayout ? 68 : 82)
+                .frame(height: timelinePanelHeight)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .padding(.bottom, -6)
@@ -118,6 +134,14 @@ struct ClipSelectionPanel: View, Equatable {
                     highlightedClipBoundary: highlightedClipBoundary,
                     captureFrameFlashToken: captureFrameFlashToken,
                     quickExportFlashToken: quickExportFlashToken,
+                    showsThumbnailStrip: hasVideoTrack && thumbnailStripHeight > 0,
+                    thumbnailStripHeight: thumbnailStripHeight,
+                    thumbnailStripImage: thumbnailStripImage,
+                    thumbnailStripRevision: thumbnailStripRevision,
+                    isThumbnailStripLoading: isThumbnailStripLoading,
+                    thumbnailStripSourceStartSeconds: thumbnailStripSourceStartSeconds,
+                    thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,
+                    thumbnailStripSourceVisibleDurationSeconds: thumbnailStripSourceVisibleDurationSeconds,
                     onSeek: onSeek,
                     onPlayheadDragEdgePan: onPlayheadDragEdgePan,
                     onPlayheadDragStateChanged: onPlayheadDragStateChanged,
@@ -128,7 +152,7 @@ struct ClipSelectionPanel: View, Equatable {
                     onPointerTimeChanged: onWaveformPointerTimeChanged,
                     onHostViewAvailable: onWaveformHostViewAvailable
                 )
-                .frame(height: isCompactLayout ? 68 : 82)
+                .frame(height: timelinePanelHeight)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .padding(.bottom, -6)
@@ -216,6 +240,7 @@ struct ClipSelectionPanel: View, Equatable {
 }
 
 private struct WaveformLoadingPlaceholder: View {
+    let hasVideoTrack: Bool
     let isCompactLayout: Bool
     let reduceTransparency: Bool
 
@@ -239,10 +264,10 @@ private struct WaveformLoadingPlaceholder: View {
                     )
 
                 HStack(spacing: 8) {
-                    Image(systemName: "waveform")
+                    Image(systemName: hasVideoTrack ? "film.stack.fill" : "waveform")
                         .font(.system(size: isCompactLayout ? 15 : 17, weight: .semibold))
                         .foregroundStyle(.secondary.opacity(0.95))
-                    Text("Generating waveform…")
+                    Text(hasVideoTrack ? "Generating timeline previews…" : "Generating waveform…")
                         .font(.system(size: isCompactLayout ? 12.5 : 13.5, weight: .semibold))
                         .foregroundStyle(.primary.opacity(0.88))
                 }
