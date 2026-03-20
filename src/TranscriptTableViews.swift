@@ -573,12 +573,40 @@ struct TranscriptTableView: NSViewRepresentable {
             guard visibleRows.location >= 0, visibleRows.location < upperBound else { return }
 
             for rowIndex in visibleRows.location..<upperBound {
-                guard let rowView = tableView.rowView(atRow: rowIndex, makeIfNecessary: false) as? TranscriptNSTableRowView else { continue }
-                rowView.isSearchMatch = matchingRowIDs.contains(rows[rowIndex].id)
-                rowView.isActivePlaybackRow = showsPlaybackIndicator && rows[rowIndex].id == activeRowID
-                rowView.isCurrentSearchResult = rows[rowIndex].id == currentSearchResultRowID
-                rowView.updateHoverStateForCurrentMousePosition()
+                refreshRowState(at: rowIndex, in: tableView)
             }
+        }
+
+        func refreshRowStates(forRowIDs rowIDs: [UUID?]) {
+            guard let tableView else { return }
+            let visibleRows = tableView.rows(in: tableView.visibleRect)
+            guard visibleRows.length > 0 else { return }
+
+            let visibleRange = visibleRows.location..<(visibleRows.location + visibleRows.length)
+            let uniqueRowIndexes: Set<Int> = Set(
+                rowIDs.compactMap { rowID in
+                    guard let rowID, let rowIndex = rowIndexByID[rowID], visibleRange.contains(rowIndex) else {
+                        return nil
+                    }
+                    return rowIndex
+                }
+            )
+
+            for rowIndex in uniqueRowIndexes {
+                refreshRowState(at: rowIndex, in: tableView)
+            }
+        }
+
+        private func refreshRowState(at rowIndex: Int, in tableView: TranscriptNSTableView) {
+            guard rowIndex >= 0, rowIndex < rows.count,
+                  let rowView = tableView.rowView(atRow: rowIndex, makeIfNecessary: false) as? TranscriptNSTableRowView else {
+                return
+            }
+
+            rowView.isSearchMatch = matchingRowIDs.contains(rows[rowIndex].id)
+            rowView.isActivePlaybackRow = showsPlaybackIndicator && rows[rowIndex].id == activeRowID
+            rowView.isCurrentSearchResult = rows[rowIndex].id == currentSearchResultRowID
+            rowView.updateHoverStateForCurrentMousePosition()
         }
 
         func refreshVisibleCellContent() {
@@ -944,6 +972,8 @@ struct TranscriptTableView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let tableView = context.coordinator.tableView else { return }
+        let previousActiveRowID = context.coordinator.activeRowID
+        let previousCurrentSearchResultRowID = context.coordinator.currentSearchResultRowID
         let rowsChanged = context.coordinator.rowsVersion != rowsVersion
         let fontChanged = context.coordinator.fontSize != fontSize
         let searchChanged = context.coordinator.searchVersion != searchVersion
@@ -991,8 +1021,17 @@ struct TranscriptTableView: NSViewRepresentable {
             if searchChanged {
                 context.coordinator.refreshVisibleCellContent()
             }
-            if searchChanged || currentSearchResultChanged || activeRowChanged || playbackIndicatorChanged {
+            if searchChanged || playbackIndicatorChanged {
                 context.coordinator.refreshVisibleRowStates()
+            } else if currentSearchResultChanged || activeRowChanged {
+                context.coordinator.refreshRowStates(
+                    forRowIDs: [
+                        previousActiveRowID,
+                        activeRowID,
+                        previousCurrentSearchResultRowID,
+                        currentSearchResultRowID
+                    ]
+                )
             }
         }
         context.coordinator.applyActiveSelectionIfNeeded()

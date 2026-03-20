@@ -41,6 +41,7 @@ private final class ClipToolRuntimeState: ObservableObject {
     var selectionPlaybackBoundaryObserverToken: Any?
     var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
     var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
+    var lastTranscriptSidebarPlaybackUpdateTimestamp: CFTimeInterval = 0
     var selectionPlaybackEndSeconds: Double?
     var playerResizeStartHeight: CGFloat?
     var playerResizeStartGlobalY: CGFloat?
@@ -310,6 +311,7 @@ struct ClipToolView: View {
         runtime.playerTimeObserverToken = nil
         runtime.lastPlaybackUIUpdateTimestamp = 0
         runtime.lastPlaybackFollowUpdateTimestamp = 0
+        runtime.lastTranscriptSidebarPlaybackUpdateTimestamp = 0
         clearSelectionPlaybackState()
     }
 
@@ -595,11 +597,33 @@ struct ClipToolView: View {
         seekPlayer(to: playheadSeconds + seconds)
     }
 
+    private func syncClipTranscriptSidebarTimeIfNeeded(_ time: Double, force: Bool = false) {
+        guard shouldDriveClipTranscriptSidebarTime else { return }
+
+        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let now = CACurrentMediaTime()
+        let isPlaybackDriven = player.rate != 0 && !isPlayheadDragActive
+        let minimumPlaybackInterval = 1.0 / 12.0
+
+        if force || !isPlaybackDriven {
+            clipTranscriptSidebarTimeSeconds = clamped
+            runtime.lastTranscriptSidebarPlaybackUpdateTimestamp = now
+            return
+        }
+
+        let timeDelta = abs(clamped - clipTranscriptSidebarTimeSeconds)
+        if timeDelta >= 0.20 || (now - runtime.lastTranscriptSidebarPlaybackUpdateTimestamp) >= minimumPlaybackInterval {
+            clipTranscriptSidebarTimeSeconds = clamped
+            runtime.lastTranscriptSidebarPlaybackUpdateTimestamp = now
+        }
+    }
+
     private func togglePlayback() {
         clearSelectionPlaybackState()
         if player.rate != 0 {
             player.pause()
             syncSharedPlayheadStateIfNeeded(playheadSeconds, force: true, updateAlignment: true)
+            syncClipTranscriptSidebarTimeIfNeeded(playheadSeconds, force: true)
         } else {
             player.playImmediately(atRate: 1.0)
         }
@@ -664,6 +688,7 @@ struct ClipToolView: View {
         clearSelectionPlaybackState()
         if player.rate != 0 {
             player.pause()
+            syncClipTranscriptSidebarTimeIfNeeded(playheadSeconds, force: true)
         }
     }
 
@@ -2066,7 +2091,7 @@ struct ClipToolView: View {
             installMouseDownMonitor()
             installMiddleMousePanMonitor()
             if shouldDriveClipTranscriptSidebarTime {
-                clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
+                syncClipTranscriptSidebarTimeIfNeeded(displayedPlayheadSeconds, force: true)
             }
             registerBenchmarkDriverIfNeeded()
         }
@@ -2097,16 +2122,16 @@ struct ClipToolView: View {
             }
             .onChange(of: displayedPlayheadSeconds) { newValue in
                 guard shouldDriveClipTranscriptSidebarTime, !isPlayheadDragActive else { return }
-                clipTranscriptSidebarTimeSeconds = newValue
+                syncClipTranscriptSidebarTimeIfNeeded(newValue)
             }
             .onChange(of: isPlayheadDragActive) { active in
                 if shouldDriveClipTranscriptSidebarTime, !active {
-                    clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
+                    syncClipTranscriptSidebarTimeIfNeeded(displayedPlayheadSeconds, force: true)
                 }
             }
             .onChange(of: storedTranscriptSidebarVisible) { isVisible in
                 if isVisible && model.hasAudioTrack {
-                    clipTranscriptSidebarTimeSeconds = displayedPlayheadSeconds
+                    syncClipTranscriptSidebarTimeIfNeeded(displayedPlayheadSeconds, force: true)
                 }
             }
             .onChange(of: model.selectedClipFormat) { format in
