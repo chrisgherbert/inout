@@ -334,6 +334,9 @@ struct TranscriptTableView: NSViewRepresentable {
         var scrollEndWorkItem: DispatchWorkItem?
         var isUserScrolling = false
         var lastObservedClipBounds: NSRect = .zero
+        var playbackFollowAnimationTimer: Timer?
+        var playbackFollowTargetY: CGFloat?
+        var lastPlaybackFollowRetargetTime: CFTimeInterval = 0
 
         private enum Column {
             static let time = NSUserInterfaceItemIdentifier("transcript_time")
@@ -351,6 +354,7 @@ struct TranscriptTableView: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(liveScrollEndObserver)
             }
             scrollEndWorkItem?.cancel()
+            playbackFollowAnimationTimer?.invalidate()
         }
 
         func configureScrollObservation(for scrollView: NSScrollView) {
@@ -418,6 +422,7 @@ struct TranscriptTableView: NSViewRepresentable {
             scrollEndWorkItem?.cancel()
             if !isUserScrolling {
                 isUserScrolling = true
+                stopPlaybackFollowAnimation()
                 onUserScrollActivityChanged?(true)
             }
         }
@@ -683,6 +688,7 @@ struct TranscriptTableView: NSViewRepresentable {
             let searchRevealChanged = lastRequestedSearchRevealRowID != requestedSearchRevealRowID
 
             guard activeRowID != nil || currentSearchResultRowID != nil else {
+                stopPlaybackFollowAnimation()
                 if showsPlaybackIndicator || !allowsDeselectionWorkaround(tableView.selectedRowIndexes) {
                     return
                 }
@@ -720,6 +726,7 @@ struct TranscriptTableView: NSViewRepresentable {
                let searchRowIndex = rowIndexByID[requestedSearchRevealRowID],
                (searchRevealChanged || forceScroll),
                !isUserScrolling {
+                stopPlaybackFollowAnimation()
                 smoothlyRevealRow(searchRowIndex, in: tableView)
             }
             lastAppliedActiveRowID = activeRowID
@@ -737,18 +744,90 @@ struct TranscriptTableView: NSViewRepresentable {
             guard !rowRect.isEmpty else { return }
 
             let visibleRect = scrollView.documentVisibleRect
-            let verticalInset = min(48.0, max(12.0, visibleRect.height * 0.18))
-            let relaxedVisibleRect = visibleRect.insetBy(dx: 0, dy: verticalInset)
+            let verticalInset = min(64.0, max(18.0, visibleRect.height * 0.22))
+            let deadZoneRect = visibleRect.insetBy(dx: 0, dy: verticalInset)
 
-            if !forceCentering && relaxedVisibleRect.contains(rowRect) {
+            if !forceCentering && deadZoneRect.contains(rowRect) {
+                stopPlaybackFollowAnimation()
                 return
             }
 
-            smoothlyRevealRow(rowIndex, in: tableView)
+            let targetY = max(
+                0,
+                min(
+                    rowRect.midY - (visibleRect.height / 2.0),
+                    max(0, tableView.bounds.height - visibleRect.height)
+                )
+            )
+
+            requestPlaybackFollow(to: targetY, in: scrollView, forceRetarget: forceCentering)
         }
 
         private func allowsDeselectionWorkaround(_ selectedIndexes: IndexSet) -> Bool {
             !selectedIndexes.isEmpty || lastAppliedActiveRowID != nil
+        }
+
+        private func requestPlaybackFollow(to targetY: CGFloat, in scrollView: NSScrollView, forceRetarget: Bool) {
+            let currentY = scrollView.documentVisibleRect.origin.y
+            guard abs(currentY - targetY) > 1 else {
+                stopPlaybackFollowAnimation()
+                return
+            }
+
+            let now = CACurrentMediaTime()
+            let minimumRetargetInterval = 1.0 / 12.0
+            if !forceRetarget,
+               playbackFollowTargetY != nil,
+               (now - lastPlaybackFollowRetargetTime) < minimumRetargetInterval {
+                return
+            }
+
+            lastPlaybackFollowRetargetTime = now
+            playbackFollowTargetY = targetY
+            ensurePlaybackFollowAnimation(in: scrollView)
+        }
+
+        private func ensurePlaybackFollowAnimation(in scrollView: NSScrollView) {
+            guard playbackFollowAnimationTimer == nil else { return }
+            let timer = Timer(
+                timeInterval: 1.0 / 60.0,
+                repeats: true
+            ) { [weak self, weak scrollView] timer in
+                guard let self, let scrollView else {
+                    timer.invalidate()
+                    return
+                }
+                self.tickPlaybackFollowAnimation(in: scrollView)
+            }
+            playbackFollowAnimationTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
+
+        private func tickPlaybackFollowAnimation(in scrollView: NSScrollView) {
+            guard let targetY = playbackFollowTargetY else {
+                stopPlaybackFollowAnimation()
+                return
+            }
+
+            let clipView = scrollView.contentView
+            let currentY = clipView.bounds.origin.y
+            let delta = targetY - currentY
+            guard abs(delta) > 0.75 else {
+                clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: targetY))
+                scrollView.reflectScrolledClipView(clipView)
+                stopPlaybackFollowAnimation()
+                return
+            }
+
+            let nextY = currentY + (delta * 0.26)
+            clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: nextY))
+            scrollView.reflectScrolledClipView(clipView)
+        }
+
+        func stopPlaybackFollowAnimation() {
+            playbackFollowTargetY = nil
+            playbackFollowAnimationTimer?.invalidate()
+            playbackFollowAnimationTimer = nil
         }
 
         private func smoothlyRevealRow(_ rowIndex: Int, in tableView: TranscriptNSTableView) {
@@ -899,6 +978,9 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.onUserScrollActivityChanged = onUserScrollActivityChanged
         context.coordinator.onActivateRow = onActivateRow
         context.coordinator.onDoubleActivateRow = onDoubleActivateRow
+        if !followsActiveRow {
+            context.coordinator.stopPlaybackFollowAnimation()
+        }
         tableView.allowsMultipleSelection = allowsMultipleSelection
         tableView.selectionHighlightStyle = showsPlaybackIndicator ? .none : .regular
         if shouldReload {
