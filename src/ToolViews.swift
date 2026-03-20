@@ -104,6 +104,7 @@ struct ToolContentView: View {
                         ScrollView {
                             ClipToolView(
                                 model: model,
+                                sourcePresentation: model.sourcePresentation,
                                 clipTimelinePresentation: model.clipTimelinePresentation,
                                 isCompactLayout: isCompactLayout
                             )
@@ -115,6 +116,7 @@ struct ToolContentView: View {
                         ScrollView {
                             ClipToolView(
                                 model: model,
+                                sourcePresentation: model.sourcePresentation,
                                 clipTimelinePresentation: model.clipTimelinePresentation,
                                 isCompactLayout: isCompactLayout
                             )

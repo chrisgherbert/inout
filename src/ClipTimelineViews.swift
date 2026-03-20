@@ -61,7 +61,8 @@ struct ClipToolView: View {
         case end
     }
 
-    @ObservedObject var model: WorkspaceViewModel
+    let model: WorkspaceViewModel
+    @ObservedObject var sourcePresentation: SourcePresentationModel
     @ObservedObject var clipTimelinePresentation: ClipTimelinePresentationModel
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -127,11 +128,11 @@ struct ClipToolView: View {
     }
 
     private var thumbnailStripHeight: CGFloat {
-        model.hasVideoTrack ? (isCompactLayout ? 36 : 44) : 0
+        sourcePresentation.hasVideoTrack ? (isCompactLayout ? 36 : 44) : 0
     }
 
     private var timelinePanelHeight: CGFloat {
-        if model.hasVideoTrack {
+        if sourcePresentation.hasVideoTrack {
             return isCompactLayout ? 104 : 126
         }
         return isCompactLayout ? 68 : 82
@@ -139,7 +140,7 @@ struct ClipToolView: View {
 
     private var isBenchmarkReady: Bool {
         PlayheadDiagnostics.shared.isEnabled &&
-        model.sourceURL != nil &&
+        sourcePresentation.sourceURL != nil &&
         !isWaveformLoading &&
         timelineInteractiveWidth > 0 &&
         player.currentItem != nil
@@ -256,7 +257,7 @@ struct ClipToolView: View {
     private func effectivePlayheadSeconds() -> Double {
         let current = CMTimeGetSeconds(player.currentTime())
         if current.isFinite {
-            return max(0, min(current, max(playerDurationSeconds, model.sourceDurationSeconds)))
+            return max(0, min(current, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
         }
         return playheadSeconds
     }
@@ -293,7 +294,7 @@ struct ClipToolView: View {
                        player.rate != 0,
                        newPlayhead >= (selectionPlaybackEndSeconds - (1.0 / 240.0)) {
                         player.pause()
-                        let clampedEnd = max(clip.clipStartSeconds, min(selectionPlaybackEndSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
+                        let clampedEnd = max(clip.clipStartSeconds, min(selectionPlaybackEndSeconds, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
                         let endTime = CMTime(seconds: clampedEnd, preferredTimescale: 600)
                         player.seek(to: endTime, toleranceBefore: .zero, toleranceAfter: .zero)
                         playheadSeconds = clampedEnd
@@ -372,7 +373,7 @@ struct ClipToolView: View {
     }
 
     private func loadPlayerItem() {
-        guard let sourceURL = model.sourceURL else {
+        guard let sourceURL = sourcePresentation.sourceURL else {
             removePlayerTimeObserver()
             player.replaceCurrentItem(with: nil)
             playheadSeconds = 0
@@ -386,7 +387,7 @@ struct ClipToolView: View {
         }
 
         if runtime.loadedSourcePath == sourceURL.path, player.currentItem != nil {
-            let duration = max(playerDurationSeconds, model.sourceDurationSeconds)
+            let duration = max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)
             let restored = max(0, min(clip.clipPlayheadSeconds, duration))
             if abs(playheadSeconds - restored) > (1.0 / 120.0) {
                 seekPlayer(to: restored)
@@ -401,8 +402,8 @@ struct ClipToolView: View {
         player.replaceCurrentItem(with: item)
         installPlayerTimeObserverIfNeeded()
         let duration = CMTimeGetSeconds(item.asset.duration)
-        playerDurationSeconds = duration.isFinite && duration > 0 ? duration : model.sourceDurationSeconds
-        let restored = max(0, min(clip.clipPlayheadSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        playerDurationSeconds = duration.isFinite && duration > 0 ? duration : sourcePresentation.sourceDurationSeconds
+        let restored = max(0, min(clip.clipPlayheadSeconds, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
         playheadSeconds = restored
         syncVisualPlayheadImmediately(restored)
         stopManualViewportPan()
@@ -416,7 +417,7 @@ struct ClipToolView: View {
         runtime.waveformTask?.cancel()
 
         // Keep long timelines detailed when zoomed in: higher bucket density than real-time display rate.
-        let targetSampleCount = Int(min(240_000, max(12_000, model.sourceDurationSeconds * 120.0)))
+        let targetSampleCount = Int(min(240_000, max(12_000, sourcePresentation.sourceDurationSeconds * 120.0)))
 
         if let cachedSamples = model.waveformSamplesFromCache(for: url, sampleCount: targetSampleCount), !cachedSamples.isEmpty {
             waveformSamples = cachedSamples
@@ -603,8 +604,8 @@ struct ClipToolView: View {
     }
 
     private func scheduleThumbnailStripGeneration(immediate: Bool = false) {
-        guard model.hasVideoTrack,
-              let sourceURL = model.sourceURL,
+        guard sourcePresentation.hasVideoTrack,
+              let sourceURL = sourcePresentation.sourceURL,
               timelineInteractiveWidth > 0,
               thumbnailStripHeight > 0,
               visibleEndSeconds > visibleStartSeconds else {
@@ -891,7 +892,7 @@ struct ClipToolView: View {
     }
 
     private func seekPlayer(to time: Double) {
-        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let clamped = max(0, min(time, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
         stopManualViewportPan()
         runtime.lastInteractiveSeekSeconds = -1
         dragVisualPlayheadSeconds = nil
@@ -903,7 +904,7 @@ struct ClipToolView: View {
     }
 
     private func commitInteractiveSeek(to time: Double) {
-        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let clamped = max(0, min(time, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
 
         // Coalesce tiny drag deltas so scrubbing stays responsive without flooding seeks.
         if runtime.lastInteractiveSeekSeconds >= 0, abs(clamped - runtime.lastInteractiveSeekSeconds) < (1.0 / 120.0) {
@@ -932,7 +933,7 @@ struct ClipToolView: View {
     }
 
     private func seekPlayerInteractive(to time: Double, forceCommit: Bool = false) {
-        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let clamped = max(0, min(time, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
 
         let now = CACurrentMediaTime()
         let readoutInterval = 1.0 / 30.0
@@ -953,7 +954,7 @@ struct ClipToolView: View {
     }
 
     private func seekPlayerAnimatedFromKeyboard(to time: Double) {
-        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let clamped = max(0, min(time, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
         let didChange = abs(clamped - playheadSeconds) > (1.0 / 240.0)
         seekPlayerAndFocusViewport(to: clamped, focusViewport: true)
         if didChange {
@@ -964,7 +965,7 @@ struct ClipToolView: View {
     }
 
     private func seekPlayerAndFocusViewport(to time: Double, focusViewport: Bool = true) {
-        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let clamped = max(0, min(time, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
         stopManualViewportPan()
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playheadSeconds = clamped
@@ -993,7 +994,7 @@ struct ClipToolView: View {
     private func syncClipTranscriptSidebarTimeIfNeeded(_ time: Double, force: Bool = false) {
         guard shouldDriveClipTranscriptSidebarTime else { return }
 
-        let clamped = max(0, min(time, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let clamped = max(0, min(time, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
         let now = CACurrentMediaTime()
         let isPlaybackDriven = player.rate != 0 && !isPlayheadDragActive
         let minimumPlaybackInterval = 1.0 / 12.0
@@ -1028,8 +1029,8 @@ struct ClipToolView: View {
             return
         }
 
-        let selectionStart = max(0, min(clip.clipStartSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
-        let selectionEnd = max(selectionStart + 0.001, min(clip.clipEndSeconds, max(playerDurationSeconds, model.sourceDurationSeconds)))
+        let selectionStart = max(0, min(clip.clipStartSeconds, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
+        let selectionEnd = max(selectionStart + 0.001, min(clip.clipEndSeconds, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
 
         if player.rate != 0, runtime.selectionPlaybackEndSeconds != nil {
             player.pause()
@@ -1127,7 +1128,7 @@ struct ClipToolView: View {
     }
 
     private var totalDurationSeconds: Double {
-        max(0.001, max(playerDurationSeconds, model.sourceDurationSeconds))
+        max(0.001, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds))
     }
 
     private var zoomedWindowDuration: Double {
@@ -1488,8 +1489,8 @@ struct ClipToolView: View {
 
             if flags.contains(.command) && flags.contains(.option) && !flags.contains(.control) && !flags.contains(.shift) {
                 if chars == "s",
-                   model.sourceURL != nil,
-                   model.hasVideoTrack {
+                   sourcePresentation.sourceURL != nil,
+                   sourcePresentation.hasVideoTrack {
                     model.captureFrame(at: effectivePlayheadSeconds())
                     return nil
                 }
@@ -1854,7 +1855,7 @@ struct ClipToolView: View {
     }
 
     private var canShowClipTranscriptSidebar: Bool {
-        !isCompactLayout && model.hasAudioTrack
+        !isCompactLayout && sourcePresentation.hasAudioTrack
     }
 
     private var showsClipTranscriptSidebar: Bool {
@@ -1881,7 +1882,7 @@ struct ClipToolView: View {
     }
 
     private func bestFitTranscriptSidebarWidth(maximumSidebarWidth: CGFloat) -> CGFloat {
-        let rows = model.transcriptSegments.map { segment in
+        let rows = sourcePresentation.transcriptSegments.map { segment in
             TranscriptDisplayRow(
                 id: segment.id,
                 start: segment.start,
@@ -2023,11 +2024,11 @@ struct ClipToolView: View {
 
                         EquatableView(content:
                             ClipTranscriptSidebarView(
-                                transcriptSegments: model.transcriptSegments,
-                                transcriptStatusText: model.transcriptStatusText,
+                                transcriptSegments: sourcePresentation.transcriptSegments,
+                                transcriptStatusText: sourcePresentation.transcriptStatusText,
                                 canGenerateTranscript: model.canGenerateTranscript,
-                                isGeneratingTranscript: model.isGeneratingTranscript,
-                                hasAudioTrack: model.hasAudioTrack,
+                                isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
+                                hasAudioTrack: sourcePresentation.hasAudioTrack,
                                 currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
                                 isPlaying: player.rate != 0,
                                 isScrubbing: isPlayheadDragActive,
@@ -2142,9 +2143,9 @@ struct ClipToolView: View {
             .help("Drag to resize player height. Double-click to toggle default/max height.")
 
             ClipPlayerUtilityRow(
-                hasVideoTrack: model.hasVideoTrack,
+                hasVideoTrack: sourcePresentation.hasVideoTrack,
                 playheadSeconds: displayedPlayheadSeconds,
-                totalDurationSeconds: max(playerDurationSeconds, model.sourceDurationSeconds),
+                totalDurationSeconds: max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds),
                 playheadCopyFlash: playheadCopyFlash,
                 compactZoomDisplayText: compactPlayerZoomDisplayText,
                 timelineZoomLevelCount: allowedTimelineZoomLevels.count,
@@ -2195,7 +2196,7 @@ struct ClipToolView: View {
     }
 
     private var shouldDriveClipTranscriptSidebarTime: Bool {
-        showsClipTranscriptSidebar && model.hasAudioTrack
+        showsClipTranscriptSidebar && sourcePresentation.hasAudioTrack
     }
 
     private var timelineControlsSection: some View {
@@ -2224,11 +2225,11 @@ struct ClipToolView: View {
     private var selectionSection: some View {
         ClipSelectionPanel(
             player: player,
-            sourceSessionID: model.sourceSessionID,
+            sourceSessionID: sourcePresentation.sourceSessionID,
             clipStartSeconds: displayedClipStartSeconds,
             clipEndSeconds: displayedClipEndSeconds,
             clipDurationSeconds: model.clipDurationSeconds,
-            hasVideoTrack: model.hasVideoTrack,
+            hasVideoTrack: sourcePresentation.hasVideoTrack,
             timelinePanelHeight: timelinePanelHeight,
             thumbnailStripHeight: thumbnailStripHeight,
             clipStartText: $clipTimelinePresentation.clipStartText,
@@ -2335,11 +2336,12 @@ struct ClipToolView: View {
                 model.enqueueCurrentClipExport(skipSaveDialog: quickExport)
             }
         )
+        .equatable()
     }
 
     private var clipBaseContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if model.sourceURL != nil {
+            if sourcePresentation.sourceURL != nil {
                 clipPlayerSection
                 timelineControlsSection
                 outputSection
@@ -2365,7 +2367,12 @@ struct ClipToolView: View {
                     }
             }
         )
-        .sheet(isPresented: $model.isURLImportSheetPresented) {
+        .sheet(
+            isPresented: Binding(
+                get: { model.isURLImportSheetPresented },
+                set: { model.isURLImportSheetPresented = $0 }
+            )
+        ) {
             urlImportSheetView
         }
     }
@@ -2506,7 +2513,7 @@ struct ClipToolView: View {
             registerBenchmarkDriverIfNeeded()
         }
 
-        let step2 = step1.onChange(of: model.sourceURL?.path) { _ in
+        let step2 = step1.onChange(of: sourcePresentation.sourceURL?.path) { _ in
             clearThumbnailStrip()
             loadPlayerItem()
             scheduleThumbnailStripGeneration(immediate: true)
@@ -2514,7 +2521,7 @@ struct ClipToolView: View {
         }
 
         let step3 = step2.onChange(of: model.clipEncodingMode) { mode in
-            if !model.hasVideoTrack && mode != .audioOnly {
+            if !sourcePresentation.hasVideoTrack && mode != .audioOnly {
                 model.clipEncodingMode = .audioOnly
                 return
             }
@@ -2542,7 +2549,7 @@ struct ClipToolView: View {
                 }
             }
             .onChange(of: storedTranscriptSidebarVisible) { isVisible in
-                if isVisible && model.hasAudioTrack {
+                if isVisible && sourcePresentation.hasAudioTrack {
                     syncClipTranscriptSidebarTimeIfNeeded(displayedPlayheadSeconds, force: true)
                 }
             }
@@ -2564,7 +2571,7 @@ struct ClipToolView: View {
             .onChange(of: visibleEndSeconds) { _ in
                 scheduleThumbnailStripGeneration()
             }
-            .onChange(of: model.hasVideoTrack) { _ in
+            .onChange(of: sourcePresentation.hasVideoTrack) { _ in
                 scheduleThumbnailStripGeneration(immediate: true)
             }
 

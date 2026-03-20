@@ -374,3 +374,13 @@ struct ClipOutputPanel: View {
         }
     }
 }
+
+extension ClipOutputPanel: Equatable {
+    static func == (lhs: ClipOutputPanel, rhs: ClipOutputPanel) -> Bool {
+        ObjectIdentifier(lhs.model) == ObjectIdentifier(rhs.model) &&
+        lhs.reduceTransparency == rhs.reduceTransparency &&
+        lhs.isOptionKeyPressed == rhs.isOptionKeyPressed &&
+        lhs.fastClipFormats == rhs.fastClipFormats &&
+        lhs.advancedClipFormats == rhs.advancedClipFormats
+    }
+}
