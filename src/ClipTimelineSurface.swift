@@ -1399,6 +1399,9 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.player = player
         nsView.clipStartSeconds = clipStartSeconds
         nsView.clipEndSeconds = clipEndSeconds
+        nsView.totalDurationSeconds = totalDurationSeconds
+        nsView.visibleStartSeconds = visibleStartSeconds
+        nsView.visibleEndSeconds = visibleEndSeconds
         nsView.modelPlayheadSeconds = playheadSeconds
         nsView.isDarkAppearance = isDarkAppearance
         nsView.highlightedClipBoundary = highlightedClipBoundary
@@ -1612,9 +1615,6 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         let displayedPlayheadSeconds = nsView.dragPlayheadSeconds ?? playheadSeconds
         let playheadX = snapToPixel(xPosition(for: displayedPlayheadSeconds))
         let playheadWidth: CGFloat = isPlayheadCaptureFlashing ? 3.6 : 2.0
-        nsView.totalDurationSeconds = totalDurationSeconds
-        nsView.visibleStartSeconds = visibleStartSeconds
-        nsView.visibleEndSeconds = visibleEndSeconds
         nsView.playheadDisplayWidth = playheadWidth
         let isInterpolatingPlayback = nsView.dragPlayheadSeconds == nil && player.rate != 0
         let hostOwnsPlayheadDisplay = nsView.dragPlayheadSeconds != nil || isInterpolatingPlayback
