@@ -543,7 +543,7 @@ struct ClipToolView: View {
 
             runtime.thumbnailStripTask?.cancel()
             runtime.thumbnailStripTask = Task.detached(priority: .utility) {
-                generateTimelineThumbnailStripImage(
+                await generateTimelineThumbnailStripImage(
                     fileURL: sourceURL,
                     visibleStartSeconds: visibleStart,
                     visibleEndSeconds: visibleEnd,

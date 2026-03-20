@@ -70,6 +70,43 @@ private func makeThumbnailGenerator(
     return generator
 }
 
+private actor AsyncThumbnailCollectionState {
+    private let completion: @Sendable ([CGImage?]) -> Void
+    private var images: [CGImage?]
+    private var remaining: Int
+    private var indexMap: [String: [Int]]
+    private var completed = false
+
+    init(requestTimes: [CMTime], completion: @escaping @Sendable ([CGImage?]) -> Void) {
+        self.completion = completion
+        self.images = Array(repeating: nil, count: requestTimes.count)
+        self.remaining = requestTimes.count
+        var builtIndexMap: [String: [Int]] = [:]
+        builtIndexMap.reserveCapacity(requestTimes.count)
+        for (index, time) in requestTimes.enumerated() {
+            builtIndexMap[timelineThumbnailRequestTimeKey(time), default: []].append(index)
+        }
+        self.indexMap = builtIndexMap
+    }
+
+    func record(requestedTime: CMTime, image: CGImage?) {
+        guard !completed else { return }
+
+        let key = timelineThumbnailRequestTimeKey(requestedTime)
+        if var indices = indexMap[key], !indices.isEmpty {
+            let index = indices.removeFirst()
+            images[index] = image
+            indexMap[key] = indices.isEmpty ? nil : indices
+        }
+
+        remaining -= 1
+        if remaining <= 0 {
+            completed = true
+            completion(images)
+        }
+    }
+}
+
 private func copyThumbnailImage(
     strictGenerator: AVAssetImageGenerator,
     fallbackGenerator: AVAssetImageGenerator,
@@ -79,6 +116,46 @@ private func copyThumbnailImage(
         return strict
     }
     return try? fallbackGenerator.copyCGImage(at: time, actualTime: nil)
+}
+
+private func timelineThumbnailRequestTimeKey(_ time: CMTime) -> String {
+    "\(time.value)|\(time.timescale)|\(time.epoch)|\(time.flags.rawValue)"
+}
+
+private func copyThumbnailImagesAsynchronously(
+    generator: AVAssetImageGenerator,
+    requestTimes: [CMTime],
+    shouldCancel: @escaping @Sendable () -> Bool
+) async -> [CGImage?] {
+    guard !requestTimes.isEmpty else { return [] }
+
+    let cancellationWatcher = Task.detached(priority: .utility) {
+        while !Task.isCancelled {
+            if shouldCancel() {
+                generator.cancelAllCGImageGeneration()
+                break
+            }
+            try? await Task.sleep(nanoseconds: 30_000_000)
+        }
+    }
+
+    defer {
+        cancellationWatcher.cancel()
+    }
+
+    let requestedValues = requestTimes.map { NSValue(time: $0) }
+
+    return await withCheckedContinuation { continuation in
+        let state = AsyncThumbnailCollectionState(requestTimes: requestTimes) { images in
+            continuation.resume(returning: images)
+        }
+
+        generator.generateCGImagesAsynchronously(forTimes: requestedValues) { requestedTime, image, _, _, _ in
+            Task {
+                await state.record(requestedTime: requestedTime, image: image)
+            }
+        }
+    }
 }
 
 private func estimatedVideoAspectRatio(for asset: AVAsset) -> CGFloat {
@@ -130,7 +207,7 @@ func generateTimelineThumbnailStripImage(
     pixelWidth: Int,
     pixelHeight: Int,
     shouldCancel: @escaping @Sendable () -> Bool = { false }
-) -> CGImage? {
+) async -> CGImage? {
     guard pixelWidth > 0, pixelHeight > 0, totalDurationSeconds > 0 else { return nil }
 
     let safeVisibleStart = max(0, min(visibleStartSeconds, totalDurationSeconds))
@@ -175,6 +252,10 @@ func generateTimelineThumbnailStripImage(
 
     let safeEndTime = max(0, totalDurationSeconds - (1.0 / 600.0))
     var images: [CGImage?] = Array(repeating: nil, count: tileCount)
+    var uncachedTimes: [CMTime] = []
+    var uncachedIndices: [Int] = []
+    uncachedTimes.reserveCapacity(tileCount)
+    uncachedIndices.reserveCapacity(tileCount)
 
     for index in 0..<tileCount {
         if shouldCancel() {
@@ -197,15 +278,59 @@ func generateTimelineThumbnailStripImage(
         }
 
         let requestTime = CMTime(seconds: clampedSeconds, preferredTimescale: 600)
-        let image = copyThumbnailImage(
-            strictGenerator: strictGenerator,
-            fallbackGenerator: fallbackGenerator,
-            time: requestTime
+        uncachedTimes.append(requestTime)
+        uncachedIndices.append(index)
+    }
+
+    if !uncachedTimes.isEmpty {
+        let strictImages = await copyThumbnailImagesAsynchronously(
+            generator: strictGenerator,
+            requestTimes: uncachedTimes,
+            shouldCancel: shouldCancel
         )
-        if let image {
-            TimelineThumbnailFrameCache.insert(image, forKey: frameCacheKey)
+
+        for (batchIndex, image) in strictImages.enumerated() {
+            guard batchIndex < uncachedIndices.count else { continue }
+            let targetIndex = uncachedIndices[batchIndex]
+            let requestedTime = uncachedTimes[batchIndex]
+            let requestedSeconds = CMTimeGetSeconds(requestedTime)
+            let frameCacheKey = timelineThumbnailFrameCacheKey(
+                for: fileURL,
+                requestedSeconds: requestedSeconds,
+                bucketSeconds: frameReuseBucketSeconds,
+                decodeMaximumSize: decodeMaximumSize
+            )
+
+            if let image {
+                TimelineThumbnailFrameCache.insert(image, forKey: frameCacheKey)
+                images[targetIndex] = image
+            }
         }
-        images[index] = image
+
+        for batchIndex in strictImages.indices {
+            if shouldCancel() {
+                return nil
+            }
+
+            guard batchIndex < uncachedIndices.count else { continue }
+            let targetIndex = uncachedIndices[batchIndex]
+            guard images[targetIndex] == nil else { continue }
+
+            let requestedTime = uncachedTimes[batchIndex]
+            let requestedSeconds = CMTimeGetSeconds(requestedTime)
+            let frameCacheKey = timelineThumbnailFrameCacheKey(
+                for: fileURL,
+                requestedSeconds: requestedSeconds,
+                bucketSeconds: frameReuseBucketSeconds,
+                decodeMaximumSize: decodeMaximumSize
+            )
+
+            let image = try? fallbackGenerator.copyCGImage(at: requestedTime, actualTime: nil)
+            if let image {
+                TimelineThumbnailFrameCache.insert(image, forKey: frameCacheKey)
+                images[targetIndex] = image
+            }
+        }
     }
 
     guard images.contains(where: { $0 != nil }) else { return nil }
