@@ -1319,6 +1319,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let thumbnailStripHeight: CGFloat
     let thumbnailStripImage: CGImage?
     let thumbnailStripRevision: Int
+    let thumbnailStripShouldCrossfade: Bool
     let isThumbnailStripLoading: Bool
     let thumbnailStripSourceStartSeconds: Double
     let thumbnailStripSourceEndSeconds: Double
@@ -1356,6 +1357,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         lhs.showsThumbnailStrip == rhs.showsThumbnailStrip &&
         abs(lhs.thumbnailStripHeight - rhs.thumbnailStripHeight) < 0.0001 &&
         lhs.thumbnailStripRevision == rhs.thumbnailStripRevision &&
+        lhs.thumbnailStripShouldCrossfade == rhs.thumbnailStripShouldCrossfade &&
         lhs.isThumbnailStripLoading == rhs.isThumbnailStripLoading &&
         abs(lhs.thumbnailStripSourceStartSeconds - rhs.thumbnailStripSourceStartSeconds) < 0.0001 &&
         abs(lhs.thumbnailStripSourceEndSeconds - rhs.thumbnailStripSourceEndSeconds) < 0.0001 &&
@@ -1474,6 +1476,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             if showsThumbnailStrip {
                 nsView.thumbnailClipLayer.backgroundColor = NSColor.black.withAlphaComponent(isThumbnailStripLoading ? 0.18 : 0.12).cgColor
                 let shouldCrossfadeThumbnails =
+                    thumbnailStripShouldCrossfade &&
                     thumbnailStripImage != nil &&
                     nsView.thumbnailLayer.contents != nil &&
                     context.coordinator.lastThumbnailStripRevision >= 0 &&

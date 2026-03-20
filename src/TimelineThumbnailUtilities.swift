@@ -390,3 +390,74 @@ func generateTimelineThumbnailStripImage(
 
     return context.makeImage()
 }
+
+func mergeTimelineThumbnailStripImages(
+    baseImage: CGImage,
+    baseStartSeconds: Double,
+    baseEndSeconds: Double,
+    leadingImage: CGImage?,
+    leadingStartSeconds: Double?,
+    leadingEndSeconds: Double?,
+    trailingImage: CGImage?,
+    trailingStartSeconds: Double?,
+    trailingEndSeconds: Double?
+) -> (image: CGImage, startSeconds: Double, endSeconds: Double)? {
+    let baseDuration = max(0.0001, baseEndSeconds - baseStartSeconds)
+    let pixelsPerSecond = CGFloat(baseImage.width) / CGFloat(baseDuration)
+
+    let mergedStart = min(baseStartSeconds, leadingStartSeconds ?? baseStartSeconds)
+    let mergedEnd = max(baseEndSeconds, trailingEndSeconds ?? baseEndSeconds)
+    let mergedDuration = max(0.0001, mergedEnd - mergedStart)
+    let outputWidth = max(1, Int(round(CGFloat(mergedDuration) * pixelsPerSecond)))
+    let outputHeight = max(
+        baseImage.height,
+        leadingImage?.height ?? 0,
+        trailingImage?.height ?? 0
+    )
+
+    let bytesPerPixel = 4
+    let bytesPerRow = outputWidth * bytesPerPixel
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+
+    guard let context = CGContext(
+        data: nil,
+        width: outputWidth,
+        height: outputHeight,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow,
+        space: colorSpace,
+        bitmapInfo: bitmapInfo
+    ) else {
+        return nil
+    }
+
+    context.setFillColor(red: 0.07, green: 0.075, blue: 0.085, alpha: 1.0)
+    context.fill(CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
+
+    func draw(_ image: CGImage, startSeconds: Double, endSeconds: Double) {
+        let duration = max(0.0001, endSeconds - startSeconds)
+        let x = CGFloat(startSeconds - mergedStart) * pixelsPerSecond
+        let width = CGFloat(duration) * pixelsPerSecond
+        context.draw(
+            image,
+            in: CGRect(
+                x: x.rounded(),
+                y: 0,
+                width: max(1, width.rounded()),
+                height: CGFloat(outputHeight)
+            )
+        )
+    }
+
+    if let leadingImage, let leadingStartSeconds, let leadingEndSeconds {
+        draw(leadingImage, startSeconds: leadingStartSeconds, endSeconds: leadingEndSeconds)
+    }
+    draw(baseImage, startSeconds: baseStartSeconds, endSeconds: baseEndSeconds)
+    if let trailingImage, let trailingStartSeconds, let trailingEndSeconds {
+        draw(trailingImage, startSeconds: trailingStartSeconds, endSeconds: trailingEndSeconds)
+    }
+
+    guard let mergedImage = context.makeImage() else { return nil }
+    return (mergedImage, mergedStart, mergedEnd)
+}

@@ -25,6 +25,7 @@ struct WaveformView: View {
     let thumbnailStripHeight: CGFloat
     let thumbnailStripImage: CGImage?
     let thumbnailStripRevision: Int
+    let thumbnailStripShouldCrossfade: Bool
     let isThumbnailStripLoading: Bool
     let thumbnailStripSourceStartSeconds: Double
     let thumbnailStripSourceEndSeconds: Double
@@ -66,6 +67,7 @@ struct WaveformView: View {
             thumbnailStripHeight: thumbnailStripHeight,
             thumbnailStripImage: thumbnailStripImage,
             thumbnailStripRevision: thumbnailStripRevision,
+            thumbnailStripShouldCrossfade: thumbnailStripShouldCrossfade,
             isThumbnailStripLoading: isThumbnailStripLoading,
             thumbnailStripSourceStartSeconds: thumbnailStripSourceStartSeconds,
             thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,

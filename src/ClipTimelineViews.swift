@@ -73,6 +73,7 @@ struct ClipToolView: View {
     @State private var isWaveformLoading = false
     @State private var thumbnailStripImage: CGImage?
     @State private var thumbnailStripRevision: Int = 0
+    @State private var thumbnailStripShouldCrossfade = false
     @State private var isThumbnailStripLoading = false
     @State private var thumbnailStripSourceStartSeconds: Double = 0
     @State private var thumbnailStripSourceEndSeconds: Double = 0
@@ -441,6 +442,7 @@ struct ClipToolView: View {
         runtime.thumbnailStripDebounceTask = nil
         runtime.lastThumbnailStripRequestKey = nil
         thumbnailStripImage = nil
+        thumbnailStripShouldCrossfade = false
         thumbnailStripRevision &+= 1
         thumbnailStripSourceStartSeconds = 0
         thumbnailStripSourceEndSeconds = 0
@@ -471,22 +473,27 @@ struct ClipToolView: View {
 
         let visibleDuration = visibleEndSeconds - visibleStartSeconds
         let viewportWidth = timelineInteractiveWidth
-        if thumbnailStripImage != nil,
-           thumbnailStripSourceEndSeconds > thumbnailStripSourceStartSeconds {
-            let refreshInset = visibleDuration * 0.15
-            let sourceVisibleDuration = max(0.0001, thumbnailStripSourceVisibleDurationSeconds)
-            let sourceViewportWidth = max(1, thumbnailStripSourceViewportWidth)
-            let zoomRatio = max(sourceVisibleDuration, visibleDuration) / min(sourceVisibleDuration, visibleDuration)
-            let widthRatio = max(sourceViewportWidth, viewportWidth) / min(sourceViewportWidth, max(1, viewportWidth))
-            let widthDelta = abs(sourceViewportWidth - viewportWidth)
+        let hasExistingStrip =
+            thumbnailStripImage != nil &&
+            thumbnailStripSourceEndSeconds > thumbnailStripSourceStartSeconds
+        let refreshInset = visibleDuration * 0.15
+        let sourceVisibleDuration = max(0.0001, thumbnailStripSourceVisibleDurationSeconds)
+        let sourceViewportWidth = max(1, thumbnailStripSourceViewportWidth)
+        let zoomRatio = max(sourceVisibleDuration, visibleDuration) / min(sourceVisibleDuration, visibleDuration)
+        let widthRatio = max(sourceViewportWidth, viewportWidth) / min(sourceViewportWidth, max(1, viewportWidth))
+        let widthDelta = abs(sourceViewportWidth - viewportWidth)
+        let stripScaleCompatible =
+            hasExistingStrip &&
+            zoomRatio <= 1.12 &&
+            widthRatio <= 1.02 &&
+            widthDelta < 12
+        if hasExistingStrip {
             let needsRefresh =
                 visibleStartSeconds < thumbnailStripSourceStartSeconds ||
                 visibleEndSeconds > thumbnailStripSourceEndSeconds ||
                 visibleStartSeconds < (thumbnailStripSourceStartSeconds + refreshInset) ||
                 visibleEndSeconds > (thumbnailStripSourceEndSeconds - refreshInset) ||
-                zoomRatio > 1.12 ||
-                widthRatio > 1.02 ||
-                widthDelta >= 12
+                !stripScaleCompatible
             if !needsRefresh {
                 return
             }
@@ -496,11 +503,16 @@ struct ClipToolView: View {
             clearThumbnailStrip()
             return
         }
+        if stripScaleCompatible,
+           generationRange.start >= thumbnailStripSourceStartSeconds,
+           generationRange.end <= thumbnailStripSourceEndSeconds {
+            return
+        }
         let generationDuration = generationRange.end - generationRange.start
 
         let scale = runtime.clipWindow?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-        let widthRatio = max(1.0, generationDuration / visibleDuration)
-        let pixelWidth = max(1, Int((timelineInteractiveWidth * scale * widthRatio).rounded()))
+        let generationWidthRatio = max(1.0, generationDuration / visibleDuration)
+        let pixelWidth = max(1, Int((timelineInteractiveWidth * scale * generationWidthRatio).rounded()))
         let pixelHeight = max(1, Int((thumbnailStripHeight * scale).rounded()))
         let requestKey = timelineThumbnailStripCacheKey(
             for: sourceURL,
@@ -512,6 +524,9 @@ struct ClipToolView: View {
         let visibleStart = generationRange.start
         let visibleEnd = generationRange.end
         let totalDuration = totalDurationSeconds
+        let existingStripImage = stripScaleCompatible ? thumbnailStripImage : nil
+        let existingStripStart = thumbnailStripSourceStartSeconds
+        let existingStripEnd = thumbnailStripSourceEndSeconds
 
         if runtime.lastThumbnailStripRequestKey == requestKey,
            thumbnailStripImage != nil || isThumbnailStripLoading {
@@ -519,7 +534,9 @@ struct ClipToolView: View {
         }
         runtime.lastThumbnailStripRequestKey = requestKey
 
-        if let cached = model.timelineThumbnailStripImageFromCache(forKey: requestKey) {
+        if !stripScaleCompatible,
+           let cached = model.timelineThumbnailStripImageFromCache(forKey: requestKey) {
+            thumbnailStripShouldCrossfade = thumbnailStripImage != nil
             thumbnailStripImage = cached
             thumbnailStripRevision &+= 1
             thumbnailStripSourceStartSeconds = visibleStart
@@ -543,7 +560,67 @@ struct ClipToolView: View {
 
             runtime.thumbnailStripTask?.cancel()
             runtime.thumbnailStripTask = Task.detached(priority: .utility) {
-                await generateTimelineThumbnailStripImage(
+                if stripScaleCompatible,
+                   let existingImage = existingStripImage {
+                    let existingStart = existingStripStart
+                    let existingEnd = existingStripEnd
+                    let existingDuration = max(0.0001, existingEnd - existingStart)
+                    let pixelsPerSecond = Double(existingImage.width) / existingDuration
+
+                    let edgeImage: @Sendable (Double, Double) async -> (image: CGImage, startSeconds: Double, endSeconds: Double)? = { startSeconds, endSeconds in
+                        guard endSeconds > startSeconds else { return nil }
+                        let edgePixelWidth = max(1, Int((max(0.0001, endSeconds - startSeconds) * pixelsPerSecond).rounded()))
+
+                        guard let generated = await generateTimelineThumbnailStripImage(
+                            fileURL: sourceURL,
+                            visibleStartSeconds: startSeconds,
+                            visibleEndSeconds: endSeconds,
+                            totalDurationSeconds: totalDuration,
+                            pixelWidth: edgePixelWidth,
+                            pixelHeight: pixelHeight,
+                            shouldCancel: { Task.isCancelled }
+                        ) else {
+                            return nil
+                        }
+                        return (generated, startSeconds, endSeconds)
+                    }
+
+                    async let leading = edgeImage(
+                        generationRange.start,
+                        min(existingStart, generationRange.end)
+                    )
+                    async let trailing = edgeImage(
+                        max(existingEnd, generationRange.start),
+                        generationRange.end
+                    )
+
+                    let leadingEdge = await leading
+                    let trailingEdge = await trailing
+
+                    if leadingEdge == nil && trailingEdge == nil {
+                        return existingImage
+                    }
+
+                    let merged = mergeTimelineThumbnailStripImages(
+                        baseImage: existingImage,
+                        baseStartSeconds: existingStart,
+                        baseEndSeconds: existingEnd,
+                        leadingImage: leadingEdge?.image,
+                        leadingStartSeconds: leadingEdge?.startSeconds,
+                        leadingEndSeconds: leadingEdge?.endSeconds,
+                        trailingImage: trailingEdge?.image,
+                        trailingStartSeconds: trailingEdge?.startSeconds,
+                        trailingEndSeconds: trailingEdge?.endSeconds
+                    )
+
+                    if let merged {
+                        return merged.image
+                    }
+
+                    return existingImage
+                }
+
+                return await generateTimelineThumbnailStripImage(
                     fileURL: sourceURL,
                     visibleStartSeconds: visibleStart,
                     visibleEndSeconds: visibleEnd,
@@ -559,10 +636,16 @@ struct ClipToolView: View {
 
             if let image {
                 model.cacheTimelineThumbnailStripImage(image, forKey: requestKey)
+                thumbnailStripShouldCrossfade = !stripScaleCompatible && thumbnailStripImage != nil
                 thumbnailStripImage = image
                 thumbnailStripRevision &+= 1
-                thumbnailStripSourceStartSeconds = visibleStart
-                thumbnailStripSourceEndSeconds = visibleEnd
+                if stripScaleCompatible, hasExistingStrip {
+                    thumbnailStripSourceStartSeconds = min(thumbnailStripSourceStartSeconds, visibleStart)
+                    thumbnailStripSourceEndSeconds = max(thumbnailStripSourceEndSeconds, visibleEnd)
+                } else {
+                    thumbnailStripSourceStartSeconds = visibleStart
+                    thumbnailStripSourceEndSeconds = visibleEnd
+                }
                 thumbnailStripSourceVisibleDurationSeconds = visibleDuration
                 thumbnailStripSourceViewportWidth = viewportWidth
             }
@@ -1319,6 +1402,10 @@ struct ClipToolView: View {
                     resetTimelineZoom()
                     return nil
                 }
+                if chars == "a" {
+                    model.resetClipRange(undoManager: undoManager)
+                    return nil
+                }
             }
 
             if flags.contains(.option) && !flags.contains(.command) && !flags.contains(.control) && !flags.contains(.shift) {
@@ -2002,6 +2089,7 @@ struct ClipToolView: View {
             waveformSamples: waveformSamples,
             thumbnailStripImage: thumbnailStripImage,
             thumbnailStripRevision: thumbnailStripRevision,
+            thumbnailStripShouldCrossfade: thumbnailStripShouldCrossfade,
             isThumbnailStripLoading: isThumbnailStripLoading,
             thumbnailStripSourceStartSeconds: thumbnailStripSourceStartSeconds,
             thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,

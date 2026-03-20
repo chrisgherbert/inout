@@ -22,6 +22,7 @@ struct ClipSelectionPanel: View, Equatable {
     let waveformSamples: [Double]
     let thumbnailStripImage: CGImage?
     let thumbnailStripRevision: Int
+    let thumbnailStripShouldCrossfade: Bool
     let isThumbnailStripLoading: Bool
     let thumbnailStripSourceStartSeconds: Double
     let thumbnailStripSourceEndSeconds: Double
@@ -70,6 +71,7 @@ struct ClipSelectionPanel: View, Equatable {
         lhs.isWaveformLoading == rhs.isWaveformLoading &&
         lhs.waveformSamples.count == rhs.waveformSamples.count &&
         lhs.thumbnailStripRevision == rhs.thumbnailStripRevision &&
+        lhs.thumbnailStripShouldCrossfade == rhs.thumbnailStripShouldCrossfade &&
         lhs.isThumbnailStripLoading == rhs.isThumbnailStripLoading &&
         abs(lhs.thumbnailStripSourceStartSeconds - rhs.thumbnailStripSourceStartSeconds) < 0.0001 &&
         abs(lhs.thumbnailStripSourceEndSeconds - rhs.thumbnailStripSourceEndSeconds) < 0.0001 &&
@@ -119,6 +121,7 @@ struct ClipSelectionPanel: View, Equatable {
                         thumbnailStripHeight: thumbnailStripHeight,
                         thumbnailStripImage: thumbnailStripImage,
                         thumbnailStripRevision: thumbnailStripRevision,
+                        thumbnailStripShouldCrossfade: thumbnailStripShouldCrossfade,
                         isThumbnailStripLoading: isThumbnailStripLoading,
                         thumbnailStripSourceStartSeconds: thumbnailStripSourceStartSeconds,
                         thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,
