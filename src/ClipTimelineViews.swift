@@ -13,6 +13,7 @@ private final class ClipToolRuntimeState: ObservableObject {
     var waveformTask: Task<Void, Never>?
     var thumbnailStripTask: Task<CGImage?, Never>?
     var thumbnailStripDebounceTask: Task<Void, Never>?
+    var thumbnailStripPrewarmTask: Task<Void, Never>?
     var keyMonitor: Any?
     var flagsMonitor: Any?
     var scrollMonitor: Any?
@@ -46,6 +47,7 @@ private final class ClipToolRuntimeState: ObservableObject {
     var lastTranscriptSidebarPlaybackUpdateTimestamp: CFTimeInterval = 0
     var selectionPlaybackEndSeconds: Double?
     var lastThumbnailStripRequestKey: String?
+    var lastThumbnailStripPrewarmKey: String?
     var playerResizeStartHeight: CGFloat?
     var playerResizeStartGlobalY: CGFloat?
     var transcriptSidebarResizeStartWidth: CGFloat?
@@ -440,7 +442,10 @@ struct ClipToolView: View {
         runtime.thumbnailStripTask = nil
         runtime.thumbnailStripDebounceTask?.cancel()
         runtime.thumbnailStripDebounceTask = nil
+        runtime.thumbnailStripPrewarmTask?.cancel()
+        runtime.thumbnailStripPrewarmTask = nil
         runtime.lastThumbnailStripRequestKey = nil
+        runtime.lastThumbnailStripPrewarmKey = nil
         thumbnailStripImage = nil
         thumbnailStripShouldCrossfade = false
         thumbnailStripRevision &+= 1
@@ -459,6 +464,142 @@ struct ClipToolView: View {
         let end = min(totalDurationSeconds, visibleEndSeconds + padding)
         guard end > start else { return nil }
         return (start, end)
+    }
+
+    private func scheduleAdjacentThumbnailStripPrewarm(
+        anchorRequestKey: String,
+        sourceURL: URL,
+        totalDurationSeconds: Double
+    ) {
+        guard runtime.lastThumbnailStripPrewarmKey != anchorRequestKey else { return }
+        guard let baseImage = thumbnailStripImage else { return }
+
+        let baseStart = thumbnailStripSourceStartSeconds
+        let baseEnd = thumbnailStripSourceEndSeconds
+        let baseDuration = max(0.0001, baseEnd - baseStart)
+        guard baseDuration > 0.001, totalDurationSeconds > baseDuration + 0.001 else { return }
+
+        let leadingStart = max(0, baseStart - baseDuration)
+        let leadingEnd = baseStart
+        let trailingStart = baseEnd
+        let trailingEnd = min(totalDurationSeconds, baseEnd + baseDuration)
+        guard leadingEnd > leadingStart || trailingEnd > trailingStart else { return }
+
+        let pixelsPerSecond = Double(baseImage.width) / baseDuration
+        let pixelHeight = max(1, baseImage.height)
+
+        let leadingRequestKey: String? = {
+            guard leadingEnd > leadingStart else { return nil }
+            let pixelWidth = max(1, Int((max(0.0001, leadingEnd - leadingStart) * pixelsPerSecond).rounded()))
+            return timelineThumbnailStripCacheKey(
+                for: sourceURL,
+                visibleStartSeconds: leadingStart,
+                visibleEndSeconds: leadingEnd,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
+            )
+        }()
+
+        let trailingRequestKey: String? = {
+            guard trailingEnd > trailingStart else { return nil }
+            let pixelWidth = max(1, Int((max(0.0001, trailingEnd - trailingStart) * pixelsPerSecond).rounded()))
+            return timelineThumbnailStripCacheKey(
+                for: sourceURL,
+                visibleStartSeconds: trailingStart,
+                visibleEndSeconds: trailingEnd,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
+            )
+        }()
+
+        let cachedLeading = leadingRequestKey.flatMap { model.timelineThumbnailStripImageFromCache(forKey: $0) }
+        let cachedTrailing = trailingRequestKey.flatMap { model.timelineThumbnailStripImageFromCache(forKey: $0) }
+
+        runtime.thumbnailStripPrewarmTask?.cancel()
+        runtime.thumbnailStripPrewarmTask = nil
+        runtime.lastThumbnailStripPrewarmKey = anchorRequestKey
+
+        runtime.thumbnailStripPrewarmTask = Task { @MainActor in
+            let leadingWidth = leadingEnd > leadingStart
+                ? max(1, Int((max(0.0001, leadingEnd - leadingStart) * pixelsPerSecond).rounded()))
+                : 0
+            let trailingWidth = trailingEnd > trailingStart
+                ? max(1, Int((max(0.0001, trailingEnd - trailingStart) * pixelsPerSecond).rounded()))
+                : 0
+
+            let prewarmTask = Task.detached(priority: .utility) {
+                async let generatedLeading: CGImage? = {
+                    guard cachedLeading == nil, leadingEnd > leadingStart else { return nil }
+                    return await generateTimelineThumbnailStripImage(
+                        fileURL: sourceURL,
+                        visibleStartSeconds: leadingStart,
+                        visibleEndSeconds: leadingEnd,
+                        totalDurationSeconds: totalDurationSeconds,
+                        pixelWidth: leadingWidth,
+                        pixelHeight: pixelHeight,
+                        shouldCancel: { Task.isCancelled }
+                    )
+                }()
+
+                async let generatedTrailing: CGImage? = {
+                    guard cachedTrailing == nil, trailingEnd > trailingStart else { return nil }
+                    return await generateTimelineThumbnailStripImage(
+                        fileURL: sourceURL,
+                        visibleStartSeconds: trailingStart,
+                        visibleEndSeconds: trailingEnd,
+                        totalDurationSeconds: totalDurationSeconds,
+                        pixelWidth: trailingWidth,
+                        pixelHeight: pixelHeight,
+                        shouldCancel: { Task.isCancelled }
+                    )
+                }()
+
+                return await (generatedLeading, generatedTrailing)
+            }
+
+            let (generatedLeading, generatedTrailing) = await prewarmTask.value
+            guard !Task.isCancelled else { return }
+            guard runtime.lastThumbnailStripRequestKey == anchorRequestKey else { return }
+            guard let currentImage = thumbnailStripImage else { return }
+            guard abs(thumbnailStripSourceStartSeconds - baseStart) < 0.0001,
+                  abs(thumbnailStripSourceEndSeconds - baseEnd) < 0.0001 else { return }
+
+            if let generatedLeading, let leadingRequestKey {
+                model.cacheTimelineThumbnailStripImage(generatedLeading, forKey: leadingRequestKey)
+            }
+
+            if let generatedTrailing, let trailingRequestKey {
+                model.cacheTimelineThumbnailStripImage(generatedTrailing, forKey: trailingRequestKey)
+            }
+
+            let merged = mergeTimelineThumbnailStripImages(
+                baseImage: currentImage,
+                baseStartSeconds: baseStart,
+                baseEndSeconds: baseEnd,
+                leadingImage: cachedLeading ?? generatedLeading,
+                leadingStartSeconds: leadingEnd > leadingStart ? leadingStart : nil,
+                leadingEndSeconds: leadingEnd > leadingStart ? leadingEnd : nil,
+                trailingImage: cachedTrailing ?? generatedTrailing,
+                trailingStartSeconds: trailingEnd > trailingStart ? trailingStart : nil,
+                trailingEndSeconds: trailingEnd > trailingStart ? trailingEnd : nil
+            )
+
+            guard let merged else { return }
+
+            let mergedRequestKey = timelineThumbnailStripCacheKey(
+                for: sourceURL,
+                visibleStartSeconds: merged.startSeconds,
+                visibleEndSeconds: merged.endSeconds,
+                pixelWidth: merged.image.width,
+                pixelHeight: merged.image.height
+            )
+            model.cacheTimelineThumbnailStripImage(merged.image, forKey: mergedRequestKey)
+            thumbnailStripShouldCrossfade = false
+            thumbnailStripImage = merged.image
+            thumbnailStripRevision &+= 1
+            thumbnailStripSourceStartSeconds = merged.startSeconds
+            thumbnailStripSourceEndSeconds = merged.endSeconds
+        }
     }
 
     private func scheduleThumbnailStripGeneration(immediate: Bool = false) {
@@ -527,6 +668,12 @@ struct ClipToolView: View {
         let existingStripImage = stripScaleCompatible ? thumbnailStripImage : nil
         let existingStripStart = thumbnailStripSourceStartSeconds
         let existingStripEnd = thumbnailStripSourceEndSeconds
+
+        if runtime.lastThumbnailStripRequestKey != requestKey {
+            runtime.thumbnailStripPrewarmTask?.cancel()
+            runtime.thumbnailStripPrewarmTask = nil
+            runtime.lastThumbnailStripPrewarmKey = nil
+        }
 
         if runtime.lastThumbnailStripRequestKey == requestKey,
            thumbnailStripImage != nil || isThumbnailStripLoading {
@@ -648,6 +795,11 @@ struct ClipToolView: View {
                 }
                 thumbnailStripSourceVisibleDurationSeconds = visibleDuration
                 thumbnailStripSourceViewportWidth = viewportWidth
+                scheduleAdjacentThumbnailStripPrewarm(
+                    anchorRequestKey: requestKey,
+                    sourceURL: sourceURL,
+                    totalDurationSeconds: totalDuration
+                )
             }
             isThumbnailStripLoading = false
         }
