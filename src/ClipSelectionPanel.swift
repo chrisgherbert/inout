@@ -94,64 +94,55 @@ struct ClipSelectionPanel: View, Equatable {
     var body: some View {
         let _ = PlayheadDiagnostics.shared.noteSelectionPanelBodyEvaluation()
         VStack(alignment: .leading, spacing: 10) {
-            if isWaveformLoading {
-                WaveformLoadingPlaceholder(
-                    hasVideoTrack: hasVideoTrack,
-                    isCompactLayout: isCompactLayout,
-                    reduceTransparency: reduceTransparency
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: timelinePanelHeight)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .padding(.bottom, -6)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear { onTimelineWidthChanged(geo.size.width) }
-                            .onChange(of: geo.size.width) { width in
-                                onTimelineWidthChanged(width)
-                            }
+            if totalDurationSeconds > 0 || !waveformSamples.isEmpty || hasVideoTrack {
+                ZStack {
+                    WaveformView(
+                        player: player,
+                        sourceSessionID: sourceSessionID,
+                        samples: waveformSamples,
+                        zoomLevel: timelineZoom,
+                        renderBuckets: allowedTimelineZoomLevels,
+                        startSeconds: clipStartSeconds,
+                        visualPlayheadSeconds: playheadVisualSeconds,
+                        playheadJumpFromSeconds: playheadJumpFromSeconds,
+                        playheadJumpAnimationToken: playheadJumpAnimationToken,
+                        endSeconds: clipEndSeconds,
+                        totalDurationSeconds: totalDurationSeconds,
+                        visibleStartSeconds: visibleStartSeconds,
+                        visibleEndSeconds: visibleEndSeconds,
+                        captureMarkers: captureMarkers,
+                        highlightedMarkerID: highlightedMarkerID,
+                        highlightedClipBoundary: highlightedClipBoundary,
+                        captureFrameFlashToken: captureFrameFlashToken,
+                        quickExportFlashToken: quickExportFlashToken,
+                        showsThumbnailStrip: hasVideoTrack && thumbnailStripHeight > 0,
+                        thumbnailStripHeight: thumbnailStripHeight,
+                        thumbnailStripImage: thumbnailStripImage,
+                        thumbnailStripRevision: thumbnailStripRevision,
+                        isThumbnailStripLoading: isThumbnailStripLoading,
+                        thumbnailStripSourceStartSeconds: thumbnailStripSourceStartSeconds,
+                        thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,
+                        thumbnailStripSourceVisibleDurationSeconds: thumbnailStripSourceVisibleDurationSeconds,
+                        onSeek: onSeek,
+                        onPlayheadDragEdgePan: onPlayheadDragEdgePan,
+                        onPlayheadDragStateChanged: onPlayheadDragStateChanged,
+                        onClipBoundaryDragStateChanged: onClipBoundaryDragStateChanged,
+                        onSetStart: onSetStart,
+                        onSetEnd: onSetEnd,
+                        onHoverChanged: onWaveformHoverChanged,
+                        onPointerTimeChanged: onWaveformPointerTimeChanged,
+                        onHostViewAvailable: onWaveformHostViewAvailable
+                    )
+
+                    if isWaveformLoading {
+                        WaveformLoadingPlaceholder(
+                            hasVideoTrack: hasVideoTrack,
+                            isCompactLayout: isCompactLayout,
+                            reduceTransparency: reduceTransparency
+                        )
+                        .allowsHitTesting(false)
                     }
-                )
-            } else if !waveformSamples.isEmpty {
-                WaveformView(
-                    player: player,
-                    sourceSessionID: sourceSessionID,
-                    samples: waveformSamples,
-                    zoomLevel: timelineZoom,
-                    renderBuckets: allowedTimelineZoomLevels,
-                    startSeconds: clipStartSeconds,
-                    visualPlayheadSeconds: playheadVisualSeconds,
-                    playheadJumpFromSeconds: playheadJumpFromSeconds,
-                    playheadJumpAnimationToken: playheadJumpAnimationToken,
-                    endSeconds: clipEndSeconds,
-                    totalDurationSeconds: totalDurationSeconds,
-                    visibleStartSeconds: visibleStartSeconds,
-                    visibleEndSeconds: visibleEndSeconds,
-                    captureMarkers: captureMarkers,
-                    highlightedMarkerID: highlightedMarkerID,
-                    highlightedClipBoundary: highlightedClipBoundary,
-                    captureFrameFlashToken: captureFrameFlashToken,
-                    quickExportFlashToken: quickExportFlashToken,
-                    showsThumbnailStrip: hasVideoTrack && thumbnailStripHeight > 0,
-                    thumbnailStripHeight: thumbnailStripHeight,
-                    thumbnailStripImage: thumbnailStripImage,
-                    thumbnailStripRevision: thumbnailStripRevision,
-                    isThumbnailStripLoading: isThumbnailStripLoading,
-                    thumbnailStripSourceStartSeconds: thumbnailStripSourceStartSeconds,
-                    thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,
-                    thumbnailStripSourceVisibleDurationSeconds: thumbnailStripSourceVisibleDurationSeconds,
-                    onSeek: onSeek,
-                    onPlayheadDragEdgePan: onPlayheadDragEdgePan,
-                    onPlayheadDragStateChanged: onPlayheadDragStateChanged,
-                    onClipBoundaryDragStateChanged: onClipBoundaryDragStateChanged,
-                    onSetStart: onSetStart,
-                    onSetEnd: onSetEnd,
-                    onHoverChanged: onWaveformHoverChanged,
-                    onPointerTimeChanged: onWaveformPointerTimeChanged,
-                    onHostViewAvailable: onWaveformHostViewAvailable
-                )
+                }
                 .frame(height: timelinePanelHeight)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
