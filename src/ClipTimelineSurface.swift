@@ -136,6 +136,7 @@ final class WaveformRasterHostView: NSView {
             "position": NSNull()
         ]
         selectionFillLayer.mask = selectionFillMaskLayer
+        selectionFillLayer.zPosition = 30
         surfaceLayer.addSublayer(selectionFillLayer)
         selectionOutlineLayer.actions = [
             "path": NSNull(),
@@ -144,6 +145,7 @@ final class WaveformRasterHostView: NSView {
             "opacity": NSNull()
         ]
         selectionOutlineLayer.fillColor = nil
+        selectionOutlineLayer.zPosition = 31
         surfaceLayer.addSublayer(selectionOutlineLayer)
         selectionFlashLayer.actions = [
             "bounds": NSNull(),
@@ -158,6 +160,7 @@ final class WaveformRasterHostView: NSView {
             "position": NSNull()
         ]
         selectionFlashLayer.mask = selectionFlashMaskLayer
+        selectionFlashLayer.zPosition = 32
         surfaceLayer.addSublayer(selectionFlashLayer)
         for edgeLayer in [startEdgeGlowLayer, endEdgeGlowLayer, startBoundaryPulseLayer, endBoundaryPulseLayer] {
             edgeLayer.actions = [
@@ -168,6 +171,7 @@ final class WaveformRasterHostView: NSView {
             ]
             edgeLayer.startPoint = CGPoint(x: 0, y: 0.5)
             edgeLayer.endPoint = CGPoint(x: 1, y: 0.5)
+            edgeLayer.zPosition = 33
             surfaceLayer.addSublayer(edgeLayer)
         }
         thumbnailClipLayer.masksToBounds = true
@@ -244,11 +248,16 @@ final class WaveformRasterHostView: NSView {
         ]
         thumbnailClipLayer.addSublayer(thumbnailPlaceholderLayer)
         thumbnailClipLayer.addSublayer(thumbnailLayer)
+        thumbnailClipLayer.zPosition = 20
         surfaceLayer.addSublayer(thumbnailClipLayer)
+        thumbnailSeparatorLayer.zPosition = 21
         surfaceLayer.addSublayer(thumbnailSeparatorLayer)
         waveformClipLayer.addSublayer(waveformLayer)
+        waveformClipLayer.zPosition = 22
         surfaceLayer.addSublayer(waveformClipLayer)
+        markerContainerLayer.zPosition = 40
         surfaceLayer.addSublayer(markerContainerLayer)
+        playheadLayer.zPosition = 50
         surfaceLayer.addSublayer(playheadLayer)
     }
 
