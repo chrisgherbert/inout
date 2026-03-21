@@ -142,3 +142,14 @@ struct ClipPlayerUtilityRow: View {
         .padding(.top, 2)
     }
 }
+
+extension ClipPlayerUtilityRow: Equatable {
+    static func == (lhs: ClipPlayerUtilityRow, rhs: ClipPlayerUtilityRow) -> Bool {
+        lhs.hasVideoTrack == rhs.hasVideoTrack &&
+        lhs.playheadSeconds == rhs.playheadSeconds &&
+        lhs.totalDurationSeconds == rhs.totalDurationSeconds &&
+        lhs.playheadCopyFlash == rhs.playheadCopyFlash &&
+        lhs.compactZoomDisplayText == rhs.compactZoomDisplayText &&
+        lhs.timelineZoomLevelCount == rhs.timelineZoomLevelCount
+    }
+}

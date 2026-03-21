@@ -55,6 +55,175 @@ private final class ClipToolRuntimeState: ObservableObject {
     var lastInteractiveSeekSeconds: Double = -1
 }
 
+private struct ClipPlayerStageSection: View {
+    let player: AVPlayer
+    let currentPlayerHeight: CGFloat
+    let preferredPlayerDisplayWidth: CGFloat
+    let showsClipTranscriptSidebar: Bool
+    let canShowClipTranscriptSidebar: Bool
+    let clipTranscriptSidebarWidth: CGFloat
+    let transcriptSegments: [TranscriptSegment]
+    let transcriptStatusText: String
+    let canGenerateTranscript: Bool
+    let isGeneratingTranscript: Bool
+    let hasAudioTrack: Bool
+    let currentTimeSeconds: Double
+    let isPlaying: Bool
+    let isScrubbing: Bool
+    let reduceTransparency: Bool
+    let focusSearchFieldToken: Int
+    let isMiddleMousePanning: Bool
+    let onDismissTimecodeFieldFocus: () -> Void
+    let onAutoFitTranscriptSidebar: (_ maximumSidebarWidth: CGFloat) -> Void
+    let onTranscriptSidebarResizeChanged: (_ value: DragGesture.Value) -> Void
+    let onTranscriptSidebarResizeEnded: () -> Void
+    let onGenerateTranscript: () -> Void
+    let onExportTranscript: () -> Void
+    let onSeekToTranscriptTime: (_ seconds: Double) -> Void
+    let onPlayTranscriptFromTime: (_ seconds: Double) -> Void
+    let onCloseTranscript: () -> Void
+    let onShowTranscript: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            if showsClipTranscriptSidebar {
+                let rowSpacing: CGFloat = 12
+                let dividerHandleWidth: CGFloat = 4
+                let minimumPlayerRegionWidth: CGFloat = 260
+                let maximumSidebarWidth = max(
+                    220,
+                    geometry.size.width - minimumPlayerRegionWidth - dividerHandleWidth - (rowSpacing * 2)
+                )
+                let sidebarWidth = min(clipTranscriptSidebarWidth, maximumSidebarWidth)
+                let playerRegionWidth = max(
+                    minimumPlayerRegionWidth,
+                    geometry.size.width - sidebarWidth - dividerHandleWidth - (rowSpacing * 2)
+                )
+                let resolvedPlayerWidth = min(preferredPlayerDisplayWidth, playerRegionWidth)
+
+                HStack(alignment: .top, spacing: rowSpacing) {
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+
+                        InlinePlayerView(player: player)
+                            .frame(width: resolvedPlayerWidth, height: currentPlayerHeight)
+                            .transaction { transaction in
+                                transaction.animation = nil
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+                            .onTapGesture {
+                                onDismissTimecodeFieldFocus()
+                            }
+
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: playerRegionWidth, height: currentPlayerHeight, alignment: .center)
+
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(Color.secondary.opacity(0.45))
+                        .frame(width: dividerHandleWidth)
+                        .frame(maxHeight: .infinity)
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle().inset(by: -6))
+                        .onHover { hovering in
+                            if hovering {
+                                NSCursor.resizeLeftRight.set()
+                            } else if !isMiddleMousePanning {
+                                NSCursor.arrow.set()
+                            }
+                        }
+                        .simultaneousGesture(
+                            TapGesture(count: 2).onEnded {
+                                onAutoFitTranscriptSidebar(maximumSidebarWidth)
+                            }
+                        )
+                        .gesture(
+                            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                                .onChanged { value in
+                                    onTranscriptSidebarResizeChanged(value)
+                                }
+                                .onEnded { _ in
+                                    onTranscriptSidebarResizeEnded()
+                                }
+                        )
+
+                    EquatableView(content:
+                        ClipTranscriptSidebarView(
+                            transcriptSegments: transcriptSegments,
+                            transcriptStatusText: transcriptStatusText,
+                            canGenerateTranscript: canGenerateTranscript,
+                            isGeneratingTranscript: isGeneratingTranscript,
+                            hasAudioTrack: hasAudioTrack,
+                            currentTimeSeconds: currentTimeSeconds,
+                            isPlaying: isPlaying,
+                            isScrubbing: isScrubbing,
+                            reduceTransparency: reduceTransparency,
+                            focusSearchFieldToken: focusSearchFieldToken,
+                            generateTranscript: onGenerateTranscript,
+                            exportTranscript: onExportTranscript,
+                            seekToTranscriptTime: onSeekToTranscriptTime,
+                            playTranscriptFromTime: onPlayTranscriptFromTime,
+                            onCloseTranscript: onCloseTranscript
+                        )
+                    )
+                    .frame(width: sidebarWidth, height: currentPlayerHeight)
+                }
+                .frame(width: geometry.size.width, height: currentPlayerHeight, alignment: .topLeading)
+            } else {
+                ZStack(alignment: .topTrailing) {
+                    InlinePlayerView(player: player)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: currentPlayerHeight)
+                        .transaction { transaction in
+                            transaction.animation = nil
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+                        .onTapGesture {
+                            onDismissTimecodeFieldFocus()
+                        }
+
+                    if canShowClipTranscriptSidebar {
+                        Button(action: onShowTranscript) {
+                            Label("Show Transcript", systemImage: "captions.bubble")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .padding(.top, 10)
+                        .padding(.trailing, 10)
+                        .help("Show Transcript")
+                        .accessibilityLabel("Show Transcript")
+                    }
+                }
+            }
+        }
+        .frame(height: currentPlayerHeight)
+    }
+}
+
+extension ClipPlayerStageSection: Equatable {
+    static func == (lhs: ClipPlayerStageSection, rhs: ClipPlayerStageSection) -> Bool {
+        ObjectIdentifier(lhs.player) == ObjectIdentifier(rhs.player) &&
+        lhs.currentPlayerHeight == rhs.currentPlayerHeight &&
+        lhs.preferredPlayerDisplayWidth == rhs.preferredPlayerDisplayWidth &&
+        lhs.showsClipTranscriptSidebar == rhs.showsClipTranscriptSidebar &&
+        lhs.canShowClipTranscriptSidebar == rhs.canShowClipTranscriptSidebar &&
+        lhs.clipTranscriptSidebarWidth == rhs.clipTranscriptSidebarWidth &&
+        lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
+        lhs.transcriptSegments.first?.id == rhs.transcriptSegments.first?.id &&
+        lhs.transcriptSegments.last?.id == rhs.transcriptSegments.last?.id &&
+        lhs.transcriptStatusText == rhs.transcriptStatusText &&
+        lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
+        lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
+        lhs.hasAudioTrack == rhs.hasAudioTrack &&
+        lhs.currentTimeSeconds == rhs.currentTimeSeconds &&
+        lhs.isPlaying == rhs.isPlaying &&
+        lhs.isScrubbing == rhs.isScrubbing &&
+        lhs.reduceTransparency == rhs.reduceTransparency &&
+        lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
+        lhs.isMiddleMousePanning == rhs.isMiddleMousePanning
+    }
+}
+
 struct ClipToolView: View {
     private enum ClipBoundaryDragKind {
         case start
@@ -1573,7 +1742,7 @@ struct ClipToolView: View {
             }
 
             if flags.contains(.option) && flags.contains(.shift) && !flags.contains(.command) && !flags.contains(.control) {
-                let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+                let fps = max(1.0, sourcePresentation.sourceInfo?.frameRate ?? 30.0)
                 let hundredFrames = 100.0 / fps
                 if event.specialKey == .leftArrow {
                     seekPlayerAnimatedFromKeyboard(to: playheadSeconds - hundredFrames)
@@ -1594,7 +1763,7 @@ struct ClipToolView: View {
                     seekPlayerAnimatedFromKeyboard(to: totalDurationSeconds)
                     return nil
                 }
-                let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+                let fps = max(1.0, sourcePresentation.sourceInfo?.frameRate ?? 30.0)
                 let oneFrame = 1.0 / fps
                 if event.specialKey == .leftArrow {
                     seekPlayer(to: playheadSeconds - oneFrame)
@@ -1643,7 +1812,7 @@ struct ClipToolView: View {
             let hasShift = flags.contains(.shift)
             guard hasShift && !hasDisallowedModifier else { return event }
 
-            let fps = max(1.0, model.sourceInfo?.frameRate ?? 30.0)
+            let fps = max(1.0, sourcePresentation.sourceInfo?.frameRate ?? 30.0)
             let tenFrames = 10.0 / fps
 
             if event.specialKey == .leftArrow {
@@ -1917,7 +2086,7 @@ struct ClipToolView: View {
     }
 
     private var currentPlayerAspectRatio: CGFloat {
-        if let resolution = model.sourceInfo?.resolution {
+        if let resolution = sourcePresentation.sourceInfo?.resolution {
             let sanitized = resolution
                 .replacingOccurrences(of: "×", with: "x")
                 .replacingOccurrences(of: " ", with: "")
@@ -1944,147 +2113,71 @@ struct ClipToolView: View {
 
     private var clipPlayerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            GeometryReader { geometry in
-                if showsClipTranscriptSidebar {
-                    let rowSpacing: CGFloat = 12
-                    let dividerHandleWidth: CGFloat = 4
-                    let minimumPlayerRegionWidth: CGFloat = 260
-                    let maximumSidebarWidth = max(
-                        220,
-                        geometry.size.width - minimumPlayerRegionWidth - dividerHandleWidth - (rowSpacing * 2)
-                    )
-                    let sidebarWidth = min(clipTranscriptSidebarWidth, maximumSidebarWidth)
-                    let playerRegionWidth = max(
-                        minimumPlayerRegionWidth,
-                        geometry.size.width - sidebarWidth - dividerHandleWidth - (rowSpacing * 2)
-                    )
-                    let resolvedPlayerWidth = min(preferredPlayerDisplayWidth, playerRegionWidth)
-
-                    HStack(alignment: .top, spacing: rowSpacing) {
-                        HStack(spacing: 0) {
-                            Spacer(minLength: 0)
-
-                            InlinePlayerView(player: player)
-                                .frame(width: resolvedPlayerWidth, height: currentPlayerHeight)
-                                .transaction { transaction in
-                                    transaction.animation = nil
-                                }
-                                .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-                                .onTapGesture {
-                                    dismissTimecodeFieldFocus()
-                                }
-
-                            Spacer(minLength: 0)
-                        }
-                        .frame(width: playerRegionWidth, height: currentPlayerHeight, alignment: .center)
-
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(Color.secondary.opacity(0.45))
-                            .frame(width: dividerHandleWidth)
-                            .frame(maxHeight: .infinity)
-                            .padding(.vertical, 10)
-                            .contentShape(Rectangle().inset(by: -6))
-                            .onHover { hovering in
-                                if hovering {
-                                    NSCursor.resizeLeftRight.set()
-                                } else if !runtime.isMiddleMousePanning {
-                                    NSCursor.arrow.set()
-                                }
-                            }
-                            .simultaneousGesture(
-                                TapGesture(count: 2).onEnded {
-                                    let fittedWidth = bestFitTranscriptSidebarWidth(maximumSidebarWidth: maximumSidebarWidth)
-                                    storedTranscriptSidebarWidth = Double(fittedWidth)
-                                    liveTranscriptSidebarWidth = nil
-                                    runtime.transcriptSidebarResizeStartWidth = nil
-                                    runtime.transcriptSidebarResizeStartGlobalX = nil
-                                }
-                            )
-                            .gesture(
-                                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                                    .onChanged { value in
-                                        if runtime.transcriptSidebarResizeStartWidth == nil {
-                                            runtime.transcriptSidebarResizeStartWidth = clipTranscriptSidebarWidth
-                                            runtime.transcriptSidebarResizeStartGlobalX = value.startLocation.x
-                                        }
-                                        let base = runtime.transcriptSidebarResizeStartWidth ?? clipTranscriptSidebarWidth
-                                        let startX = runtime.transcriptSidebarResizeStartGlobalX ?? value.startLocation.x
-                                        let deltaX = value.location.x - startX
-                                        liveTranscriptSidebarWidth = clampedTranscriptSidebarWidth(base - deltaX)
-                                    }
-                                    .onEnded { _ in
-                                        if let liveTranscriptSidebarWidth {
-                                            storedTranscriptSidebarWidth = Double(clampedTranscriptSidebarWidth(liveTranscriptSidebarWidth))
-                                        }
-                                        liveTranscriptSidebarWidth = nil
-                                        runtime.transcriptSidebarResizeStartWidth = nil
-                                        runtime.transcriptSidebarResizeStartGlobalX = nil
-                                    }
-                            )
-
-                        EquatableView(content:
-                            ClipTranscriptSidebarView(
-                                transcriptSegments: sourcePresentation.transcriptSegments,
-                                transcriptStatusText: sourcePresentation.transcriptStatusText,
-                                canGenerateTranscript: model.canGenerateTranscript,
-                                isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
-                                hasAudioTrack: sourcePresentation.hasAudioTrack,
-                                currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
-                                isPlaying: player.rate != 0,
-                                isScrubbing: isPlayheadDragActive,
-                                reduceTransparency: reduceTransparency,
-                                focusSearchFieldToken: clipTranscriptSearchFocusToken,
-                                generateTranscript: {
-                                    model.generateTranscriptFromInspect()
-                                },
-                                exportTranscript: {
-                                    model.exportTranscriptFromInspect()
-                                },
-                                seekToTranscriptTime: { seconds in
-                                    seekPlayerAndFocusViewport(to: seconds, focusViewport: true)
-                                    springAnimateVisualPlayhead(to: seconds)
-                                },
-                                playTranscriptFromTime: { seconds in
-                                    playTranscript(from: seconds)
-                                },
-                                onCloseTranscript: {
-                                    storedTranscriptSidebarVisible = false
-                                }
-                            )
-                        )
-                        .frame(width: sidebarWidth, height: currentPlayerHeight)
+            ClipPlayerStageSection(
+                player: player,
+                currentPlayerHeight: currentPlayerHeight,
+                preferredPlayerDisplayWidth: preferredPlayerDisplayWidth,
+                showsClipTranscriptSidebar: showsClipTranscriptSidebar,
+                canShowClipTranscriptSidebar: canShowClipTranscriptSidebar,
+                clipTranscriptSidebarWidth: clipTranscriptSidebarWidth,
+                transcriptSegments: sourcePresentation.transcriptSegments,
+                transcriptStatusText: sourcePresentation.transcriptStatusText,
+                canGenerateTranscript: model.canGenerateTranscript,
+                isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
+                hasAudioTrack: sourcePresentation.hasAudioTrack,
+                currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
+                isPlaying: player.rate != 0,
+                isScrubbing: isPlayheadDragActive,
+                reduceTransparency: reduceTransparency,
+                focusSearchFieldToken: clipTranscriptSearchFocusToken,
+                isMiddleMousePanning: runtime.isMiddleMousePanning,
+                onDismissTimecodeFieldFocus: dismissTimecodeFieldFocus,
+                onAutoFitTranscriptSidebar: { maximumSidebarWidth in
+                    let fittedWidth = bestFitTranscriptSidebarWidth(maximumSidebarWidth: maximumSidebarWidth)
+                    storedTranscriptSidebarWidth = Double(fittedWidth)
+                    liveTranscriptSidebarWidth = nil
+                    runtime.transcriptSidebarResizeStartWidth = nil
+                    runtime.transcriptSidebarResizeStartGlobalX = nil
+                },
+                onTranscriptSidebarResizeChanged: { value in
+                    if runtime.transcriptSidebarResizeStartWidth == nil {
+                        runtime.transcriptSidebarResizeStartWidth = clipTranscriptSidebarWidth
+                        runtime.transcriptSidebarResizeStartGlobalX = value.startLocation.x
                     }
-                    .frame(width: geometry.size.width, height: currentPlayerHeight, alignment: .topLeading)
-                } else {
-                    ZStack(alignment: .topTrailing) {
-                        InlinePlayerView(player: player)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: currentPlayerHeight)
-                            .transaction { transaction in
-                                transaction.animation = nil
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-                            .onTapGesture {
-                                dismissTimecodeFieldFocus()
-                            }
-
-                        if canShowClipTranscriptSidebar {
-                            Button {
-                                storedTranscriptSidebarVisible = true
-                            } label: {
-                                Label("Show Transcript", systemImage: "captions.bubble")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .padding(.top, 10)
-                            .padding(.trailing, 10)
-                            .help("Show Transcript")
-                            .accessibilityLabel("Show Transcript")
-                        }
+                    let base = runtime.transcriptSidebarResizeStartWidth ?? clipTranscriptSidebarWidth
+                    let startX = runtime.transcriptSidebarResizeStartGlobalX ?? value.startLocation.x
+                    let deltaX = value.location.x - startX
+                    liveTranscriptSidebarWidth = clampedTranscriptSidebarWidth(base - deltaX)
+                },
+                onTranscriptSidebarResizeEnded: {
+                    if let liveTranscriptSidebarWidth {
+                        storedTranscriptSidebarWidth = Double(clampedTranscriptSidebarWidth(liveTranscriptSidebarWidth))
                     }
+                    liveTranscriptSidebarWidth = nil
+                    runtime.transcriptSidebarResizeStartWidth = nil
+                    runtime.transcriptSidebarResizeStartGlobalX = nil
+                },
+                onGenerateTranscript: {
+                    model.generateTranscriptFromInspect()
+                },
+                onExportTranscript: {
+                    model.exportTranscriptFromInspect()
+                },
+                onSeekToTranscriptTime: { seconds in
+                    seekPlayerAndFocusViewport(to: seconds, focusViewport: true)
+                    springAnimateVisualPlayhead(to: seconds)
+                },
+                onPlayTranscriptFromTime: { seconds in
+                    playTranscript(from: seconds)
+                },
+                onCloseTranscript: {
+                    storedTranscriptSidebarVisible = false
+                },
+                onShowTranscript: {
+                    storedTranscriptSidebarVisible = true
                 }
-            }
-            .frame(height: currentPlayerHeight)
+            )
+            .equatable()
 
             HStack {
                 Spacer()
@@ -2175,6 +2268,7 @@ struct ClipToolView: View {
                     set: { setTimelineZoomIndex(Int($0.rounded())) }
                 )
             )
+            .equatable()
         }
         .onChange(of: isCompactLayout) { _ in
             storedPlayerHeight = Double(clampedPlayerHeight(currentPlayerHeight))
