@@ -48,11 +48,20 @@ private final class ClipToolRuntimeState: ObservableObject {
     var selectionPlaybackEndSeconds: Double?
     var lastThumbnailStripRequestKey: String?
     var lastThumbnailStripPrewarmKey: String?
+    var lastThumbnailViewportMidpointSeconds: Double?
     var playerResizeStartHeight: CGFloat?
     var playerResizeStartGlobalY: CGFloat?
     var transcriptSidebarResizeStartWidth: CGFloat?
     var transcriptSidebarResizeStartGlobalX: CGFloat?
     var lastInteractiveSeekSeconds: Double = -1
+}
+
+private struct ThumbnailStripRequest {
+    let startSeconds: Double
+    let endSeconds: Double
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let cacheKey: String
 }
 
 private struct ClipPlayerStageSection: View {
@@ -636,6 +645,30 @@ struct ClipToolView: View {
         return (start, end)
     }
 
+    private func makeThumbnailStripRequest(
+        sourceURL: URL,
+        startSeconds: Double,
+        endSeconds: Double,
+        pixelsPerSecond: Double,
+        pixelHeight: Int
+    ) -> ThumbnailStripRequest? {
+        guard endSeconds > startSeconds else { return nil }
+        let pixelWidth = max(1, Int((max(0.0001, endSeconds - startSeconds) * pixelsPerSecond).rounded()))
+        return ThumbnailStripRequest(
+            startSeconds: startSeconds,
+            endSeconds: endSeconds,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            cacheKey: timelineThumbnailStripCacheKey(
+                for: sourceURL,
+                visibleStartSeconds: startSeconds,
+                visibleEndSeconds: endSeconds,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
+            )
+        )
+    }
+
     private func scheduleAdjacentThumbnailStripPrewarm(
         anchorRequestKey: String,
         sourceURL: URL,
@@ -649,109 +682,130 @@ struct ClipToolView: View {
         let baseDuration = max(0.0001, baseEnd - baseStart)
         guard baseDuration > 0.001, totalDurationSeconds > baseDuration + 0.001 else { return }
 
-        let leadingStart = max(0, baseStart - baseDuration)
-        let leadingEnd = baseStart
-        let trailingStart = baseEnd
-        let trailingEnd = min(totalDurationSeconds, baseEnd + baseDuration)
-        guard leadingEnd > leadingStart || trailingEnd > trailingStart else { return }
-
         let pixelsPerSecond = Double(baseImage.width) / baseDuration
         let pixelHeight = max(1, baseImage.height)
-
-        let leadingRequestKey: String? = {
-            guard leadingEnd > leadingStart else { return nil }
-            let pixelWidth = max(1, Int((max(0.0001, leadingEnd - leadingStart) * pixelsPerSecond).rounded()))
-            return timelineThumbnailStripCacheKey(
-                for: sourceURL,
-                visibleStartSeconds: leadingStart,
-                visibleEndSeconds: leadingEnd,
-                pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight
-            )
+        let preferredDirection = {
+            let currentMidpoint = (visibleStartSeconds + visibleEndSeconds) * 0.5
+            let previousMidpoint = runtime.lastThumbnailViewportMidpointSeconds
+            let delta = currentMidpoint - (previousMidpoint ?? currentMidpoint)
+            if delta > 0.05 { return 1 }
+            if delta < -0.05 { return -1 }
+            return 0
         }()
 
-        let trailingRequestKey: String? = {
-            guard trailingEnd > trailingStart else { return nil }
-            let pixelWidth = max(1, Int((max(0.0001, trailingEnd - trailingStart) * pixelsPerSecond).rounded()))
-            return timelineThumbnailStripCacheKey(
-                for: sourceURL,
-                visibleStartSeconds: trailingStart,
-                visibleEndSeconds: trailingEnd,
-                pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight
-            )
-        }()
+        let maxPrewarmRings = 3
+        struct RingRequest {
+            let ring: Int
+            let request: ThumbnailStripRequest
+            let isLeading: Bool
+        }
 
-        let cachedLeading = leadingRequestKey.flatMap { model.timelineThumbnailStripImageFromCache(forKey: $0) }
-        let cachedTrailing = trailingRequestKey.flatMap { model.timelineThumbnailStripImageFromCache(forKey: $0) }
+        var ringRequests: [RingRequest] = []
+        for ring in 1...maxPrewarmRings {
+            let leadingStart = max(0, baseStart - (Double(ring) * baseDuration))
+            let leadingEnd = max(0, baseStart - (Double(ring - 1) * baseDuration))
+            if let request = makeThumbnailStripRequest(
+                sourceURL: sourceURL,
+                startSeconds: leadingStart,
+                endSeconds: leadingEnd,
+                pixelsPerSecond: pixelsPerSecond,
+                pixelHeight: pixelHeight
+            ) {
+                ringRequests.append(RingRequest(ring: ring, request: request, isLeading: true))
+            }
+
+            let trailingStart = min(totalDurationSeconds, baseEnd + (Double(ring - 1) * baseDuration))
+            let trailingEnd = min(totalDurationSeconds, baseEnd + (Double(ring) * baseDuration))
+            if let request = makeThumbnailStripRequest(
+                sourceURL: sourceURL,
+                startSeconds: trailingStart,
+                endSeconds: trailingEnd,
+                pixelsPerSecond: pixelsPerSecond,
+                pixelHeight: pixelHeight
+            ) {
+                ringRequests.append(RingRequest(ring: ring, request: request, isLeading: false))
+            }
+        }
+
+        guard !ringRequests.isEmpty else { return }
+
+        let orderedRequests = ringRequests.sorted { lhs, rhs in
+            if lhs.ring != rhs.ring { return lhs.ring < rhs.ring }
+            if preferredDirection > 0 {
+                return !lhs.isLeading && rhs.isLeading
+            }
+            if preferredDirection < 0 {
+                return lhs.isLeading && !rhs.isLeading
+            }
+            return lhs.isLeading && !rhs.isLeading
+        }
+
+        var cachedImagesByKey: [String: CGImage] = [:]
+        for request in orderedRequests {
+            if let cached = model.timelineThumbnailStripImageFromCache(forKey: request.request.cacheKey) {
+                cachedImagesByKey[request.request.cacheKey] = cached
+            }
+        }
+
+        let firstLeadingRequest = orderedRequests.first { $0.ring == 1 && $0.isLeading }?.request
+        let firstTrailingRequest = orderedRequests.first { $0.ring == 1 && !$0.isLeading }?.request
 
         runtime.thumbnailStripPrewarmTask?.cancel()
         runtime.thumbnailStripPrewarmTask = nil
         runtime.lastThumbnailStripPrewarmKey = anchorRequestKey
 
         runtime.thumbnailStripPrewarmTask = Task { @MainActor in
-            let leadingWidth = leadingEnd > leadingStart
-                ? max(1, Int((max(0.0001, leadingEnd - leadingStart) * pixelsPerSecond).rounded()))
-                : 0
-            let trailingWidth = trailingEnd > trailingStart
-                ? max(1, Int((max(0.0001, trailingEnd - trailingStart) * pixelsPerSecond).rounded()))
-                : 0
-
             let prewarmTask = Task.detached(priority: .utility) {
-                async let generatedLeading: CGImage? = {
-                    guard cachedLeading == nil, leadingEnd > leadingStart else { return nil }
-                    return await generateTimelineThumbnailStripImage(
+                var generatedImagesByKey: [String: CGImage] = [:]
+                for request in orderedRequests {
+                    if Task.isCancelled { break }
+                    if cachedImagesByKey[request.request.cacheKey] != nil { continue }
+                    guard let generated = await generateTimelineThumbnailStripImage(
                         fileURL: sourceURL,
-                        visibleStartSeconds: leadingStart,
-                        visibleEndSeconds: leadingEnd,
+                        visibleStartSeconds: request.request.startSeconds,
+                        visibleEndSeconds: request.request.endSeconds,
                         totalDurationSeconds: totalDurationSeconds,
-                        pixelWidth: leadingWidth,
-                        pixelHeight: pixelHeight,
+                        pixelWidth: request.request.pixelWidth,
+                        pixelHeight: request.request.pixelHeight,
                         shouldCancel: { Task.isCancelled }
-                    )
-                }()
-
-                async let generatedTrailing: CGImage? = {
-                    guard cachedTrailing == nil, trailingEnd > trailingStart else { return nil }
-                    return await generateTimelineThumbnailStripImage(
-                        fileURL: sourceURL,
-                        visibleStartSeconds: trailingStart,
-                        visibleEndSeconds: trailingEnd,
-                        totalDurationSeconds: totalDurationSeconds,
-                        pixelWidth: trailingWidth,
-                        pixelHeight: pixelHeight,
-                        shouldCancel: { Task.isCancelled }
-                    )
-                }()
-
-                return await (generatedLeading, generatedTrailing)
+                    ) else {
+                        continue
+                    }
+                    generatedImagesByKey[request.request.cacheKey] = generated
+                }
+                return generatedImagesByKey
             }
 
-            let (generatedLeading, generatedTrailing) = await prewarmTask.value
+            let generatedImagesByKey = await prewarmTask.value
             guard !Task.isCancelled else { return }
             guard runtime.lastThumbnailStripRequestKey == anchorRequestKey else { return }
             guard let currentImage = thumbnailStripImage else { return }
             guard abs(thumbnailStripSourceStartSeconds - baseStart) < 0.0001,
                   abs(thumbnailStripSourceEndSeconds - baseEnd) < 0.0001 else { return }
 
-            if let generatedLeading, let leadingRequestKey {
-                model.cacheTimelineThumbnailStripImage(generatedLeading, forKey: leadingRequestKey)
+            for request in orderedRequests {
+                if let generated = generatedImagesByKey[request.request.cacheKey] {
+                    model.cacheTimelineThumbnailStripImage(generated, forKey: request.request.cacheKey)
+                }
             }
 
-            if let generatedTrailing, let trailingRequestKey {
-                model.cacheTimelineThumbnailStripImage(generatedTrailing, forKey: trailingRequestKey)
+            let leadingImage = firstLeadingRequest.flatMap {
+                cachedImagesByKey[$0.cacheKey] ?? generatedImagesByKey[$0.cacheKey]
+            }
+            let trailingImage = firstTrailingRequest.flatMap {
+                cachedImagesByKey[$0.cacheKey] ?? generatedImagesByKey[$0.cacheKey]
             }
 
             let merged = mergeTimelineThumbnailStripImages(
                 baseImage: currentImage,
                 baseStartSeconds: baseStart,
                 baseEndSeconds: baseEnd,
-                leadingImage: cachedLeading ?? generatedLeading,
-                leadingStartSeconds: leadingEnd > leadingStart ? leadingStart : nil,
-                leadingEndSeconds: leadingEnd > leadingStart ? leadingEnd : nil,
-                trailingImage: cachedTrailing ?? generatedTrailing,
-                trailingStartSeconds: trailingEnd > trailingStart ? trailingStart : nil,
-                trailingEndSeconds: trailingEnd > trailingStart ? trailingEnd : nil
+                leadingImage: leadingImage,
+                leadingStartSeconds: firstLeadingRequest?.startSeconds,
+                leadingEndSeconds: firstLeadingRequest?.endSeconds,
+                trailingImage: trailingImage,
+                trailingStartSeconds: firstTrailingRequest?.startSeconds,
+                trailingEndSeconds: firstTrailingRequest?.endSeconds
             )
 
             guard let merged else { return }
@@ -783,6 +837,7 @@ struct ClipToolView: View {
         }
 
         let visibleDuration = visibleEndSeconds - visibleStartSeconds
+        runtime.lastThumbnailViewportMidpointSeconds = (visibleStartSeconds + visibleEndSeconds) * 0.5
         let viewportWidth = timelineInteractiveWidth
         let hasExistingStrip =
             thumbnailStripImage != nil &&
@@ -838,6 +893,32 @@ struct ClipToolView: View {
         let existingStripImage = stripScaleCompatible ? thumbnailStripImage : nil
         let existingStripStart = thumbnailStripSourceStartSeconds
         let existingStripEnd = thumbnailStripSourceEndSeconds
+        let existingPixelsPerSecond: Double? = {
+            guard stripScaleCompatible,
+                  let existingStripImage,
+                  thumbnailStripSourceEndSeconds > thumbnailStripSourceStartSeconds else { return nil }
+            return Double(existingStripImage.width) / max(0.0001, thumbnailStripSourceEndSeconds - thumbnailStripSourceStartSeconds)
+        }()
+        let compatibleLeadingRequest = existingPixelsPerSecond.flatMap {
+            makeThumbnailStripRequest(
+                sourceURL: sourceURL,
+                startSeconds: generationRange.start,
+                endSeconds: min(existingStripStart, generationRange.end),
+                pixelsPerSecond: $0,
+                pixelHeight: pixelHeight
+            )
+        }
+        let compatibleTrailingRequest = existingPixelsPerSecond.flatMap {
+            makeThumbnailStripRequest(
+                sourceURL: sourceURL,
+                startSeconds: max(existingStripEnd, generationRange.start),
+                endSeconds: generationRange.end,
+                pixelsPerSecond: $0,
+                pixelHeight: pixelHeight
+            )
+        }
+        let compatibleLeadingCached = compatibleLeadingRequest.flatMap { model.timelineThumbnailStripImageFromCache(forKey: $0.cacheKey) }
+        let compatibleTrailingCached = compatibleTrailingRequest.flatMap { model.timelineThumbnailStripImageFromCache(forKey: $0.cacheKey) }
 
         if runtime.lastThumbnailStripRequestKey != requestKey {
             runtime.thumbnailStripPrewarmTask?.cancel()
@@ -881,35 +962,27 @@ struct ClipToolView: View {
                    let existingImage = existingStripImage {
                     let existingStart = existingStripStart
                     let existingEnd = existingStripEnd
-                    let existingDuration = max(0.0001, existingEnd - existingStart)
-                    let pixelsPerSecond = Double(existingImage.width) / existingDuration
-
-                    let edgeImage: @Sendable (Double, Double) async -> (image: CGImage, startSeconds: Double, endSeconds: Double)? = { startSeconds, endSeconds in
-                        guard endSeconds > startSeconds else { return nil }
-                        let edgePixelWidth = max(1, Int((max(0.0001, endSeconds - startSeconds) * pixelsPerSecond).rounded()))
-
+                    let edgeImage: @Sendable (ThumbnailStripRequest?, CGImage?) async -> (image: CGImage, startSeconds: Double, endSeconds: Double)? = { request, cachedImage in
+                        guard let request else { return nil }
+                        if let cachedImage {
+                            return (cachedImage, request.startSeconds, request.endSeconds)
+                        }
                         guard let generated = await generateTimelineThumbnailStripImage(
                             fileURL: sourceURL,
-                            visibleStartSeconds: startSeconds,
-                            visibleEndSeconds: endSeconds,
+                            visibleStartSeconds: request.startSeconds,
+                            visibleEndSeconds: request.endSeconds,
                             totalDurationSeconds: totalDuration,
-                            pixelWidth: edgePixelWidth,
-                            pixelHeight: pixelHeight,
+                            pixelWidth: request.pixelWidth,
+                            pixelHeight: request.pixelHeight,
                             shouldCancel: { Task.isCancelled }
                         ) else {
                             return nil
                         }
-                        return (generated, startSeconds, endSeconds)
+                        return (generated, request.startSeconds, request.endSeconds)
                     }
 
-                    async let leading = edgeImage(
-                        generationRange.start,
-                        min(existingStart, generationRange.end)
-                    )
-                    async let trailing = edgeImage(
-                        max(existingEnd, generationRange.start),
-                        generationRange.end
-                    )
+                    async let leading = edgeImage(compatibleLeadingRequest, compatibleLeadingCached)
+                    async let trailing = edgeImage(compatibleTrailingRequest, compatibleTrailingCached)
 
                     let leadingEdge = await leading
                     let trailingEdge = await trailing
