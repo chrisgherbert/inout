@@ -37,6 +37,32 @@ struct ClipOutputPanel: View {
         }
     }
 
+    private var exportButtonTitle: String {
+        if model.isGeneratingTranscript {
+            return "Generating Transcript…"
+        }
+        if model.isActivityRunning {
+            return "Queue Clip"
+        }
+        return isOptionKeyPressed ? "Quick Export Clip" : "Export Clip"
+    }
+
+    private var exportButtonSymbolName: String {
+        if model.isGeneratingTranscript {
+            return "captions.bubble"
+        }
+        return model.isActivityRunning ? "text.badge.plus" : "film.stack"
+    }
+
+    private var exportButtonHelpText: String {
+        if model.isGeneratingTranscript {
+            return "Clip export is unavailable while a transcript is being generated."
+        }
+        return model.isActivityRunning
+            ? "Queue this clip export in the current window."
+            : "Export Clip. Option-click for Quick Export (no save dialog)."
+    }
+
     var body: some View {
         GroupBox("Output") {
             VStack(alignment: .leading, spacing: 10) {
@@ -328,18 +354,12 @@ struct ClipOutputPanel: View {
                         }
                     } label: {
                         Label(
-                            model.isActivityRunning
-                                ? "Queue Clip"
-                                : (isOptionKeyPressed ? "Quick Export Clip" : "Export Clip"),
-                            systemImage: model.isActivityRunning ? "text.badge.plus" : "film.stack"
+                            exportButtonTitle,
+                            systemImage: exportButtonSymbolName
                         )
                     }
                     .buttonStyle(.borderedProminent)
-                    .help(
-                        model.isActivityRunning
-                        ? "Queue this clip export in the current window."
-                        : "Export Clip. Option-click for Quick Export (no save dialog)."
-                    )
+                    .help(exportButtonHelpText)
                     .disabled(!model.canRequestClipExport)
                 }
             }
