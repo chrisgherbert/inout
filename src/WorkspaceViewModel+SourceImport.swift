@@ -3,6 +3,29 @@ import AppKit
 import AVFoundation
 
 extension WorkspaceViewModel {
+    private func clearSourceScopedCachesAndQueues() {
+        waveformCache.removeAll(keepingCapacity: false)
+        waveformCacheOrder.removeAll(keepingCapacity: false)
+        timelineThumbnailStripCache.removeAll(keepingCapacity: false)
+        timelineThumbnailStripCacheOrder.removeAll(keepingCapacity: false)
+        clearQueuedJobs()
+    }
+
+    private func resetSourceScopedUIState(transcriptStatus: String, uiMessage: String) {
+        transcriptSegments = []
+        hasCachedTranscript = false
+        transcriptStatusText = transcriptStatus
+        isGeneratingTranscript = false
+        outputURL = nil
+        captureTimelineMarkers = []
+        highlightedCaptureTimelineMarkerID = nil
+        highlightedClipBoundary = nil
+        clipPlayheadSeconds = 0
+        clearActivityConsole()
+        self.uiMessage = uiMessage
+        resetClipRange()
+    }
+
     func chooseSource() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -392,33 +415,21 @@ extension WorkspaceViewModel {
             stopCurrentActivity()
         }
 
-        waveformCache.removeAll(keepingCapacity: false)
-        waveformCacheOrder.removeAll(keepingCapacity: false)
-        timelineThumbnailStripCache.removeAll(keepingCapacity: false)
-        timelineThumbnailStripCacheOrder.removeAll(keepingCapacity: false)
-        clearQueuedJobs()
+        clearSourceScopedCachesAndQueues()
 
         sourceURL = url
         sourceSessionID = UUID()
         analysis = FileAnalysis(fileURL: url)
         sourceInfo = loadSourceMediaInfo(for: url)
-        transcriptSegments = []
-        hasCachedTranscript = false
-        transcriptStatusText = hasAudioTrack ? "No transcript generated yet." : "No audio track available for transcript."
-        isGeneratingTranscript = false
         clipEncodingMode = hasVideoTrack ? defaultClipEncodingMode : .audioOnly
         applySuggestedClipBitrateFromSource()
-        outputURL = nil
-        uiMessage = "Loaded \(url.lastPathComponent)"
         wasCancelled = false
         analyzeProgress = 0
         exportProgress = 0
-        captureTimelineMarkers = []
-        highlightedCaptureTimelineMarkerID = nil
-        highlightedClipBoundary = nil
-        clipPlayheadSeconds = 0
-        clearActivityConsole()
-        resetClipRange()
+        resetSourceScopedUIState(
+            transcriptStatus: hasAudioTrack ? "No transcript generated yet." : "No audio track available for transcript.",
+            uiMessage: "Loaded \(url.lastPathComponent)"
+        )
         if PlayheadBenchmarkConfig.shared.enabled {
             PlayheadDiagnostics.shared.writeProgress(stage: "set_source_complete", scenario: nil)
         }
@@ -439,26 +450,11 @@ extension WorkspaceViewModel {
         if isAnalyzing || isExporting {
             stopCurrentActivity()
         }
+        clearSourceScopedCachesAndQueues()
         sourceURL = nil
         sourceSessionID = UUID()
         analysis = nil
         sourceInfo = nil
-        transcriptSegments = []
-        hasCachedTranscript = false
-        transcriptStatusText = "No transcript generated yet."
-        isGeneratingTranscript = false
-        waveformCache.removeAll(keepingCapacity: false)
-        waveformCacheOrder.removeAll(keepingCapacity: false)
-        timelineThumbnailStripCache.removeAll(keepingCapacity: false)
-        timelineThumbnailStripCacheOrder.removeAll(keepingCapacity: false)
-        clearQueuedJobs()
-        outputURL = nil
-        captureTimelineMarkers = []
-        highlightedCaptureTimelineMarkerID = nil
-        highlightedClipBoundary = nil
-        clipPlayheadSeconds = 0
-        clearActivityConsole()
-        uiMessage = "Ready"
-        resetClipRange()
+        resetSourceScopedUIState(transcriptStatus: "No transcript generated yet.", uiMessage: "Ready")
     }
 }

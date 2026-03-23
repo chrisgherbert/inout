@@ -63,6 +63,64 @@ struct ClipOutputPanel: View {
             : "Export Clip. Option-click for Quick Export (no save dialog)."
     }
 
+    private var audioBitrateBinding: Binding<Double> {
+        Binding(
+            get: { Double(model.clipAudioBitrateKbps) },
+            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
+        )
+    }
+
+    @ViewBuilder
+    private func audioBitrateRow() -> some View {
+        HStack {
+            Text("Audio bitrate")
+                .frame(width: 120, alignment: .leading)
+            Slider(
+                value: audioBitrateBinding,
+                in: 64...320,
+                step: 32
+            )
+            .controlSize(.small)
+            Text("\(model.clipAudioBitrateKbps) kbps")
+                .font(.caption.monospacedDigit())
+                .frame(width: 90, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private func audioProcessingControls(
+        boostAudio: Binding<Bool>,
+        addFadeInOut: Binding<Bool>
+    ) -> some View {
+        HStack(spacing: 10) {
+            Toggle(
+                "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
+                isOn: boostAudio
+            )
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+
+            if boostAudio.wrappedValue {
+                Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
+                    ForEach(AdvancedBoostAmount.allCases) { amount in
+                        Text(amount.label).tag(amount)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.mini)
+                .frame(width: 88, alignment: .leading)
+                .help("Input gain before limiter.")
+            }
+
+            Spacer(minLength: 0)
+        }
+
+        Toggle("Add audio fade in/out (0.33s at start/end)", isOn: addFadeInOut)
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+    }
+
     var body: some View {
         GroupBox("Output") {
             VStack(alignment: .leading, spacing: 10) {
@@ -106,50 +164,12 @@ struct ClipOutputPanel: View {
                                     .frame(width: 148)
                                 }
 
-                                HStack {
-                                    Text("Audio bitrate")
-                                        .frame(width: 120, alignment: .leading)
-                                    Slider(
-                                        value: Binding(
-                                            get: { Double(model.clipAudioBitrateKbps) },
-                                            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
-                                        ),
-                                        in: 64...320,
-                                        step: 32
-                                    )
-                                    .controlSize(.small)
-                                    Text("\(model.clipAudioBitrateKbps) kbps")
-                                        .font(.caption.monospacedDigit())
-                                        .frame(width: 90, alignment: .trailing)
-                                }
+                                audioBitrateRow()
 
-                                HStack(spacing: 10) {
-                                    Toggle(
-                                        "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
-                                        isOn: $model.clipAudioOnlyBoostAudio
-                                    )
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
-
-                                    if model.clipAudioOnlyBoostAudio {
-                                        Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
-                                            ForEach(AdvancedBoostAmount.allCases) { amount in
-                                                Text(amount.label).tag(amount)
-                                            }
-                                        }
-                                        .labelsHidden()
-                                        .pickerStyle(.menu)
-                                        .controlSize(.mini)
-                                        .frame(width: 88, alignment: .leading)
-                                        .help("Input gain before limiter.")
-                                    }
-
-                                    Spacer(minLength: 0)
-                                }
-
-                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAudioOnlyAddFadeInOut)
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
+                                audioProcessingControls(
+                                    boostAudio: $model.clipAudioOnlyBoostAudio,
+                                    addFadeInOut: $model.clipAudioOnlyAddFadeInOut
+                                )
                             }
                         } else if uiClipEncodingMode == .fast {
                             LabeledContent("Format") {
@@ -229,50 +249,12 @@ struct ClipOutputPanel: View {
                                         .frame(width: 90, alignment: .trailing)
                                 }
 
-                                HStack {
-                                    Text("Audio bitrate")
-                                        .frame(width: 120, alignment: .leading)
-                                    Slider(
-                                        value: Binding(
-                                            get: { Double(model.clipAudioBitrateKbps) },
-                                            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
-                                        ),
-                                        in: 64...320,
-                                        step: 32
-                                    )
-                                    .controlSize(.small)
-                                    Text("\(model.clipAudioBitrateKbps) kbps")
-                                        .font(.caption.monospacedDigit())
-                                        .frame(width: 90, alignment: .trailing)
-                                }
+                                audioBitrateRow()
 
-                                HStack(spacing: 10) {
-                                    Toggle(
-                                        "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
-                                        isOn: $model.clipAdvancedBoostAudio
-                                    )
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
-
-                                    if model.clipAdvancedBoostAudio {
-                                        Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
-                                            ForEach(AdvancedBoostAmount.allCases) { amount in
-                                                Text(amount.label).tag(amount)
-                                            }
-                                        }
-                                        .labelsHidden()
-                                        .pickerStyle(.menu)
-                                        .controlSize(.mini)
-                                        .frame(width: 88, alignment: .leading)
-                                        .help("Input gain before limiter.")
-                                    }
-
-                                    Spacer(minLength: 0)
-                                }
-
-                                Toggle("Add audio fade in/out (0.33s at start/end)", isOn: $model.clipAdvancedAddFadeInOut)
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
+                                audioProcessingControls(
+                                    boostAudio: $model.clipAdvancedBoostAudio,
+                                    addFadeInOut: $model.clipAdvancedAddFadeInOut
+                                )
 
                                 HStack(spacing: 10) {
                                     Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)

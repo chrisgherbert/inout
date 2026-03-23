@@ -20,6 +20,116 @@ extension Notification.Name {
     static let clipToggleTranscriptSidebar = Notification.Name("clipToggleTranscriptSidebar")
 }
 
+struct AppShortcutDefinition: Identifiable {
+    let id: String
+    let action: String
+    let keys: [String]
+    let keyEquivalent: KeyEquivalent?
+    let modifiers: EventModifiers
+
+    init(
+        id: String,
+        action: String,
+        keys: [String],
+        keyEquivalent: KeyEquivalent? = nil,
+        modifiers: EventModifiers = []
+    ) {
+        self.id = id
+        self.action = action
+        self.keys = keys
+        self.keyEquivalent = keyEquivalent
+        self.modifiers = modifiers
+    }
+}
+
+struct AppShortcutGroupDefinition: Identifiable {
+    let id: String
+    let title: String
+    let items: [AppShortcutDefinition]
+}
+
+enum AppShortcutCatalog {
+    static let playPause = AppShortcutDefinition(id: "playPause", action: "Play or pause", keys: ["Space"])
+    static let playSelection = AppShortcutDefinition(id: "playSelection", action: "Play selection only", keys: ["⌃", "Space"])
+    static let shuttleBackward = AppShortcutDefinition(id: "shuttleBackward", action: "Shuttle backward", keys: ["J"])
+    static let shuttlePause = AppShortcutDefinition(id: "shuttlePause", action: "Pause shuttle", keys: ["K"])
+    static let shuttleForward = AppShortcutDefinition(id: "shuttleForward", action: "Shuttle forward", keys: ["L"])
+
+    static let setClipStart = AppShortcutDefinition(id: "setClipStart", action: "Set In", keys: ["I"], keyEquivalent: "i")
+    static let setClipEnd = AppShortcutDefinition(id: "setClipEnd", action: "Set Out", keys: ["O"], keyEquivalent: "o")
+    static let clearClipRange = AppShortcutDefinition(id: "clearClipRange", action: "Clear In and Out", keys: ["X"], keyEquivalent: "x")
+    static let selectFullSource = AppShortcutDefinition(id: "selectFullSource", action: "Select full source", keys: ["⌘", "A"])
+    static let stepBackwardTenFrames = AppShortcutDefinition(id: "stepBackwardTenFrames", action: "Step backward 10 frames", keys: ["⇧", "←"])
+    static let stepForwardTenFrames = AppShortcutDefinition(id: "stepForwardTenFrames", action: "Step forward 10 frames", keys: ["⇧", "→"])
+
+    static let addMarker = AppShortcutDefinition(id: "addMarker", action: "Add marker", keys: ["M"], keyEquivalent: "m")
+    static let previousMarker = AppShortcutDefinition(id: "previousMarker", action: "Previous marker or edge", keys: ["↑"], keyEquivalent: .upArrow)
+    static let nextMarker = AppShortcutDefinition(id: "nextMarker", action: "Next marker or edge", keys: ["↓"], keyEquivalent: .downArrow)
+    static let deleteMarker = AppShortcutDefinition(id: "deleteMarker", action: "Delete selected marker", keys: ["Delete"])
+    static let backspaceDeleteMarker = AppShortcutDefinition(id: "backspaceDeleteMarker", action: "Delete selected marker", keys: ["Backspace"])
+    static let jumpTimelineStart = AppShortcutDefinition(id: "jumpTimelineStart", action: "Jump to timeline start", keys: ["Home"])
+    static let jumpTimelineEnd = AppShortcutDefinition(id: "jumpTimelineEnd", action: "Jump to timeline end", keys: ["End"])
+
+    static let zoomIn = AppShortcutDefinition(id: "zoomIn", action: "Zoom in", keys: ["="])
+    static let zoomOut = AppShortcutDefinition(id: "zoomOut", action: "Zoom out", keys: ["-"])
+    static let commandZoomIn = AppShortcutDefinition(id: "commandZoomIn", action: "Zoom in", keys: ["⌘", "+"], keyEquivalent: "=", modifiers: [.command])
+    static let commandZoomOut = AppShortcutDefinition(id: "commandZoomOut", action: "Zoom out", keys: ["⌘", "-"], keyEquivalent: "-", modifiers: [.command])
+    static let fitTimeline = AppShortcutDefinition(id: "fitTimeline", action: "Fit timeline", keys: ["⌘", "0"], keyEquivalent: "0", modifiers: [.command])
+    static let switchToClip = AppShortcutDefinition(id: "switchToClip", action: "Switch to Clip", keys: ["⌘", "1"], keyEquivalent: "1", modifiers: [.command])
+    static let switchToAnalyze = AppShortcutDefinition(id: "switchToAnalyze", action: "Switch to Analyze", keys: ["⌘", "2"], keyEquivalent: "2", modifiers: [.command])
+    static let switchToConvert = AppShortcutDefinition(id: "switchToConvert", action: "Switch to Convert", keys: ["⌘", "3"], keyEquivalent: "3", modifiers: [.command])
+    static let switchToInspect = AppShortcutDefinition(id: "switchToInspect", action: "Switch to Inspect", keys: ["⌘", "4"], keyEquivalent: "4", modifiers: [.command])
+
+    static let openMedia = AppShortcutDefinition(id: "openMedia", action: "Open media", keys: ["⌘", "O"], keyEquivalent: "o", modifiers: [.command])
+    static let downloadMediaFromURL = AppShortcutDefinition(id: "downloadMediaFromURL", action: "Download media from URL", keys: ["⌘", "⇧", "O"], keyEquivalent: "o", modifiers: [.command, .shift])
+    static let exportClip = AppShortcutDefinition(id: "exportClip", action: "Export clip", keys: ["⌘", "E"], keyEquivalent: "e", modifiers: [.command])
+    static let quickExportClip = AppShortcutDefinition(id: "quickExportClip", action: "Quick export clip", keys: ["⌘", "⇧", "E"], keyEquivalent: "e", modifiers: [.command, .shift])
+    static let exportAudio = AppShortcutDefinition(id: "exportAudio", action: "Export audio", keys: ["⌘", "⌥", "E"], keyEquivalent: "e", modifiers: [.command, .option])
+    static let stopCurrentTask = AppShortcutDefinition(id: "stopCurrentTask", action: "Stop current task", keys: ["⌘", "."], keyEquivalent: ".", modifiers: [.command])
+    static let openHelp = AppShortcutDefinition(id: "openHelp", action: "Open Help", keys: ["⌘", "⇧", "/"], keyEquivalent: "/", modifiers: [.command, .shift])
+    static let toggleTranscript = AppShortcutDefinition(id: "toggleTranscript", action: "Toggle transcript", keys: ["⌘", "⇧", "T"], keyEquivalent: "t", modifiers: [.command, .shift])
+    static let findInTranscript = AppShortcutDefinition(id: "findInTranscript", action: "Find in transcript", keys: ["⌘", "F"], keyEquivalent: "f", modifiers: [.command])
+
+    static let helpGroups: [AppShortcutGroupDefinition] = [
+        AppShortcutGroupDefinition(
+            id: "playback",
+            title: "Playback",
+            items: [playPause, playSelection, shuttleBackward, shuttlePause, shuttleForward]
+        ),
+        AppShortcutGroupDefinition(
+            id: "trimAndSelection",
+            title: "Trim and selection",
+            items: [setClipStart, setClipEnd, clearClipRange, selectFullSource, stepBackwardTenFrames, stepForwardTenFrames]
+        ),
+        AppShortcutGroupDefinition(
+            id: "markersAndNavigation",
+            title: "Markers and navigation",
+            items: [addMarker, previousMarker, nextMarker, deleteMarker, backspaceDeleteMarker, jumpTimelineStart, jumpTimelineEnd]
+        ),
+        AppShortcutGroupDefinition(
+            id: "zoomAndTools",
+            title: "Zoom and tools",
+            items: [zoomIn, zoomOut, commandZoomIn, commandZoomOut, fitTimeline, switchToClip, switchToAnalyze, switchToConvert, switchToInspect]
+        ),
+        AppShortcutGroupDefinition(
+            id: "fileExportAndHelp",
+            title: "File, export, and help",
+            items: [openMedia, downloadMediaFromURL, exportClip, quickExportClip, exportAudio, stopCurrentTask, openHelp]
+        )
+    ]
+}
+
+extension View {
+    @ViewBuilder
+    func appKeyboardShortcut(_ shortcut: AppShortcutDefinition) -> some View {
+        if let keyEquivalent = shortcut.keyEquivalent {
+            keyboardShortcut(keyEquivalent, modifiers: shortcut.modifiers)
+        } else {
+            self
+        }
+    }
+}
+
 private struct WorkspaceModelFocusedValueKey: FocusedValueKey {
     typealias Value = WorkspaceViewModel
 }
@@ -329,6 +439,54 @@ enum URLDownloadPreset: String, CaseIterable, Identifiable {
 
     var requiresTranscodeWarning: Bool {
         self == .bestAnyToMP4
+    }
+
+    var helpText: String {
+        switch self {
+        case .compatibleBest:
+            return "Optimized for immediate playback in In/Out."
+        case .bestAnyToMP4:
+            return "Downloads highest available quality, then transcodes to MP4 for compatibility."
+        case .audioOnly:
+            return "Extracts audio and saves as MP3."
+        case .compatible1080:
+            return "Limits to 1080p-compatible formats."
+        case .compatible720:
+            return "Limits to 720p-compatible formats."
+        }
+    }
+
+    var badgeText: String? {
+        switch self {
+        case .compatibleBest:
+            return "Recommended"
+        case .bestAnyToMP4:
+            return "Slow"
+        default:
+            return nil
+        }
+    }
+
+    var badgeTint: Color {
+        switch self {
+        case .compatibleBest:
+            return .accentColor
+        case .bestAnyToMP4:
+            return .red
+        default:
+            return .clear
+        }
+    }
+}
+
+extension URLDownloadAuthenticationMode {
+    var helpText: String? {
+        switch self {
+        case .none:
+            return nil
+        case .browserCookies:
+            return "Uses yt-dlp's browser cookie import to access your existing signed-in session."
+        }
     }
 }
 

@@ -66,7 +66,7 @@ struct CheckBlackFramesApp: App {
             HelpDocumentationView()
                 .preferredColorScheme(appearanceColorScheme)
         }
-        .defaultSize(width: 760, height: 680)
+        .defaultSize(width: 920, height: 700)
         .windowResizability(.contentSize)
 
         .commands {
@@ -82,19 +82,19 @@ struct CheckBlackFramesApp: App {
                 Button("Set Clip Start at Playhead") {
                     NotificationCenter.default.post(name: .clipSetStartAtPlayhead, object: focusedModel)
                 }
-                .keyboardShortcut("i", modifiers: [])
+                .appKeyboardShortcut(AppShortcutCatalog.setClipStart)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button("Set Clip End at Playhead") {
                     NotificationCenter.default.post(name: .clipSetEndAtPlayhead, object: focusedModel)
                 }
-                .keyboardShortcut("o", modifiers: [])
+                .appKeyboardShortcut(AppShortcutCatalog.setClipEnd)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button("Clear Clip In/Out") {
                     NotificationCenter.default.post(name: .clipClearRange, object: focusedModel)
                 }
-                .keyboardShortcut("x", modifiers: [])
+                .appKeyboardShortcut(AppShortcutCatalog.clearClipRange)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button {
@@ -102,7 +102,7 @@ struct CheckBlackFramesApp: App {
                 } label: {
                     Label("Add Marker at Playhead", systemImage: "mappin.and.ellipse")
                 }
-                .keyboardShortcut("m", modifiers: [])
+                .appKeyboardShortcut(AppShortcutCatalog.addMarker)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button {
@@ -110,7 +110,7 @@ struct CheckBlackFramesApp: App {
                 } label: {
                     Label("Previous Marker (or In/Out)", systemImage: "chevron.up.circle")
                 }
-                .keyboardShortcut(.upArrow, modifiers: [])
+                .appKeyboardShortcut(AppShortcutCatalog.previousMarker)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button {
@@ -118,7 +118,7 @@ struct CheckBlackFramesApp: App {
                 } label: {
                     Label("Next Marker (or In/Out)", systemImage: "chevron.down.circle")
                 }
-                .keyboardShortcut(.downArrow, modifiers: [])
+                .appKeyboardShortcut(AppShortcutCatalog.nextMarker)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
             }
 
@@ -135,14 +135,14 @@ struct CheckBlackFramesApp: App {
                 } label: {
                     Label("Choose Media…", systemImage: "video.badge.plus")
                 }
-                .keyboardShortcut("o", modifiers: [.command])
+                .appKeyboardShortcut(AppShortcutCatalog.openMedia)
 
                 Button {
                     focusedModel?.presentURLImportSheet()
                 } label: {
                     Label("Download Media from URL…", systemImage: "link.badge.plus")
                 }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .appKeyboardShortcut(AppShortcutCatalog.downloadMediaFromURL)
                 .disabled(!(focusedModel?.canRequestURLDownload ?? false))
 
                 Button {
@@ -161,7 +161,7 @@ struct CheckBlackFramesApp: App {
                 } label: {
                     Label("Export Audio…", systemImage: "arrow.down.doc")
                 }
-                .keyboardShortcut("e", modifiers: [.command, .option])
+                .appKeyboardShortcut(AppShortcutCatalog.exportAudio)
                 .disabled(!(focusedModel?.canRequestAudioExport ?? false))
 
                 Button {
@@ -169,7 +169,7 @@ struct CheckBlackFramesApp: App {
                 } label: {
                     Label("Export Clip…", systemImage: "film.stack")
                 }
-                .keyboardShortcut("e", modifiers: [.command])
+                .appKeyboardShortcut(AppShortcutCatalog.exportClip)
                 .disabled(!(focusedModel?.canRequestClipExport ?? false))
 
                 Button {
@@ -177,7 +177,7 @@ struct CheckBlackFramesApp: App {
                 } label: {
                     Label("Quick Export Clip", systemImage: "film.stack.fill")
                 }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .appKeyboardShortcut(AppShortcutCatalog.quickExportClip)
                 .disabled(!(focusedModel?.canRequestClipExport ?? false))
 
                 Divider()
@@ -193,16 +193,16 @@ struct CheckBlackFramesApp: App {
 
             CommandMenu("Tool") {
                 Button("Clip") { focusedModel?.selectedTool = .clip }
-                    .keyboardShortcut("1", modifiers: [.command])
+                    .appKeyboardShortcut(AppShortcutCatalog.switchToClip)
                 .disabled(focusedModel == nil)
                 Button("Analyze") { focusedModel?.selectedTool = .analyze }
-                    .keyboardShortcut("2", modifiers: [.command])
+                    .appKeyboardShortcut(AppShortcutCatalog.switchToAnalyze)
                 .disabled(focusedModel == nil)
                 Button("Convert") { focusedModel?.selectedTool = .convert }
-                    .keyboardShortcut("3", modifiers: [.command])
+                    .appKeyboardShortcut(AppShortcutCatalog.switchToConvert)
                 .disabled(focusedModel == nil)
                 Button("Inspect") { focusedModel?.selectedTool = .inspect }
-                    .keyboardShortcut("4", modifiers: [.command])
+                    .appKeyboardShortcut(AppShortcutCatalog.switchToInspect)
                 .disabled(focusedModel == nil)
             }
 
@@ -220,7 +220,7 @@ struct CheckBlackFramesApp: App {
                 } label: {
                     Label("Stop Analysis", systemImage: "stop.fill")
                 }
-                .keyboardShortcut(".", modifiers: [.command])
+                .appKeyboardShortcut(AppShortcutCatalog.stopCurrentTask)
                 .disabled(!((focusedModel?.isAnalyzing ?? false) || (focusedModel?.isExporting ?? false)))
             }
 
@@ -228,7 +228,7 @@ struct CheckBlackFramesApp: App {
                 Button("Toggle Transcript") {
                     NotificationCenter.default.post(name: .clipToggleTranscriptSidebar, object: focusedModel)
                 }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .appKeyboardShortcut(AppShortcutCatalog.toggleTranscript)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil || focusedModel?.hasAudioTrack != true)
 
                 Divider()
@@ -236,7 +236,7 @@ struct CheckBlackFramesApp: App {
                 Button("Find in Transcript") {
                     NotificationCenter.default.post(name: .clipFocusTranscriptSearch, object: focusedModel)
                 }
-                .keyboardShortcut("f", modifiers: [.command])
+                .appKeyboardShortcut(AppShortcutCatalog.findInTranscript)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil || focusedModel?.hasAudioTrack != true)
 
                 Divider()
@@ -244,19 +244,19 @@ struct CheckBlackFramesApp: App {
                 Button("Zoom In Timeline") {
                     NotificationCenter.default.post(name: .clipTimelineZoomIn, object: focusedModel)
                 }
-                .keyboardShortcut("=", modifiers: [.command])
+                .appKeyboardShortcut(AppShortcutCatalog.commandZoomIn)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button("Zoom Out Timeline") {
                     NotificationCenter.default.post(name: .clipTimelineZoomOut, object: focusedModel)
                 }
-                .keyboardShortcut("-", modifiers: [.command])
+                .appKeyboardShortcut(AppShortcutCatalog.commandZoomOut)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button("Actual Timeline Size") {
                     NotificationCenter.default.post(name: .clipTimelineZoomReset, object: focusedModel)
                 }
-                .keyboardShortcut("0", modifiers: [.command])
+                .appKeyboardShortcut(AppShortcutCatalog.fitTimeline)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
             }
 
@@ -264,7 +264,7 @@ struct CheckBlackFramesApp: App {
                 Button("In/Out Help") {
                     openWindow(id: "help")
                 }
-                .keyboardShortcut("/", modifiers: [.command, .shift])
+                .appKeyboardShortcut(AppShortcutCatalog.openHelp)
             }
         }
 

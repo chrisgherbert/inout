@@ -382,6 +382,13 @@ struct PreferencesView: View {
                     }
                 }
 
+                settingsRow("Quality notes") {
+                    Text(model.urlDownloadPreset.helpText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 settingsRow("Save location") {
                     valueMenuPicker("Save Location", selection: $model.urlDownloadSaveLocationMode) {
                         ForEach(URLDownloadSaveLocationMode.allCases) { mode in
@@ -402,6 +409,33 @@ struct PreferencesView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                        }
+                    }
+                }
+
+                settingsRow("Authentication") {
+                    valueMenuPicker("Authentication", selection: $model.urlDownloadAuthenticationMode) {
+                        ForEach(URLDownloadAuthenticationMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                }
+
+                if let helpText = model.urlDownloadAuthenticationMode.helpText {
+                    settingsRow("Authentication notes") {
+                        Text(helpText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                if model.urlDownloadAuthenticationMode == .browserCookies {
+                    settingsRow("Browser") {
+                        valueMenuPicker("Browser", selection: $model.urlDownloadBrowserCookiesSource) {
+                            ForEach(URLDownloadBrowserCookiesSource.allCases) { source in
+                                Text(source.rawValue).tag(source)
+                            }
                         }
                     }
                 }
