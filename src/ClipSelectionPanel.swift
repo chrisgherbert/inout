@@ -20,6 +20,8 @@ struct ClipSelectionPanel: View, Equatable {
     let reduceTransparency: Bool
     let isWaveformLoading: Bool
     let waveformSamples: [Double]
+    let thumbnailTiles: [TimelineThumbnailTile]
+    let thumbnailTilesRevision: Int
     let thumbnailStripImage: CGImage?
     let thumbnailStripRevision: Int
     let thumbnailStripShouldCrossfade: Bool
@@ -70,6 +72,7 @@ struct ClipSelectionPanel: View, Equatable {
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.isWaveformLoading == rhs.isWaveformLoading &&
         lhs.waveformSamples.count == rhs.waveformSamples.count &&
+        lhs.thumbnailTilesRevision == rhs.thumbnailTilesRevision &&
         lhs.thumbnailStripRevision == rhs.thumbnailStripRevision &&
         lhs.thumbnailStripShouldCrossfade == rhs.thumbnailStripShouldCrossfade &&
         lhs.isThumbnailStripLoading == rhs.isThumbnailStripLoading &&
@@ -119,6 +122,8 @@ struct ClipSelectionPanel: View, Equatable {
                         quickExportFlashToken: quickExportFlashToken,
                         showsThumbnailStrip: hasVideoTrack && thumbnailStripHeight > 0,
                         thumbnailStripHeight: thumbnailStripHeight,
+                        thumbnailTiles: thumbnailTiles,
+                        thumbnailTilesRevision: thumbnailTilesRevision,
                         thumbnailStripImage: thumbnailStripImage,
                         thumbnailStripRevision: thumbnailStripRevision,
                         thumbnailStripShouldCrossfade: thumbnailStripShouldCrossfade,

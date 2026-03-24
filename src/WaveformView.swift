@@ -23,6 +23,8 @@ struct WaveformView: View {
     let quickExportFlashToken: Int
     let showsThumbnailStrip: Bool
     let thumbnailStripHeight: CGFloat
+    let thumbnailTiles: [TimelineThumbnailTile]
+    let thumbnailTilesRevision: Int
     let thumbnailStripImage: CGImage?
     let thumbnailStripRevision: Int
     let thumbnailStripShouldCrossfade: Bool
@@ -65,6 +67,8 @@ struct WaveformView: View {
             quickExportFlashToken: quickExportFlashToken,
             showsThumbnailStrip: showsThumbnailStrip,
             thumbnailStripHeight: thumbnailStripHeight,
+            thumbnailTiles: thumbnailTiles,
+            thumbnailTilesRevision: thumbnailTilesRevision,
             thumbnailStripImage: thumbnailStripImage,
             thumbnailStripRevision: thumbnailStripRevision,
             thumbnailStripShouldCrossfade: thumbnailStripShouldCrossfade,

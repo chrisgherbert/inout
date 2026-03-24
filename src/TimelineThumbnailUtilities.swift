@@ -50,11 +50,11 @@ private func timelineThumbnailFrameCacheKey(
     bucketSeconds: Double,
     decodeMaximumSize: CGSize
 ) -> String {
-    let safeBucket = max(1.0 / 120.0, bucketSeconds)
-    let timeBucket = Int((requestedSeconds / safeBucket).rounded())
-    let widthBucket = Int((decodeMaximumSize.width / 24.0).rounded()) * 24
-    let heightBucket = Int((decodeMaximumSize.height / 24.0).rounded()) * 24
-    return "\(url.path)|t\(timeBucket)|s\(widthBucket)x\(heightBucket)"
+    let requestedMillis = Int((requestedSeconds * 1000.0).rounded())
+    let bucketMillis = Int((max(1.0 / 120.0, bucketSeconds) * 1000.0).rounded())
+    let widthBucket = Int((decodeMaximumSize.width / 8.0).rounded()) * 8
+    let heightBucket = Int((decodeMaximumSize.height / 8.0).rounded()) * 8
+    return "v2|\(url.path)|t\(requestedMillis)|b\(bucketMillis)|s\(widthBucket)x\(heightBucket)"
 }
 
 private func makeThumbnailGenerator(

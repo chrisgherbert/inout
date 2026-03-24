@@ -63,6 +63,7 @@ final class WaveformRasterHostView: NSView {
     var onPointerTimeChanged: ((Double?) -> Void)?
     var markerHotspots: [MarkerHotspot] = []
     var markerLayersByID: [UUID: CALayer] = [:]
+    var thumbnailTileLayersByKey: [String: CALayer] = [:]
     private var trackingAreaRef: NSTrackingArea?
     private var markerCursorActive = false
     private let markerHitTolerance: CGFloat = 12
@@ -1112,7 +1113,7 @@ final class WaveformRasterCoordinator {
     var lastMarkerLayoutSignature: Int?
     var lastQuickExportFlashToken: Int = 0
     var lastStaticTimelineSignature: Int?
-    var lastThumbnailStripRevision: Int = -1
+    var lastThumbnailTilesRevision: Int = -1
     var lastThumbnailStripLoading = false
     var lastShowsThumbnailStrip = false
     var lastThumbnailStripHeight: CGFloat = -1
@@ -1146,7 +1147,7 @@ final class WaveformRasterCoordinator {
         lastAppliedZoomBucket = -1
         lastMarkerLayoutSignature = nil
         lastStaticTimelineSignature = nil
-        lastThumbnailStripRevision = -1
+        lastThumbnailTilesRevision = -1
         lastThumbnailStripLoading = false
         lastShowsThumbnailStrip = false
         lastThumbnailStripHeight = -1
@@ -1317,6 +1318,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let quickExportFlashToken: Int
     let showsThumbnailStrip: Bool
     let thumbnailStripHeight: CGFloat
+    let thumbnailTiles: [TimelineThumbnailTile]
+    let thumbnailTilesRevision: Int
     let thumbnailStripImage: CGImage?
     let thumbnailStripRevision: Int
     let thumbnailStripShouldCrossfade: Bool
@@ -1356,6 +1359,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         lhs.highlightedClipBoundary == rhs.highlightedClipBoundary &&
         lhs.showsThumbnailStrip == rhs.showsThumbnailStrip &&
         abs(lhs.thumbnailStripHeight - rhs.thumbnailStripHeight) < 0.0001 &&
+        lhs.thumbnailTilesRevision == rhs.thumbnailTilesRevision &&
         lhs.thumbnailStripRevision == rhs.thumbnailStripRevision &&
         lhs.thumbnailStripShouldCrossfade == rhs.thumbnailStripShouldCrossfade &&
         lhs.isThumbnailStripLoading == rhs.isThumbnailStripLoading &&
@@ -1467,7 +1471,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         }
 
         let needsThumbnailUpdate =
-            context.coordinator.lastThumbnailStripRevision != thumbnailStripRevision ||
+            context.coordinator.lastThumbnailTilesRevision != thumbnailTilesRevision ||
             context.coordinator.lastThumbnailStripLoading != isThumbnailStripLoading ||
             context.coordinator.lastShowsThumbnailStrip != showsThumbnailStrip ||
             abs(context.coordinator.lastThumbnailStripHeight - thumbnailStripHeight) > 0.0001 ||
@@ -1478,12 +1482,18 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             nsView.thumbnailSeparatorLayer.opacity = showsThumbnailStrip ? 1.0 : 0.0
             if showsThumbnailStrip {
                 nsView.thumbnailClipLayer.backgroundColor = NSColor.black.withAlphaComponent(isThumbnailStripLoading ? 0.18 : 0.12).cgColor
+                nsView.thumbnailLayer.contents = nil
+                let activeKeys = Set(thumbnailTiles.map(\.cacheKey))
+                for (key, layer) in nsView.thumbnailTileLayersByKey where !activeKeys.contains(key) {
+                    layer.removeFromSuperlayer()
+                    nsView.thumbnailTileLayersByKey.removeValue(forKey: key)
+                }
+
                 let shouldCrossfadeThumbnails =
                     thumbnailStripShouldCrossfade &&
-                    thumbnailStripImage != nil &&
-                    nsView.thumbnailLayer.contents != nil &&
-                    context.coordinator.lastThumbnailStripRevision >= 0 &&
-                    context.coordinator.lastThumbnailStripRevision != thumbnailStripRevision
+                    !thumbnailTiles.isEmpty &&
+                    context.coordinator.lastThumbnailTilesRevision >= 0 &&
+                    context.coordinator.lastThumbnailTilesRevision != thumbnailTilesRevision
                 if shouldCrossfadeThumbnails {
                     let transition = CATransition()
                     transition.type = .fade
@@ -1492,38 +1502,62 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                     transition.isRemovedOnCompletion = true
                     nsView.thumbnailLayer.add(transition, forKey: "thumbnailCrossfade")
                 }
-                nsView.thumbnailLayer.contents = thumbnailStripImage
-                nsView.thumbnailLayer.opacity = thumbnailStripImage == nil ? 0.0 : 1.0
-                nsView.thumbnailPlaceholderLayer.opacity = thumbnailStripImage == nil ? 1.0 : 0.0
+
+                for tile in thumbnailTiles {
+                    let tileLayer: CALayer
+                    if let existing = nsView.thumbnailTileLayersByKey[tile.cacheKey] {
+                        tileLayer = existing
+                    } else {
+                        let created = CALayer()
+                        created.contentsGravity = .resize
+                        created.magnificationFilter = .linear
+                        created.minificationFilter = .trilinear
+                        created.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
+                        created.actions = [
+                            "contents": NSNull(),
+                            "bounds": NSNull(),
+                            "position": NSNull(),
+                            "opacity": NSNull()
+                        ]
+                        nsView.thumbnailLayer.addSublayer(created)
+                        nsView.thumbnailTileLayersByKey[tile.cacheKey] = created
+                        tileLayer = created
+                    }
+                    tileLayer.contents = tile.image
+                    tileLayer.opacity = 1.0
+                }
+
+                nsView.thumbnailLayer.opacity = thumbnailTiles.isEmpty ? 0.0 : 1.0
+                nsView.thumbnailPlaceholderLayer.opacity = thumbnailTiles.isEmpty ? 1.0 : 0.0
             } else {
+                for layer in nsView.thumbnailTileLayersByKey.values {
+                    layer.removeFromSuperlayer()
+                }
+                nsView.thumbnailTileLayersByKey.removeAll(keepingCapacity: false)
                 nsView.thumbnailLayer.contents = nil
                 nsView.thumbnailLayer.opacity = 0.0
                 nsView.thumbnailPlaceholderLayer.opacity = 0.0
             }
-            context.coordinator.lastThumbnailStripRevision = thumbnailStripRevision
+            context.coordinator.lastThumbnailTilesRevision = thumbnailTilesRevision
             context.coordinator.lastThumbnailStripLoading = isThumbnailStripLoading
             context.coordinator.lastShowsThumbnailStrip = showsThumbnailStrip
             context.coordinator.lastThumbnailStripHeight = thumbnailStripHeight
         }
 
-        if showsThumbnailStrip,
-           nsView.thumbnailLayer.contents != nil {
-            let sourceDuration = max(0.0001, thumbnailStripSourceEndSeconds - thumbnailStripSourceStartSeconds)
-            let currentVisibleDuration = max(0.0001, visibleEndSeconds - visibleStartSeconds)
-            let sourceVisibleDuration = max(0.0001, thumbnailStripSourceVisibleDurationSeconds)
-            let isZoomStale = abs(sourceVisibleDuration - currentVisibleDuration) > 0.0001
-            let displayVisibleDuration = (isThumbnailStripLoading && isZoomStale) ? sourceVisibleDuration : currentVisibleDuration
-            let pointsPerSecond = max(1, thumbnailRect.width) / CGFloat(displayVisibleDuration)
-            let displayWidth = max(1, CGFloat(sourceDuration) * pointsPerSecond)
-            let originX = CGFloat(thumbnailStripSourceStartSeconds - visibleStartSeconds) * pointsPerSecond
-            nsView.thumbnailLayer.frame = CGRect(
-                x: originX,
-                y: 0,
-                width: displayWidth,
-                height: thumbnailRect.height
-            )
-        } else {
-            nsView.thumbnailLayer.frame = nsView.thumbnailClipLayer.bounds
+        nsView.thumbnailLayer.frame = nsView.thumbnailClipLayer.bounds
+        if showsThumbnailStrip, !thumbnailTiles.isEmpty {
+            let pointsPerSecond = max(1, thumbnailRect.width) / CGFloat(max(0.0001, visibleEndSeconds - visibleStartSeconds))
+            for tile in thumbnailTiles {
+                guard let tileLayer = nsView.thumbnailTileLayersByKey[tile.cacheKey] else { continue }
+                let originX = CGFloat(tile.startSeconds - visibleStartSeconds) * pointsPerSecond
+                let displayWidth = max(1, CGFloat(tile.endSeconds - tile.startSeconds) * pointsPerSecond)
+                tileLayer.frame = CGRect(
+                    x: originX,
+                    y: 0,
+                    width: displayWidth,
+                    height: thumbnailRect.height
+                )
+            }
         }
 
         if needsFullTimelineUpdate {
