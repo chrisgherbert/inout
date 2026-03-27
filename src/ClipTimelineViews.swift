@@ -668,7 +668,7 @@ struct ClipToolView: View {
 
         let visibleDuration = visibleEndSeconds - visibleStartSeconds
         let tilesPerViewport = 4
-        let displayPrewarmTilesPerSide = 1
+        let displayPrewarmTilesPerSide = 2
         let tileDuration = max(0.1, visibleDuration / Double(tilesPerViewport))
         let pixelsPerSecond = Double(max(1, timelineInteractiveWidth) * scale) / max(0.0001, visibleDuration)
         let pixelHeight = max(1, Int((thumbnailStripHeight * scale).rounded()))
@@ -793,33 +793,49 @@ struct ClipToolView: View {
         let totalDuration = totalDurationSeconds
 
         runtime.thumbnailStripPrewarmTask = Task.detached(priority: .utility) { [model] in
-            for request in uncachedRequests {
+            let batchSize = 3
+            var nextBatchStart = 0
+
+            while nextBatchStart < uncachedRequests.count {
                 guard !Task.isCancelled else { return }
 
-                let alreadyCached = await MainActor.run {
-                    model.timelineThumbnailStripImageFromCache(forKey: request.cacheKey) != nil
-                }
-                if alreadyCached {
-                    continue
-                }
+                let batchEnd = min(uncachedRequests.count, nextBatchStart + batchSize)
+                let batch = Array(uncachedRequests[nextBatchStart..<batchEnd])
+                nextBatchStart = batchEnd
 
-                guard let image = await generateTimelineThumbnailStripImage(
-                    fileURL: sourceURL,
-                    visibleStartSeconds: request.startSeconds,
-                    visibleEndSeconds: request.endSeconds,
-                    totalDurationSeconds: totalDuration,
-                    pixelWidth: request.pixelWidth,
-                    pixelHeight: request.pixelHeight,
-                    shouldCancel: { Task.isCancelled }
-                ) else {
-                    continue
-                }
+                await withTaskGroup(of: (ThumbnailStripRequest, CGImage?).self) { group in
+                    for request in batch {
+                        group.addTask {
+                            guard !Task.isCancelled else { return (request, nil) }
 
-                guard !Task.isCancelled else { return }
+                            let alreadyCached = await MainActor.run {
+                                model.timelineThumbnailStripImageFromCache(forKey: request.cacheKey) != nil
+                            }
+                            if alreadyCached {
+                                return (request, nil)
+                            }
 
-                await MainActor.run {
-                    if model.timelineThumbnailStripImageFromCache(forKey: request.cacheKey) == nil {
-                        model.cacheTimelineThumbnailStripImage(image, forKey: request.cacheKey)
+                            let image = await generateTimelineThumbnailStripImage(
+                                fileURL: sourceURL,
+                                visibleStartSeconds: request.startSeconds,
+                                visibleEndSeconds: request.endSeconds,
+                                totalDurationSeconds: totalDuration,
+                                pixelWidth: request.pixelWidth,
+                                pixelHeight: request.pixelHeight,
+                                shouldCancel: { Task.isCancelled }
+                            )
+                            return (request, image)
+                        }
+                    }
+
+                    for await (request, image) in group {
+                        guard !Task.isCancelled else { return }
+                        guard let image else { continue }
+                        await MainActor.run {
+                            if model.timelineThumbnailStripImageFromCache(forKey: request.cacheKey) == nil {
+                                model.cacheTimelineThumbnailStripImage(image, forKey: request.cacheKey)
+                            }
+                        }
                     }
                 }
             }

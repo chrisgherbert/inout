@@ -390,7 +390,7 @@ final class WorkspaceViewModel: ObservableObject {
     var timelineThumbnailStripCache: [String: CGImage] = [:]
     var timelineThumbnailStripCacheOrder: [String] = []
     private let maxWaveformCacheEntries = 6
-    private let maxTimelineThumbnailStripCacheEntries = 30
+    private let maxTimelineThumbnailStripCacheEntries = 96
     private let maxActivityConsoleCharacters = 200_000
     private let activityConsoleTrimCharacters = 150_000
     private let activityConsoleFlushIntervalNanos: UInt64 = 100_000_000
