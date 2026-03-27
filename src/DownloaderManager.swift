@@ -177,7 +177,7 @@ final class DownloaderManager {
 
         return YTDLPLaunchCommand(
             executableURL: pythonURL,
-            preArguments: ["-B", scriptURL.path],
+            preArguments: [scriptURL.path],
             environment: pythonEnvironment(homeURL: pythonHome),
             source: "bundled"
         )
@@ -453,7 +453,7 @@ final class DownloaderManager {
         }
         return YTDLPLaunchCommand(
             executableURL: pythonURL,
-            preArguments: ["-B", scriptURL.path],
+            preArguments: [scriptURL.path],
             environment: pythonEnvironment(homeURL: pythonHome),
             source: "external"
         )
@@ -463,7 +463,6 @@ final class DownloaderManager {
         var environment = [
             "PYTHONHOME": homeURL.path,
             "PYTHONNOUSERSITE": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONPYCACHEPREFIX": tmpPycacheRoot.path
         ]
 

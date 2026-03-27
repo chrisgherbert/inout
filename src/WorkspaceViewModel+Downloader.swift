@@ -117,7 +117,7 @@ extension WorkspaceViewModel {
     }
 
     func ensureManagedDownloaderReadyIfNeeded(then action: @escaping @MainActor () -> Void) {
-        switch downloaderManager.validatedStatus() {
+        switch downloaderManager.quickStatus() {
         case .externalCurrent:
             action()
         case .bundledFallback, .missing, .broken:
