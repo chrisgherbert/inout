@@ -352,6 +352,8 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
             let fadeOutStart = max(0.0, clipDuration - fadeDuration)
             let allowFadeForDuration = clipDuration >= 2.0
             let applyAudioFade = self.clipAdvancedAddFadeInOut && allowFadeForDuration
+            let audioFadeInStart = fineSeekSeconds
+            let audioFadeOutStart = fineSeekSeconds + fadeOutStart
             let isWebM = self.selectedClipFormat == .webm
             let sourceAsset = AVURLAsset(url: sourceURL)
             let selectedAudioTrackIndex = self.preferredAudioTrackIndex(for: sourceAsset)
@@ -382,8 +384,11 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
             }
 
             if applyAudioFade && hasSourceAudio {
-                audioFilters.append("afade=t=in:st=0:d=\(String(format: "%.3f", fadeDuration))")
-                audioFilters.append("afade=t=out:st=\(String(format: "%.3f", fadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
+                // In the advanced export path, the fine seek is an output-side seek.
+                // Audio filters still see the coarse-seeked timeline, so fade timestamps
+                // need to be offset by the fine seek to land on the exported clip edges.
+                audioFilters.append("afade=t=in:st=\(String(format: "%.3f", audioFadeInStart)):d=\(String(format: "%.3f", fadeDuration))")
+                audioFilters.append("afade=t=out:st=\(String(format: "%.3f", audioFadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
             }
 
             if self.clipAdvancedBoostAudio && hasSourceAudio {
