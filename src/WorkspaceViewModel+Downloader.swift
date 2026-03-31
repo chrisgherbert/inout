@@ -26,7 +26,7 @@ extension WorkspaceViewModel {
     func refreshDownloaderStatus(validating: Bool = false) {
         let status = validating ? downloaderManager.validatedStatus() : downloaderManager.quickStatus()
         downloaderCanRollback = downloaderManager.canRollbackToPrevious
-        downloaderPreviousVersionText = downloaderManager.previousManifest()?.version ?? ""
+        downloaderPreviousVersionText = downloaderManager.rollbackManifest()?.version ?? ""
         managedPythonVersionText = downloaderManager.pythonRuntimeVersion() ?? "Unavailable"
         downloaderStatusText = status.label
         switch status {

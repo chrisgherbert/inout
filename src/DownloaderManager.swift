@@ -199,6 +199,14 @@ final class DownloaderManager {
         return try? decoder.decode(DownloaderManifest.self, from: data)
     }
 
+    func rollbackManifest() -> DownloaderManifest? {
+        guard let previous = previousManifest() else { return nil }
+        if let current = externalManifest(), current.version == previous.version {
+            return nil
+        }
+        return previous
+    }
+
     func runtimeManifest() -> DownloaderRuntimeManifest? {
         let manifestURL = runtimeManifestURL
         guard let data = try? Data(contentsOf: manifestURL) else { return nil }
@@ -208,7 +216,7 @@ final class DownloaderManager {
     }
 
     var canRollbackToPrevious: Bool {
-        previousManifest() != nil && (previousScriptURL?.path).map(fileManager.fileExists(atPath:)) == true
+        rollbackManifest() != nil && (previousScriptURL?.path).map(fileManager.fileExists(atPath:)) == true
     }
 
     func installOrUpdateDownloader() async throws -> DownloaderManifest {
@@ -258,7 +266,7 @@ final class DownloaderManager {
         guard let currentDirectoryURL,
               let previousDirectoryURL,
               fileManager.fileExists(atPath: previousDirectoryURL.path),
-              let previousManifest = previousManifest() else {
+              let previousManifest = rollbackManifest() else {
             throw DownloaderManagerError.validationFailed("No previous downloader is available.")
         }
 
@@ -290,9 +298,18 @@ final class DownloaderManager {
               let currentManifestURL else {
             throw DownloaderManagerError.appSupportUnavailable
         }
-        try? fileManager.removeItem(at: previousDirectoryURL)
-        if fileManager.fileExists(atPath: currentDirectoryURL.path) {
-            try fileManager.moveItem(at: currentDirectoryURL, to: previousDirectoryURL)
+
+        let existingManifest = externalManifest()
+        let shouldRotateCurrentToPrevious =
+            existingManifest != nil && existingManifest?.version != manifest.version
+
+        if shouldRotateCurrentToPrevious {
+            try? fileManager.removeItem(at: previousDirectoryURL)
+            if fileManager.fileExists(atPath: currentDirectoryURL.path) {
+                try fileManager.moveItem(at: currentDirectoryURL, to: previousDirectoryURL)
+            }
+        } else {
+            try? fileManager.removeItem(at: currentDirectoryURL)
         }
         try fileManager.createDirectory(at: currentDirectoryURL, withIntermediateDirectories: true)
         try fileManager.copyItem(at: scriptURL, to: currentScriptURL)
