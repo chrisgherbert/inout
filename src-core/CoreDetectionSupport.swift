@@ -6,8 +6,8 @@ import Foundation
 public let minDurationSeconds = 0.001
 public let silenceAmplitudeThreshold = 0.01
 
-private let picThreshold = 0.90
-private let pixelBlackThreshold = 0.10
+let picThreshold = 0.90
+let pixelBlackThreshold = 0.10
 private let maxSampleDimension = 640
 private let quickSampleDimension = 160
 private let quickDecisionMargin = 0.08

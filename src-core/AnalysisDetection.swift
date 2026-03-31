@@ -27,94 +27,29 @@ public func runDetection(
 
     if detectBlackFrames {
         onStatusUpdate("Scanning video for black frames")
-        guard let track = asset.tracks(withMediaType: .video).first else {
+        guard asset.tracks(withMediaType: .video).first != nil else {
             return .failure(.failed("No video track found"))
         }
-
-        let outputSettings: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
-        ]
-
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
-        output.alwaysCopiesSampleData = false
-
-        let reader: AVAssetReader
-        do {
-            reader = try AVAssetReader(asset: asset)
-        } catch {
-            return .failure(.failed("Failed to create asset reader: \(error.localizedDescription)"))
-        }
-
-        if reader.canAdd(output) {
-            reader.add(output)
-        } else {
-            return .failure(.failed("Unable to configure video reader output"))
-        }
-
-        if !reader.startReading() {
-            let reason = reader.error?.localizedDescription ?? "Unknown reader error"
-            return .failure(.failed("Failed to start reading: \(reason)"))
-        }
-
-        var inBlack = false
-        var currentStart = 0.0
-        var lastReportedProgress = -1.0
-
-        var estimatedFrameDuration = CMTimeGetSeconds(track.minFrameDuration)
-        if !estimatedFrameDuration.isFinite || estimatedFrameDuration <= 0 {
-            estimatedFrameDuration = 1.0 / max(track.nominalFrameRate > 0 ? Double(track.nominalFrameRate) : 30.0, 1.0)
-        }
-
-        while let sample = output.copyNextSampleBuffer() {
-            if shouldCancel() {
-                return .failure(.cancelled)
-            }
-
-            let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
-            var frameDuration = CMTimeGetSeconds(CMSampleBufferGetDuration(sample))
-            if !frameDuration.isFinite || frameDuration <= 0 {
-                frameDuration = estimatedFrameDuration
-            }
-
-            let frameEnd = pts + frameDuration
-            lastTimestamp = max(lastTimestamp, frameEnd)
-
-            if let safeDuration {
-                let phaseProgress = min(1.0, max(0, frameEnd / safeDuration))
+        let detectionResult = detectBlackFramesWithFFmpeg(
+            file: file,
+            mediaDuration: safeDuration,
+            onSegmentDetected: onBlackSegmentDetected,
+            onConsoleOutput: onConsoleOutput,
+            progressHandler: { phaseProgress in
                 let mappedProgress = detectAudioSilence ? (phaseProgress * 0.7) : phaseProgress
-                let throttled = min(0.99, mappedProgress)
-                if throttled >= 0.99 || throttled - lastReportedProgress >= 0.005 {
-                    progressHandler(throttled)
-                    lastReportedProgress = throttled
-                }
-            }
+                progressHandler(min(0.99, mappedProgress))
+            },
+            shouldCancel: shouldCancel
+        )
 
-            if isFrameMostlyBlack(sample) {
-                if !inBlack {
-                    inBlack = true
-                    currentStart = pts
-                }
-            } else if inBlack {
-                intervals.append((start: currentStart, end: pts))
-                let duration = max(0, pts - currentStart)
-                if duration >= minDurationSeconds {
-                    onBlackSegmentDetected(Segment(start: currentStart, end: pts, duration: duration))
-                }
-                inBlack = false
+        switch detectionResult {
+        case .success(let detectedIntervals):
+            intervals = detectedIntervals
+            if let lastEnd = detectedIntervals.map(\.end).max() {
+                lastTimestamp = max(lastTimestamp, lastEnd)
             }
-        }
-
-        if inBlack {
-            intervals.append((start: currentStart, end: lastTimestamp))
-            let duration = max(0, lastTimestamp - currentStart)
-            if duration >= minDurationSeconds {
-                onBlackSegmentDetected(Segment(start: currentStart, end: lastTimestamp, duration: duration))
-            }
-        }
-
-        if reader.status == .failed {
-            let reason = reader.error?.localizedDescription ?? "Unknown reader failure"
-            return .failure(.failed("Reader failed: \(reason)"))
+        case .failure(let error):
+            return .failure(error)
         }
     }
 
@@ -189,6 +124,215 @@ public func runDetection(
         transcriptSegments: transcriptSegmentsForProfanity,
         mediaDuration: outputDuration
     ))
+}
+
+private func detectBlackFramesWithFFmpeg(
+    file: URL,
+    mediaDuration: Double?,
+    onSegmentDetected: @escaping @Sendable (Segment) -> Void,
+    onConsoleOutput: @escaping @Sendable (String, String) -> Void,
+    progressHandler: @escaping @Sendable (Double) -> Void,
+    shouldCancel: @escaping @Sendable () -> Bool
+) -> Result<[(start: Double, end: Double)], DetectionError> {
+    guard let ffmpegURL = ToolDiscoveryUtilities.findExecutable(named: "ffmpeg") else {
+        return .failure(.failed("No ffmpeg executable found for black frame detection."))
+    }
+
+    let filter = String(
+        format: "blackdetect=d=%.3f:pix_th=%.3f:pic_th=%.3f",
+        minDurationSeconds,
+        pixelBlackThreshold,
+        picThreshold
+    )
+    let arguments = [
+        "-hide_banner",
+        "-loglevel", "info",
+        "-nostdin",
+        "-i", file.path,
+        "-an",
+        "-sn",
+        "-dn",
+        "-vf", filter,
+        "-f", "null",
+        "-",
+        "-progress", "pipe:1",
+        "-nostats"
+    ]
+
+    let process = Process()
+    process.executableURL = ffmpegURL
+    process.arguments = arguments
+
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+    onConsoleOutput("$ \(ffmpegURL.path) " + arguments.joined(separator: " "), "ffmpeg")
+
+    let lock = NSLock()
+    var stdoutBuffer = ""
+    var stderrBuffer = ""
+    var detectedIntervals: [(start: Double, end: Double)] = []
+    var lastReportedProgress = -1.0
+
+    func handleProgressLine(_ line: String) {
+        guard let mediaDuration, mediaDuration > 0 else { return }
+
+        let progressValue: Double?
+        if let outTimeSeconds = parseFFmpegProgressTime(from: line) {
+            progressValue = min(1.0, max(0.0, outTimeSeconds / mediaDuration))
+        } else {
+            progressValue = nil
+        }
+
+        guard let progressValue else { return }
+        if progressValue >= 0.99 || progressValue - lastReportedProgress >= 0.005 {
+            lastReportedProgress = progressValue
+            progressHandler(progressValue)
+        }
+    }
+
+    func handleBlackdetectLine(_ line: String) {
+        guard let interval = parseBlackdetectInterval(from: line) else { return }
+        detectedIntervals.append(interval)
+        let duration = max(0, interval.end - interval.start)
+        if duration >= minDurationSeconds {
+            onSegmentDetected(Segment(start: interval.start, end: interval.end, duration: duration))
+        }
+    }
+
+    func consumeProgressData(_ data: Data) {
+        guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+        lock.lock()
+        stdoutBuffer.append(text)
+        let lines = completeLines(from: &stdoutBuffer)
+        lock.unlock()
+
+        for line in lines {
+            onConsoleOutput(line, "ffmpeg")
+            handleProgressLine(line)
+        }
+    }
+
+    func consumeLogData(_ data: Data) {
+        guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+        lock.lock()
+        stderrBuffer.append(text)
+        let lines = completeLines(from: &stderrBuffer)
+        lock.unlock()
+
+        for line in lines {
+            onConsoleOutput(line, "ffmpeg")
+            handleBlackdetectLine(line)
+        }
+    }
+
+    stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+        consumeProgressData(handle.availableData)
+    }
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        consumeLogData(handle.availableData)
+    }
+
+    do {
+        try process.run()
+    } catch {
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+        return .failure(.failed("Failed to run ffmpeg: \(error.localizedDescription)"))
+    }
+
+    while process.isRunning {
+        if shouldCancel() {
+            process.terminate()
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            return .failure(.cancelled)
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+
+    stdoutPipe.fileHandleForReading.readabilityHandler = nil
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
+    consumeProgressData(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+    consumeLogData(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+
+    lock.lock()
+    let trailingStdout = flushLines(from: &stdoutBuffer)
+    let trailingStderr = flushLines(from: &stderrBuffer)
+    lock.unlock()
+
+    for line in trailingStdout {
+        onConsoleOutput(line, "ffmpeg")
+        handleProgressLine(line)
+    }
+    for line in trailingStderr {
+        onConsoleOutput(line, "ffmpeg")
+        handleBlackdetectLine(line)
+    }
+
+    if process.terminationStatus == 0 {
+        progressHandler(1.0)
+        return .success(detectedIntervals)
+    }
+
+    return .failure(.failed("ffmpeg exited with status \(process.terminationStatus) during black frame detection."))
+}
+
+private func parseBlackdetectInterval(from line: String) -> (start: Double, end: Double)? {
+    let pattern = #"black_start:([0-9]+(?:\.[0-9]+)?)\s+black_end:([0-9]+(?:\.[0-9]+)?)\s+black_duration:([0-9]+(?:\.[0-9]+)?)"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let range = NSRange(line.startIndex..<line.endIndex, in: line)
+    guard let match = regex.firstMatch(in: line, range: range),
+          let startRange = Range(match.range(at: 1), in: line),
+          let endRange = Range(match.range(at: 2), in: line),
+          let start = Double(line[startRange]),
+          let end = Double(line[endRange]) else {
+        return nil
+    }
+    return (start: start, end: end)
+}
+
+private func parseFFmpegProgressTime(from line: String) -> Double? {
+    if line.hasPrefix("out_time_us="), let value = Double(line.dropFirst("out_time_us=".count)) {
+        return value / 1_000_000.0
+    }
+    if line.hasPrefix("out_time_ms="), let value = Double(line.dropFirst("out_time_ms=".count)) {
+        return value / 1_000_000.0
+    }
+    if line.hasPrefix("out_time=") {
+        return parseTimestamp(String(line.dropFirst("out_time=".count)))
+    }
+    return nil
+}
+
+private func parseTimestamp(_ value: String) -> Double? {
+    let pieces = value.split(separator: ":")
+    guard pieces.count == 3,
+          let hours = Double(pieces[0]),
+          let minutes = Double(pieces[1]),
+          let seconds = Double(pieces[2]) else {
+        return nil
+    }
+    return (hours * 3600) + (minutes * 60) + seconds
+}
+
+private func completeLines(from buffer: inout String) -> [String] {
+    var lines: [String] = []
+    while let newlineRange = buffer.rangeOfCharacter(from: .newlines) {
+        let line = String(buffer[..<newlineRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !line.isEmpty {
+            lines.append(line)
+        }
+        buffer.removeSubrange(..<newlineRange.upperBound)
+    }
+    return lines
+}
+
+private func flushLines(from buffer: inout String) -> [String] {
+    let remaining = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+    buffer.removeAll(keepingCapacity: false)
+    return remaining.isEmpty ? [] : [remaining]
 }
 
 func detectAudioSilenceSegments(
