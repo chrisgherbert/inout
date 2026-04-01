@@ -168,7 +168,7 @@ struct ToolContentView: View {
                         isGeneratingTranscript: model.isGeneratingTranscript,
                         whisperTranscriptionAvailable: model.whisperTranscriptionAvailable,
                         hasAudioTrack: model.hasAudioTrack,
-                        generateTranscript: { model.generateTranscriptFromInspect() },
+                        generateTranscript: { model.generateTranscript() },
                         exportTranscript: { model.exportTranscriptFromInspect() },
                         toggleActivityConsole: { model.showActivityConsole.toggle() },
                         copyActivityConsole: { model.copyActivityConsole() },

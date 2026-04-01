@@ -217,7 +217,7 @@ final class TranscriptGenerationRelay {
 }
 
 extension WorkspaceViewModel {
-    func generateTranscriptFromInspect() {
+    func generateTranscript() {
         guard let url = sourceURL else { return }
         guard !hasCachedTranscript else { return }
         guard hasAudioTrack else {
@@ -230,76 +230,34 @@ extension WorkspaceViewModel {
         }
         guard !isAnalyzing && !isExporting && !isGeneratingTranscript else { return }
 
-        _ = beginDirectJobTracking(
+        prepareTranscriptGenerationState(
             fileName: url.lastPathComponent,
-            summary: "Generate Transcript",
-            subtitle: "Whisper"
+            beginDirectJobTrackingForTranscript: true,
+            clearConsole: true,
+            resetProgress: true
         )
-
-        isGeneratingTranscript = true
-        isAnalyzing = true
-        lastActivityState = .running
-        wasCancelled = false
-        transcriptSegments = []
-        resetTranscriptPreviewPipeline()
-        hasCachedTranscript = false
-        analyzeProgress = 0
-        clearActivityConsole()
-        appendActivityConsole("Transcript generation started", source: "analysis")
-        analyzePhaseText = "Transcribing audio"
-        scheduleAnalyzeFeedbackUpdate(progress: 0, fileName: url.lastPathComponent, immediate: true)
-        transcriptStatusText = "Generating transcript…"
-        uiMessage = transcriptStatusText
-        cancelFlag.reset()
-        let captureConsoleOutput = showActivityConsole
-        let relay = TranscriptGenerationRelay(
-            disableBatching: PlayheadBenchmarkConfig.shared.disableTranscriptPreviewBatching,
-            captureConsoleOutput: captureConsoleOutput,
-            progressSink: { [weak self] progress in
-                Task { @MainActor [weak self] in
-                    self?.setAnalyzeProgress(progress, fileName: url.lastPathComponent)
-                }
-            },
-            segmentSink: { [weak self] segments in
-                Task { @MainActor [weak self] in
-                    self?.enqueueGeneratedTranscriptPreviewSegments(segments)
-                }
-            },
-            consoleSink: { [weak self] chunk in
-                Task { @MainActor [weak self] in
-                    self?.appendActivityConsoleChunk(chunk)
-                }
-            }
-        )
-        transcriptGenerationRelay = relay
 
         analyzeTask = Task { [weak self] in
             guard let self else { return }
             let flag = cancelFlag
-            let relay = self.transcriptGenerationRelay
-            let result = await Task.detached(priority: .userInitiated) {
-                transcribeAudioWithWhisper(
-                    file: url,
-                    shouldCancel: {
-                        flag.isCancelled()
-                    },
-                    progressHandler: { progress in
-                        relay?.enqueueProgress(progress)
-                    },
-                    onConsoleOutput: { line, source in
-                        relay?.enqueueConsole(line: line, source: source)
-                    },
-                    onTranscriptSegment: { segment in
-                        relay?.enqueueSegment(segment)
-                    }
-                )
-            }.value
-            relay?.flushNow()
+            let result = await self.runSharedTranscriptGeneration(
+                file: url,
+                fileName: url.lastPathComponent,
+                progressRange: 0.0...1.0,
+                captureConsoleOutput: self.showActivityConsole,
+                shouldCancel: {
+                    flag.isCancelled()
+                }
+            )
 
             await MainActor.run {
                 self.applyTranscriptGenerationResult(result)
             }
         }
+    }
+
+    func generateTranscriptFromInspect() {
+        generateTranscript()
     }
 
     func setInteractiveTimelineScrubbing(_ active: Bool) {
@@ -367,6 +325,110 @@ extension WorkspaceViewModel {
         }
         isGeneratingTranscript = false
         resetTranscriptPreviewPipeline()
+    }
+
+    func prepareTranscriptGenerationState(
+        fileName: String,
+        beginDirectJobTrackingForTranscript: Bool,
+        clearConsole: Bool,
+        resetProgress: Bool
+    ) {
+        if beginDirectJobTrackingForTranscript {
+            _ = beginDirectJobTracking(
+                fileName: fileName,
+                summary: "Generate Transcript",
+                subtitle: "Whisper"
+            )
+        }
+
+        isGeneratingTranscript = true
+        isAnalyzing = true
+        lastActivityState = .running
+        wasCancelled = false
+        transcriptSegments = []
+        resetTranscriptPreviewPipeline()
+        hasCachedTranscript = false
+        if resetProgress {
+            analyzeProgress = 0
+        }
+        if clearConsole {
+            clearActivityConsole()
+        }
+        appendActivityConsole("Transcript generation started", source: "analysis")
+        analyzePhaseText = "Transcribing audio"
+        scheduleAnalyzeFeedbackUpdate(progress: analyzeProgress, fileName: fileName, immediate: true)
+        transcriptStatusText = "Generating transcript…"
+        analyzeStatusText = transcriptStatusText
+        uiMessage = transcriptStatusText
+        cancelFlag.reset()
+    }
+
+    func runSharedTranscriptGeneration(
+        file: URL,
+        fileName: String,
+        progressRange: ClosedRange<Double>,
+        captureConsoleOutput: Bool,
+        shouldCancel: @escaping @Sendable () -> Bool
+    ) async -> Result<[TranscriptSegment], DetectionError> {
+        let relay = TranscriptGenerationRelay(
+            disableBatching: PlayheadBenchmarkConfig.shared.disableTranscriptPreviewBatching,
+            captureConsoleOutput: captureConsoleOutput,
+            progressSink: { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    self?.setAnalyzeProgress(Self.mapTranscriptProgress(progress, in: progressRange), fileName: fileName)
+                }
+            },
+            segmentSink: { [weak self] segments in
+                Task { @MainActor [weak self] in
+                    self?.enqueueGeneratedTranscriptPreviewSegments(segments)
+                }
+            },
+            consoleSink: { [weak self] chunk in
+                Task { @MainActor [weak self] in
+                    self?.appendActivityConsoleChunk(chunk)
+                }
+            }
+        )
+        transcriptGenerationRelay = relay
+
+        let result = await Task.detached(priority: .userInitiated) {
+            transcribeAudioWithWhisper(
+                file: file,
+                shouldCancel: shouldCancel,
+                progressHandler: { progress in
+                    relay.enqueueProgress(progress)
+                },
+                onConsoleOutput: { line, source in
+                    relay.enqueueConsole(line: line, source: source)
+                },
+                onTranscriptSegment: { segment in
+                    relay.enqueueSegment(segment)
+                }
+            )
+        }.value
+
+        relay.flushNow()
+        return result
+    }
+
+    func cacheGeneratedTranscript(_ transcript: [TranscriptSegment]) {
+        transcriptSegments = transcript
+        hasCachedTranscript = true
+        if transcript.isEmpty {
+            transcriptStatusText = "Transcript generated (no speech detected)."
+        } else {
+            transcriptStatusText = "Transcript generated (\(transcript.count) segment(s))."
+        }
+        analyzeStatusText = transcriptStatusText
+        uiMessage = transcriptStatusText
+    }
+
+    func clearTranscriptGenerationState(statusText: String, analyzeStatus: String? = nil) {
+        transcriptSegments = []
+        hasCachedTranscript = false
+        transcriptStatusText = statusText
+        analyzeStatusText = analyzeStatus ?? statusText
+        uiMessage = statusText
     }
 
     private func enqueueGeneratedTranscriptPreviewSegments(_ segments: [TranscriptSegment]) {
@@ -471,6 +533,11 @@ extension WorkspaceViewModel {
             end: end,
             text: "\(phrase) Segment \(index + 1)."
         )
+    }
+
+    private static func mapTranscriptProgress(_ progress: Double, in range: ClosedRange<Double>) -> Double {
+        let clamped = min(1.0, max(0.0, progress))
+        return range.lowerBound + ((range.upperBound - range.lowerBound) * clamped)
     }
 
     private func transcriptPlainText() -> String {

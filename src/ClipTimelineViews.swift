@@ -2178,7 +2178,7 @@ struct ClipToolView: View {
                     runtime.transcriptSidebarResizeStartGlobalX = nil
                 },
                 onGenerateTranscript: {
-                    model.generateTranscriptFromInspect()
+                    model.generateTranscript()
                 },
                 onExportTranscript: {
                     model.exportTranscriptFromInspect()

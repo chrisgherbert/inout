@@ -20,6 +20,7 @@ extension WorkspaceViewModel {
         let requestedProfanityWordsSnapshot = normalizedProfanityWordsStorageString(profanityWordsText)
         let requestedProfanityWordsSet = selectedProfanityWords
         let cachedTranscript = hasCachedTranscript ? transcriptSegments : nil
+        let needsFreshTranscript = requestedProfanity && cachedTranscript == nil
 
         let previous = analysis
         let hasCompletedPrevious: Bool
@@ -138,6 +139,143 @@ extension WorkspaceViewModel {
             let silenceMinDuration = self.silenceMinDurationSeconds
             let profanityWords = requestedProfanityWordsSet
             let captureConsoleOutput = self.showActivityConsole
+            let fileName = url.lastPathComponent
+            var transcriptForAnalysis = cachedTranscript
+
+            if needsFreshTranscript {
+                let transcriptProgressRange: ClosedRange<Double> = (detectBlack || detectSilence) ? (0.0...0.45) : (0.0...0.92)
+                let analysisProgressRange: ClosedRange<Double> = (detectBlack || detectSilence) ? (0.45...1.0) : (0.92...1.0)
+
+                self.prepareTranscriptGenerationState(
+                    fileName: fileName,
+                    beginDirectJobTrackingForTranscript: false,
+                    clearConsole: false,
+                    resetProgress: false
+                )
+
+                let transcriptResult = await self.runSharedTranscriptGeneration(
+                    file: url,
+                    fileName: fileName,
+                    progressRange: transcriptProgressRange,
+                    captureConsoleOutput: captureConsoleOutput,
+                    shouldCancel: {
+                        flag.isCancelled()
+                    }
+                )
+
+                self.resetTranscriptPreviewPipeline()
+                self.isGeneratingTranscript = false
+
+                switch transcriptResult {
+                case .success(let transcript):
+                    transcriptForAnalysis = transcript
+                    self.cacheGeneratedTranscript(transcript)
+                case .failure(.cancelled):
+                    self.clearTranscriptGenerationState(statusText: "Transcript generation stopped.", analyzeStatus: "Analysis stopped")
+                    self.applyAnalysisResult(
+                        .failure(.cancelled),
+                        includedBlack: requestedBlack,
+                        includedSilence: requestedSilence,
+                        includedProfanity: requestedProfanity,
+                        ranBlack: runBlack,
+                        ranSilence: runSilence,
+                        ranProfanity: runProfanity,
+                        cachedBlackSegments: cachedBlackSegments,
+                        cachedSilentSegments: cachedSilentSegments,
+                        cachedProfanityHits: cachedProfanityHits,
+                        profanityWordsSnapshot: requestedProfanityWordsSnapshot
+                    )
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.uiMessage)
+                    return
+                case .failure(.failed(let reason)):
+                    self.clearTranscriptGenerationState(statusText: "Transcript failed: \(reason)", analyzeStatus: "Analysis failed")
+                    self.applyAnalysisResult(
+                        .failure(.failed(reason)),
+                        includedBlack: requestedBlack,
+                        includedSilence: requestedSilence,
+                        includedProfanity: requestedProfanity,
+                        ranBlack: runBlack,
+                        ranSilence: runSilence,
+                        ranProfanity: runProfanity,
+                        cachedBlackSegments: cachedBlackSegments,
+                        cachedSilentSegments: cachedSilentSegments,
+                        cachedProfanityHits: cachedProfanityHits,
+                        profanityWordsSnapshot: requestedProfanityWordsSnapshot
+                    )
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.uiMessage)
+                    return
+                }
+
+                let result = await Task.detached(priority: .userInitiated) {
+                    runDetection(
+                        file: url,
+                        detectBlackFrames: detectBlack,
+                        detectAudioSilence: detectSilence,
+                        detectProfanity: detectProfanity,
+                        profanityWords: profanityWords,
+                        cachedTranscriptSegments: transcriptForAnalysis,
+                        silenceMinDuration: silenceMinDuration,
+                        onStatusUpdate: { status in
+                            Task { @MainActor [weak self] in
+                                self?.setAnalyzePhase(status, fileName: fileName)
+                            }
+                        },
+                        onBlackSegmentDetected: { segment in
+                            Task { @MainActor [weak self] in
+                                self?.appendDetectedBlackSegment(segment)
+                            }
+                        },
+                        onSilentSegmentDetected: { segment in
+                            Task { @MainActor [weak self] in
+                                self?.appendDetectedSilentSegment(segment)
+                            }
+                        },
+                        onProfanityDetected: { hit in
+                            Task { @MainActor [weak self] in
+                                self?.appendDetectedProfanityHit(hit)
+                            }
+                        },
+                        onConsoleOutput: { line, source in
+                            guard captureConsoleOutput else { return }
+                            Task { @MainActor [weak self] in
+                                self?.appendActivityConsole(line, source: source)
+                            }
+                        }
+                    ) { progress in
+                        Task { @MainActor [weak self] in
+                            let mapped = analysisProgressRange.lowerBound
+                                + ((analysisProgressRange.upperBound - analysisProgressRange.lowerBound) * min(1.0, max(0.0, progress)))
+                            self?.setAnalyzeProgress(mapped, fileName: fileName)
+                        }
+                    } shouldCancel: {
+                        flag.isCancelled()
+                    }
+                }.value
+
+                self.applyAnalysisResult(
+                    result,
+                    includedBlack: requestedBlack,
+                    includedSilence: requestedSilence,
+                    includedProfanity: requestedProfanity,
+                    ranBlack: runBlack,
+                    ranSilence: runSilence,
+                    ranProfanity: runProfanity,
+                    cachedBlackSegments: cachedBlackSegments,
+                    cachedSilentSegments: cachedSilentSegments,
+                    cachedProfanityHits: cachedProfanityHits,
+                    profanityWordsSnapshot: requestedProfanityWordsSnapshot
+                )
+                switch result {
+                case .success:
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.uiMessage)
+                case .failure(.cancelled):
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.uiMessage)
+                case .failure:
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.uiMessage)
+                }
+                return
+            }
+
             let result = await Task.detached(priority: .userInitiated) {
                 runDetection(
                     file: url,
@@ -145,11 +283,11 @@ extension WorkspaceViewModel {
                     detectAudioSilence: detectSilence,
                     detectProfanity: detectProfanity,
                     profanityWords: profanityWords,
-                    cachedTranscriptSegments: cachedTranscript,
+                    cachedTranscriptSegments: transcriptForAnalysis,
                     silenceMinDuration: silenceMinDuration,
                     onStatusUpdate: { status in
                         Task { @MainActor [weak self] in
-                            self?.setAnalyzePhase(status, fileName: url.lastPathComponent)
+                            self?.setAnalyzePhase(status, fileName: fileName)
                         }
                     },
                     onBlackSegmentDetected: { segment in
@@ -175,7 +313,7 @@ extension WorkspaceViewModel {
                     }
                 ) { progress in
                     Task { @MainActor [weak self] in
-                        self?.setAnalyzeProgress(progress, fileName: url.lastPathComponent)
+                        self?.setAnalyzeProgress(progress, fileName: fileName)
                     }
                 } shouldCancel: {
                     flag.isCancelled()
@@ -368,15 +506,7 @@ extension WorkspaceViewModel {
 
         switch result {
         case .success(let transcript):
-            transcriptSegments = transcript
-            hasCachedTranscript = true
-            if transcript.isEmpty {
-                transcriptStatusText = "Transcript generated (no speech detected)."
-            } else {
-                transcriptStatusText = "Transcript generated (\(transcript.count) segment(s))."
-            }
-            analyzeStatusText = transcriptStatusText
-            uiMessage = transcriptStatusText
+            cacheGeneratedTranscript(transcript)
             lastActivityState = .success
             if let soundName = completionSound.soundName,
                let sound = NSSound(named: soundName) {
@@ -385,20 +515,15 @@ extension WorkspaceViewModel {
             notifyCompletion("Transcript Complete", message: transcriptStatusText)
             completeQueuedJobIfNeeded(nil, status: .completed, message: transcriptStatusText)
         case .failure(.cancelled):
-            transcriptSegments = []
-            hasCachedTranscript = false
-            transcriptStatusText = "Transcript generation stopped."
-            analyzeStatusText = transcriptStatusText
-            uiMessage = transcriptStatusText
+            clearTranscriptGenerationState(statusText: "Transcript generation stopped.")
             lastActivityState = .cancelled
             notifyCompletion("Transcript Stopped", message: transcriptStatusText)
             completeQueuedJobIfNeeded(nil, status: .cancelled, message: transcriptStatusText)
         case .failure(.failed(let reason)):
-            transcriptSegments = []
-            hasCachedTranscript = false
-            transcriptStatusText = "Transcript failed: \(reason)"
-            analyzeStatusText = "Transcript generation failed"
-            uiMessage = transcriptStatusText
+            clearTranscriptGenerationState(
+                statusText: "Transcript failed: \(reason)",
+                analyzeStatus: "Transcript generation failed"
+            )
             lastActivityState = .failed
             notifyCompletion("Transcript Failed", message: transcriptStatusText)
             completeQueuedJobIfNeeded(nil, status: .failed, message: transcriptStatusText)
