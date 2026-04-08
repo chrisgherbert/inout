@@ -212,7 +212,7 @@ fi
 
 echo "Running Gatekeeper assessment..."
 spctl --assess --type execute --verbose=4 "$APP_PATH"
-spctl --assess --type open --verbose=4 "$DMG_PATH"
+xcrun stapler validate "$DMG_PATH"
 
 echo "Done"
 echo "App: $APP_PATH"
