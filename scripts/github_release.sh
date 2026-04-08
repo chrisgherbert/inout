@@ -10,7 +10,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_NAME="In-Out.app"
 APP_PATH="$DIST_DIR/$APP_NAME"
-NOTARIZED_ZIP="$DIST_DIR/In-Out-macOS.zip"
+NOTARIZED_DMG="$DIST_DIR/In-Out-macOS.dmg"
 NOTES_PATH="$DIST_DIR/release-notes.md"
 
 usage() {
@@ -98,8 +98,8 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 TAG="v$VERSION"
-VERSIONED_ZIP="$DIST_DIR/In-Out-macOS-$TAG.zip"
-SHA_PATH="$VERSIONED_ZIP.sha256"
+VERSIONED_DMG="$DIST_DIR/In-Out-macOS-$TAG.dmg"
+SHA_PATH="$VERSIONED_DMG.sha256"
 RUNTIME_ARCHIVE="$DIST_DIR/In-Out-python-runtime.tar.gz"
 RUNTIME_SHA_PATH="$DIST_DIR/In-Out-python-runtime.tar.gz.sha256"
 
@@ -117,8 +117,8 @@ if [[ ! -d "$APP_PATH" ]]; then
   echo "App bundle not found: $APP_PATH"
   exit 1
 fi
-if [[ ! -f "$NOTARIZED_ZIP" ]]; then
-  echo "Notarized zip not found: $NOTARIZED_ZIP"
+if [[ ! -f "$NOTARIZED_DMG" ]]; then
+  echo "Notarized DMG not found: $NOTARIZED_DMG"
   exit 1
 fi
 if [[ ! -f "$RUNTIME_ARCHIVE" ]]; then
@@ -130,14 +130,14 @@ if [[ ! -f "$RUNTIME_SHA_PATH" ]]; then
   exit 1
 fi
 
-cp "$NOTARIZED_ZIP" "$VERSIONED_ZIP"
-shasum -a 256 "$VERSIONED_ZIP" > "$SHA_PATH"
+cp "$NOTARIZED_DMG" "$VERSIONED_DMG"
+shasum -a 256 "$VERSIONED_DMG" > "$SHA_PATH"
 
 cat > "$NOTES_PATH" <<EOF
 In/Out $TAG
 
 Artifacts:
-- $(basename "$VERSIONED_ZIP")
+- $(basename "$VERSIONED_DMG")
 - $(basename "$SHA_PATH")
 - $(basename "$RUNTIME_ARCHIVE")
 - $(basename "$RUNTIME_SHA_PATH")
@@ -149,11 +149,11 @@ EOF
 
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo "Release $TAG already exists; uploading updated assets..."
-  gh release upload "$TAG" "$VERSIONED_ZIP" "$SHA_PATH" "$RUNTIME_ARCHIVE" "$RUNTIME_SHA_PATH" --clobber
+  gh release upload "$TAG" "$VERSIONED_DMG" "$SHA_PATH" "$RUNTIME_ARCHIVE" "$RUNTIME_SHA_PATH" --clobber
 else
   CREATE_ARGS=(
     "$TAG"
-    "$VERSIONED_ZIP"
+    "$VERSIONED_DMG"
     "$SHA_PATH"
     "$RUNTIME_ARCHIVE"
     "$RUNTIME_SHA_PATH"
@@ -168,7 +168,7 @@ fi
 
 echo "Done"
 echo "GitHub release: $TAG"
-echo "Uploaded asset: $VERSIONED_ZIP"
+echo "Uploaded asset: $VERSIONED_DMG"
 echo "Checksum file:  $SHA_PATH"
 echo "Runtime asset:  $RUNTIME_ARCHIVE"
 echo "Runtime sha:    $RUNTIME_SHA_PATH"

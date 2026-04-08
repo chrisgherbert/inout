@@ -143,7 +143,9 @@ final class AppUpdateChecker {
         let decoded = try JSONDecoder().decode(GitHubRelease.self, from: data)
         let version = decoded.tagName.replacingOccurrences(of: "^v", with: "", options: .regularExpression)
         let downloadURL =
-            decoded.assets.first(where: { $0.name.hasSuffix(".zip") && $0.name.contains("In-Out-macOS") })?.browserDownloadURL
+            decoded.assets.first(where: { $0.name.hasSuffix(".dmg") && $0.name.contains("In-Out-macOS") })?.browserDownloadURL
+            ?? decoded.assets.first(where: { $0.name.hasSuffix(".dmg") })?.browserDownloadURL
+            ?? decoded.assets.first(where: { $0.name.hasSuffix(".zip") && $0.name.contains("In-Out-macOS") })?.browserDownloadURL
             ?? decoded.assets.first(where: { $0.name.hasSuffix(".zip") })?.browserDownloadURL
             ?? decoded.htmlURL
 

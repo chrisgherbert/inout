@@ -26,16 +26,18 @@ Simple clipping, converting, and QA testing of video/audio files on macOS.
 
 ### Basic Usage
 
-1. Download and open `In-Out.app`.
-2. Load source media:
+1. Download and open the `In-Out` installer DMG.
+2. Drag `In-Out.app` into your `Applications` folder.
+3. Launch `In-Out` from `Applications`.
+4. Load source media:
    - choose a local media file (or drag/drop one into the window), or
    - use `File > Download Media from URL…` to import from a web link.
-3. Pick a tool tab:
+5. Pick a tool tab:
    - `Clip`
    - `Analyze`
    - `Convert`
    - `Inspect`
-4. Export or analyze from that tab.
+6. Export or analyze from that tab.
 
 ### Notes
 
@@ -108,3 +110,7 @@ Optional:
 ./scripts/notarize_release.sh
 ./scripts/github_release.sh --version X.Y.Z
 ```
+
+Release artifacts:
+- notarized installer DMG for users
+- managed Python runtime tarball for downloader support

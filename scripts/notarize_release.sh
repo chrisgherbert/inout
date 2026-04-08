@@ -10,8 +10,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_NAME="In-Out.app"
 APP_PATH="$DIST_DIR/$APP_NAME"
-ZIP_NAME="In-Out-macOS.zip"
-ZIP_PATH="$DIST_DIR/$ZIP_NAME"
+DMG_NAME="In-Out-macOS.dmg"
+DMG_PATH="$DIST_DIR/$DMG_NAME"
 RELEASE_ENV="$ROOT_DIR/scripts/release.env"
 YTDLP_ENTITLEMENTS="$ROOT_DIR/scripts/yt-dlp.entitlements"
 
@@ -28,9 +28,9 @@ This script will:
   2) Sign nested executables with runtime+timestamp
   3) Sign app bundle with runtime+timestamp
   4) Verify signature
-  5) Zip app
+  5) Build installer DMG
   6) Submit and wait for notarization
-  7) Staple ticket (unless --skip-staple)
+  7) Staple ticket(s) (unless --skip-staple)
   8) Run Gatekeeper assessment
 USAGE
 }
@@ -153,20 +153,12 @@ codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$APP_PATH"
 echo "Verifying code signature..."
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-rm -f "$ZIP_PATH"
-echo "Creating release zip: $ZIP_PATH"
-# Important: --norsrc prevents AppleDouble sidecar files (._*) from being written
-# into the archive. Those files break code signature validation on recipient Macs.
-ditto -c -k --keepParent --norsrc "$APP_PATH" "$ZIP_PATH"
-
-if unzip -l "$ZIP_PATH" | rg -q '(__MACOSX|/\._)'; then
-  echo "Archive contains AppleDouble/resource-fork entries (._*/__MACOSX), which can break signatures."
-  echo "Failing packaging step."
-  exit 1
-fi
+rm -f "$DMG_PATH"
+echo "Creating installer DMG: $DMG_PATH"
+"$ROOT_DIR/scripts/create_dmg.sh" "$APP_PATH" "$DMG_PATH"
 
 echo "Submitting for notarization..."
-if ! SUBMISSION_JSON="$(xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$AC_PROFILE" --output-format json 2>&1)"; then
+if ! SUBMISSION_JSON="$(xcrun notarytool submit "$DMG_PATH" --keychain-profile "$AC_PROFILE" --output-format json 2>&1)"; then
   echo "Notary submit failed."
   echo "Output:"
   echo "$SUBMISSION_JSON"
@@ -215,11 +207,13 @@ fi
 if [[ "$SKIP_STAPLE" -eq 0 ]]; then
   echo "Stapling ticket..."
   xcrun stapler staple "$APP_PATH"
+  xcrun stapler staple "$DMG_PATH"
 fi
 
 echo "Running Gatekeeper assessment..."
 spctl --assess --type execute --verbose=4 "$APP_PATH"
+spctl --assess --type open --verbose=4 "$DMG_PATH"
 
 echo "Done"
 echo "App: $APP_PATH"
-echo "Zip: $ZIP_PATH"
+echo "DMG: $DMG_PATH"
