@@ -91,13 +91,15 @@ final class AppUpdateChecker {
         alert.alertStyle = .informational
         alert.messageText = "Update Available"
         alert.informativeText = "In/Out \(latest) is available. You’re currently on \(current)."
-        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Download and Open")
         alert.addButton(withTitle: "Skip This Version")
         alert.addButton(withTitle: "Later")
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
             UserDefaults.standard.removeObject(forKey: skippedVersionDefaultsKey)
-            NSWorkspace.shared.open(url)
+            Task {
+                await downloadAndOpenUpdate(from: url, version: latest)
+            }
         } else if response == .alertSecondButtonReturn {
             UserDefaults.standard.set(latest, forKey: skippedVersionDefaultsKey)
         }
@@ -119,6 +121,57 @@ final class AppUpdateChecker {
         alert.informativeText = "Couldn’t check for updates right now.\n\n\(error.localizedDescription)"
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private func presentUpdateDownloadFailedAlert(_ error: Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Update Download Failed"
+        alert.informativeText = "The update couldn’t be downloaded automatically.\n\n\(error.localizedDescription)"
+        alert.addButton(withTitle: "Open Release Page")
+        alert.addButton(withTitle: "OK")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn,
+           let releasesURL = URL(string: "https://github.com/\(repoOwner)/\(repoName)/releases/latest") {
+            NSWorkspace.shared.open(releasesURL)
+        }
+    }
+
+    private func downloadAndOpenUpdate(from url: URL, version: String) async {
+        do {
+            let downloadableExtensions: Set<String> = ["dmg", "zip"]
+            let fileExtension = url.pathExtension.lowercased()
+            guard downloadableExtensions.contains(fileExtension) else {
+                _ = await MainActor.run {
+                    NSWorkspace.shared.open(url)
+                }
+                return
+            }
+
+            let downloadsDirectory = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            let destinationURL = downloadsDirectory.appending(path: "In-Out-\(version).\(fileExtension)", directoryHint: .notDirectory)
+
+            let (temporaryURL, response) = try await URLSession.shared.download(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                throw UpdateCheckError.badServerResponse
+            }
+
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+
+            _ = await MainActor.run {
+                NSWorkspace.shared.open(destinationURL)
+            }
+        } catch {
+            await MainActor.run {
+                presentUpdateDownloadFailedAlert(error)
+            }
+        }
     }
 
     private func fetchLatestRelease() async throws -> LatestRelease {
@@ -143,10 +196,10 @@ final class AppUpdateChecker {
         let decoded = try JSONDecoder().decode(GitHubRelease.self, from: data)
         let version = decoded.tagName.replacingOccurrences(of: "^v", with: "", options: .regularExpression)
         let downloadURL =
-            decoded.assets.first(where: { $0.name.hasSuffix(".dmg") && $0.name.contains("In-Out-macOS") })?.browserDownloadURL
-            ?? decoded.assets.first(where: { $0.name.hasSuffix(".dmg") })?.browserDownloadURL
-            ?? decoded.assets.first(where: { $0.name.hasSuffix(".zip") && $0.name.contains("In-Out-macOS") })?.browserDownloadURL
-            ?? decoded.assets.first(where: { $0.name.hasSuffix(".zip") })?.browserDownloadURL
+            decoded.assets.first(where: { $0.name.hasSuffix(".dmg") && $0.name.contains("In-Out-macOS") && !$0.name.hasSuffix(".sha256") })?.browserDownloadURL
+            ?? decoded.assets.first(where: { $0.name.hasSuffix(".dmg") && !$0.name.hasSuffix(".sha256") })?.browserDownloadURL
+            ?? decoded.assets.first(where: { $0.name.hasSuffix(".zip") && $0.name.contains("In-Out-macOS") && !$0.name.hasSuffix(".sha256") })?.browserDownloadURL
+            ?? decoded.assets.first(where: { $0.name.hasSuffix(".zip") && !$0.name.hasSuffix(".sha256") })?.browserDownloadURL
             ?? decoded.htmlURL
 
         return LatestRelease(version: version, downloadURL: downloadURL)
