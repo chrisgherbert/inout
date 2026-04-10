@@ -2,6 +2,10 @@ import AppKit
 import Foundation
 
 enum URLDownloadUtilities {
+    // Keep downloaded filenames under common macOS/APFS component limits while
+    // preserving the stable media id suffix for uniqueness.
+    private static let ytDLPTitleByteLimit = 180
+
     static func normalizedDownloadURL(from raw: String) -> URL? {
         if let parsed = URL(string: raw),
            let scheme = parsed.scheme?.lowercased(),
@@ -68,7 +72,7 @@ enum URLDownloadUtilities {
     static func defaultDownloadFileNameTemplate(for preset: URLDownloadPreset, sourceURL: URL) -> String {
         _ = preset
         _ = sourceURL
-        return "%(title)s [%(id)s].%(ext)s"
+        return "%(title).\(ytDLPTitleByteLimit)B [%(id)s].%(ext)s"
     }
 
     static func promptURLDownloadDestination(
