@@ -78,8 +78,7 @@
       var installerAsset = findInstallerAsset(assets);
 
       if (installerAsset && installerAsset.browser_download_url) {
-        var label = /\.dmg$/i.test(installerAsset.name) ? "Download DMG for macOS" : "Download for macOS";
-        setDownloadLink(installerAsset.browser_download_url, label);
+        setDownloadLink(installerAsset.browser_download_url, "Download In/Out for macOS");
         setMetaText("Latest: " + release.tag_name + " installer");
       } else {
         setDownloadLink(fallback, "View Releases");
