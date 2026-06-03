@@ -66,7 +66,17 @@ fi
 
 osascript <<APPLESCRIPT
 tell application "Finder"
-  tell disk "$MOUNTED_VOLUME_NAME"
+  set dmgDisk to missing value
+  repeat with attempt from 1 to 20
+    try
+      set dmgDisk to disk "$MOUNTED_VOLUME_NAME"
+      exit repeat
+    on error
+      delay 0.25
+    end try
+  end repeat
+  if dmgDisk is missing value then error "Mounted disk '$MOUNTED_VOLUME_NAME' was not visible in Finder."
+  tell dmgDisk
     open
     delay 0.5
     set current view of container window to icon view
