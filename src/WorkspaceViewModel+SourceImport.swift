@@ -151,6 +151,7 @@ extension WorkspaceViewModel {
                     executableURL: ytDLPLaunch.executableURL,
                     preArguments: ytDLPLaunch.preArguments,
                     environment: ytDLPLaunch.environment,
+                    removedEnvironmentKeys: ytDLPLaunch.removedEnvironmentKeys,
                     arguments: stagedArgs,
                     statusPrefix: "Downloading source",
                     progressRange: 0.0...0.6
@@ -177,6 +178,7 @@ extension WorkspaceViewModel {
                     executableURL: ytDLPLaunch.executableURL,
                     preArguments: ytDLPLaunch.preArguments,
                     environment: ytDLPLaunch.environment,
+                    removedEnvironmentKeys: ytDLPLaunch.removedEnvironmentKeys,
                     arguments: args,
                     statusPrefix: "Downloading media",
                     progressRange: 0.0...1.0

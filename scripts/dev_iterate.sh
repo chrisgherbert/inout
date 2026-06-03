@@ -54,7 +54,7 @@ if [[ "$VERIFY_TOOLS" -eq 1 ]]; then
     echo "Missing bundled yt-dlp: $APP_PATH/Contents/Resources/yt-dlp"
     exit 1
   fi
-  "$APP_PATH/Contents/Resources/yt-dlp" --version >/dev/null
+  "$APP_PATH/Contents/Resources/yt-dlp" --ignore-config --version >/dev/null
 fi
 
 if [[ "$RUN_APP" -eq 1 ]]; then

@@ -20,6 +20,7 @@ struct YTDLPLaunchCommand {
     let executableURL: URL
     let preArguments: [String]
     let environment: [String: String]
+    let removedEnvironmentKeys: Set<String>
     let source: String
 }
 
@@ -71,6 +72,8 @@ enum DownloaderManagerError: LocalizedError {
 
 final class DownloaderManager {
     static let shared = DownloaderManager()
+    static let ytdlpIsolationArguments = ["--ignore-config"]
+    static let managedPythonRemovedEnvironmentKeys: Set<String> = ["PYTHONPATH", "PYTHONHOME"]
 
     private let fileManager = FileManager.default
     private let session: URLSession
@@ -177,8 +180,9 @@ final class DownloaderManager {
 
         return YTDLPLaunchCommand(
             executableURL: pythonURL,
-            preArguments: [scriptURL.path],
+            preArguments: [scriptURL.path] + Self.ytdlpIsolationArguments,
             environment: pythonEnvironment(homeURL: pythonHome),
+            removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys,
             source: "bundled"
         )
     }
@@ -412,7 +416,8 @@ final class DownloaderManager {
         let output = try runProcess(
             executableURL: command.executableURL,
             arguments: command.preArguments + ["--version"],
-            environment: command.environment
+            environment: command.environment,
+            removedEnvironmentKeys: command.removedEnvironmentKeys
         )
         let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !version.isEmpty else {
@@ -426,7 +431,8 @@ final class DownloaderManager {
         let output = try runProcess(
             executableURL: pythonURL,
             arguments: ["-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
-            environment: pythonEnvironment(homeURL: homeURL)
+            environment: pythonEnvironment(homeURL: homeURL),
+            removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys
         )
         let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !version.isEmpty else {
@@ -435,12 +441,20 @@ final class DownloaderManager {
         return version
     }
 
-    private func runProcess(executableURL: URL, arguments: [String], environment: [String: String]) throws -> String {
+    private func runProcess(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String],
+        removedEnvironmentKeys: Set<String> = []
+    ) throws -> String {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
-        if !environment.isEmpty {
+        if !environment.isEmpty || !removedEnvironmentKeys.isEmpty {
             var merged = ProcessInfo.processInfo.environment
+            for key in removedEnvironmentKeys {
+                merged.removeValue(forKey: key)
+            }
             for (key, value) in environment {
                 merged[key] = value
             }
@@ -470,15 +484,15 @@ final class DownloaderManager {
         }
         return YTDLPLaunchCommand(
             executableURL: pythonURL,
-            preArguments: [scriptURL.path],
+            preArguments: [scriptURL.path] + Self.ytdlpIsolationArguments,
             environment: pythonEnvironment(homeURL: pythonHome),
+            removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys,
             source: "external"
         )
     }
 
     private func pythonEnvironment(homeURL: URL) -> [String: String] {
         var environment = [
-            "PYTHONHOME": homeURL.path,
             "PYTHONNOUSERSITE": "1",
             "PYTHONPYCACHEPREFIX": tmpPycacheRoot.path
         ]

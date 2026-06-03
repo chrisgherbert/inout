@@ -104,7 +104,7 @@ if [[ "$SKIP_SMOKE" -eq 0 ]]; then
     exit 1
   fi
   echo "Running bundled yt-dlp smoke test..."
-  "$APP_PATH/Contents/Resources/yt-dlp" --version >/dev/null
+  "$APP_PATH/Contents/Resources/yt-dlp" --ignore-config --version >/dev/null
   echo "Running bundled ffmpeg smoke tests..."
   "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
 fi

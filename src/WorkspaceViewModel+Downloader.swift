@@ -161,8 +161,11 @@ extension WorkspaceViewModel {
         let process = Process()
         process.executableURL = command.executableURL
         process.arguments = command.preArguments + ["--version"]
-        if !command.environment.isEmpty {
+        if !command.environment.isEmpty || !command.removedEnvironmentKeys.isEmpty {
             var merged = ProcessInfo.processInfo.environment
+            for key in command.removedEnvironmentKeys {
+                merged.removeValue(forKey: key)
+            }
             for (key, value) in command.environment {
                 merged[key] = value
             }

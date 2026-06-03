@@ -512,6 +512,7 @@ extension WorkspaceViewModel {
         executableURL: URL,
         preArguments: [String],
         environment: [String: String],
+        removedEnvironmentKeys: Set<String>,
         arguments: [String],
         statusPrefix: String,
         progressRange: ClosedRange<Double>
@@ -538,8 +539,11 @@ extension WorkspaceViewModel {
             let process = Process()
             process.executableURL = executableURL
             process.arguments = finalArguments
-            if !environment.isEmpty {
+            if !environment.isEmpty || !removedEnvironmentKeys.isEmpty {
                 var merged = ProcessInfo.processInfo.environment
+                for key in removedEnvironmentKeys {
+                    merged.removeValue(forKey: key)
+                }
                 for (key, value) in environment {
                     merged[key] = value
                 }
