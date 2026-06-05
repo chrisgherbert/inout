@@ -13,8 +13,10 @@ struct InspectToolView: View {
     let isGeneratingTranscript: Bool
     let whisperTranscriptionAvailable: Bool
     let hasAudioTrack: Bool
+    let transcriptExportFormat: TranscriptExportFormat
     let generateTranscript: () -> Void
-    let exportTranscript: () -> Void
+    let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
+    let exportTranscript: (TranscriptExportFormat?) -> Void
     let toggleActivityConsole: () -> Void
     let copyActivityConsole: () -> Void
     let clearActivityConsole: () -> Void
@@ -206,11 +208,13 @@ struct InspectToolView: View {
                                     .controlSize(.small)
                                 }
 
-                                Button("Export…") {
-                                    exportTranscript()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+                                TranscriptExportControls(
+                                    selectedFormat: Binding(
+                                        get: { transcriptExportFormat },
+                                        set: { setTranscriptExportFormat($0) }
+                                    ),
+                                    exportTranscript: { exportTranscript(nil) }
+                                )
                             }
 
                             Text(transcriptStatusText)

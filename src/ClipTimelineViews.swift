@@ -88,13 +88,15 @@ private struct ClipPlayerStageSection: View {
     let isScrubbing: Bool
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
+    let transcriptExportFormat: TranscriptExportFormat
     let isMiddleMousePanning: Bool
     let onDismissTimecodeFieldFocus: () -> Void
     let onAutoFitTranscriptSidebar: (_ maximumSidebarWidth: CGFloat) -> Void
     let onTranscriptSidebarResizeChanged: (_ value: DragGesture.Value) -> Void
     let onTranscriptSidebarResizeEnded: () -> Void
     let onGenerateTranscript: () -> Void
-    let onExportTranscript: () -> Void
+    let onSetTranscriptExportFormat: (_ format: TranscriptExportFormat) -> Void
+    let onExportTranscript: (_ format: TranscriptExportFormat?) -> Void
     let onSeekToTranscriptTime: (_ seconds: Double) -> Void
     let onPlayTranscriptFromTime: (_ seconds: Double) -> Void
     let onCloseTranscript: () -> Void
@@ -175,7 +177,9 @@ private struct ClipPlayerStageSection: View {
                             isScrubbing: isScrubbing,
                             reduceTransparency: reduceTransparency,
                             focusSearchFieldToken: focusSearchFieldToken,
+                            transcriptExportFormat: transcriptExportFormat,
                             generateTranscript: onGenerateTranscript,
+                            setTranscriptExportFormat: onSetTranscriptExportFormat,
                             exportTranscript: onExportTranscript,
                             seekToTranscriptTime: onSeekToTranscriptTime,
                             playTranscriptFromTime: onPlayTranscriptFromTime,
@@ -236,6 +240,7 @@ extension ClipPlayerStageSection: Equatable {
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
+        lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
         lhs.isMiddleMousePanning == rhs.isMiddleMousePanning
     }
 }
@@ -2150,6 +2155,7 @@ struct ClipToolView: View {
                 isScrubbing: isPlayheadDragActive,
                 reduceTransparency: reduceTransparency,
                 focusSearchFieldToken: clipTranscriptSearchFocusToken,
+                transcriptExportFormat: model.transcriptExportFormat,
                 isMiddleMousePanning: runtime.isMiddleMousePanning,
                 onDismissTimecodeFieldFocus: dismissTimecodeFieldFocus,
                 onAutoFitTranscriptSidebar: { maximumSidebarWidth in
@@ -2180,8 +2186,11 @@ struct ClipToolView: View {
                 onGenerateTranscript: {
                     model.generateTranscript()
                 },
-                onExportTranscript: {
-                    model.exportTranscriptFromInspect()
+                onSetTranscriptExportFormat: { format in
+                    model.transcriptExportFormat = format
+                },
+                onExportTranscript: { format in
+                    model.exportTranscriptFromInspect(format: format)
                 },
                 onSeekToTranscriptTime: { seconds in
                     seekPlayerAndFocusViewport(to: seconds, focusViewport: true)

@@ -419,6 +419,58 @@ enum FrameSaveLocationMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum TranscriptExportFormat: String, CaseIterable, Identifiable {
+    case plainText = "plainText"
+    case timedText = "timedText"
+    case srt = "srt"
+
+    var id: String { rawValue }
+
+    var menuTitle: String {
+        switch self {
+        case .plainText:
+            return "Text"
+        case .timedText:
+            return "Text w/ Timecodes"
+        case .srt:
+            return ".SRT"
+        }
+    }
+
+    var pickerTitle: String {
+        menuTitle
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .plainText, .timedText:
+            return "txt"
+        case .srt:
+            return "srt"
+        }
+    }
+
+    var contentType: UTType {
+        switch self {
+        case .plainText, .timedText:
+            return .plainText
+        case .srt:
+            return UTType(filenameExtension: "srt") ?? .plainText
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .plainText:
+            return "Export transcript without timecodes"
+        case .timedText:
+            return "Export transcript with timecodes"
+        case .srt:
+            return "Export transcript as SRT subtitles"
+        }
+    }
+}
+
 enum URLDownloadPreset: String, CaseIterable, Identifiable {
     case compatibleBest = "Best Compatible"
     case compatible1080 = "1080p Compatible"

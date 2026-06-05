@@ -54,6 +54,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let customURLDownloadDirectoryPath = "prefs.customURLDownloadDirectoryPath"
         static let urlDownloadAuthenticationMode = "prefs.urlDownloadAuthenticationMode"
         static let urlDownloadBrowserCookiesSource = "prefs.urlDownloadBrowserCookiesSource"
+        static let transcriptExportFormat = "prefs.transcriptExportFormat"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -293,6 +294,11 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var urlDownloadBrowserCookiesSource: URLDownloadBrowserCookiesSource = .firefox {
         didSet {
             UserDefaults.standard.set(urlDownloadBrowserCookiesSource.rawValue, forKey: DefaultsKey.urlDownloadBrowserCookiesSource)
+        }
+    }
+    @Published var transcriptExportFormat: TranscriptExportFormat = .timedText {
+        didSet {
+            UserDefaults.standard.set(transcriptExportFormat.rawValue, forKey: DefaultsKey.transcriptExportFormat)
         }
     }
     @Published var estimatedSizeWarningThresholdGB: Double = 1.0 {
@@ -586,6 +592,10 @@ final class WorkspaceViewModel: ObservableObject {
         if let rawURLBrowserSource = defaults.string(forKey: DefaultsKey.urlDownloadBrowserCookiesSource),
            let source = URLDownloadBrowserCookiesSource(rawValue: rawURLBrowserSource) {
             urlDownloadBrowserCookiesSource = source
+        }
+        if let rawTranscriptExportFormat = defaults.string(forKey: DefaultsKey.transcriptExportFormat),
+           let format = TranscriptExportFormat(rawValue: rawTranscriptExportFormat) {
+            transcriptExportFormat = format
         }
 
         if let rawCaptionStyle = defaults.string(forKey: DefaultsKey.burnInCaptionStyle),

@@ -3,9 +3,16 @@ import Foundation
 import UniformTypeIdentifiers
 
 enum TranscriptUtilities {
-    static func plainText(from segments: [TranscriptSegment]) -> String {
+    static func timedPlainText(from segments: [TranscriptSegment]) -> String {
         segments
             .map(\.formatted)
+            .joined(separator: "\n")
+    }
+
+    static func plainTextWithoutTimecodes(from segments: [TranscriptSegment]) -> String {
+        segments
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
             .joined(separator: "\n")
     }
 
@@ -30,37 +37,24 @@ enum TranscriptUtilities {
         .joined(separator: "\n\n") + "\n"
     }
 
-    static func makeExportPanel(defaultName: String) -> (panel: NSSavePanel, formatPopup: NSPopUpButton) {
+    static func content(from segments: [TranscriptSegment], format: TranscriptExportFormat) -> String {
+        switch format {
+        case .plainText:
+            return plainTextWithoutTimecodes(from: segments)
+        case .timedText:
+            return timedPlainText(from: segments)
+        case .srt:
+            return srt(from: segments)
+        }
+    }
+
+    static func makeExportPanel(defaultName: String, format: TranscriptExportFormat) -> NSSavePanel {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText, UTType(filenameExtension: "srt") ?? .plainText]
+        panel.allowedContentTypes = [format.contentType]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = defaultName
-        panel.message = "Export transcript as TXT or SRT"
+        panel.message = "Export \(format.menuTitle)"
         panel.prompt = "Export"
-
-        let formatLabel = NSTextField(labelWithString: "Format:")
-        formatLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-
-        let formatPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        formatPopup.addItems(withTitles: ["Plain Text (.txt)", "SubRip (.srt)"])
-        formatPopup.selectItem(at: 0)
-        formatPopup.controlSize = .small
-        formatPopup.frame.size.width = 150
-
-        let rowStack = NSStackView(views: [formatLabel, formatPopup])
-        rowStack.orientation = .horizontal
-        rowStack.alignment = .firstBaseline
-        rowStack.spacing = 8
-        rowStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let accessoryContainer = NSView(frame: NSRect(x: 0, y: 0, width: 270, height: 30))
-        accessoryContainer.addSubview(rowStack)
-        NSLayoutConstraint.activate([
-            rowStack.leadingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor, constant: 8),
-            rowStack.trailingAnchor.constraint(lessThanOrEqualTo: accessoryContainer.trailingAnchor, constant: -8),
-            rowStack.centerYAnchor.constraint(equalTo: accessoryContainer.centerYAnchor)
-        ])
-        panel.accessoryView = accessoryContainer
-        return (panel, formatPopup)
+        return panel
     }
 }

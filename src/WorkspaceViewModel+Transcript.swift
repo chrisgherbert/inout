@@ -540,49 +540,28 @@ extension WorkspaceViewModel {
         return range.lowerBound + ((range.upperBound - range.lowerBound) * clamped)
     }
 
-    private func transcriptPlainText() -> String {
-        TranscriptUtilities.plainText(from: transcriptSegments)
-    }
-
-    private func srtTimestamp(_ seconds: Double) -> String {
-        TranscriptUtilities.srtTimestamp(seconds)
-    }
-
-    private func transcriptSRT() -> String {
-        TranscriptUtilities.srt(from: transcriptSegments)
-    }
-
-    func exportTranscriptFromInspect() {
+    func exportTranscriptFromInspect(format requestedFormat: TranscriptExportFormat? = nil) {
         guard let sourceURL else { return }
         guard !transcriptSegments.isEmpty else { return }
+        let format = requestedFormat ?? transcriptExportFormat
+        transcriptExportFormat = format
 
-        let (panel, formatPopup) = TranscriptUtilities.makeExportPanel(
-            defaultName: sourceURL.deletingPathExtension().lastPathComponent + "_transcript.txt"
+        let baseName = sourceURL.deletingPathExtension().lastPathComponent + "_transcript"
+        let panel = TranscriptUtilities.makeExportPanel(
+            defaultName: baseName + "." + format.fileExtension,
+            format: format
         )
 
         guard panel.runModal() == .OK, let destination = panel.url else { return }
 
-        let selectedExtension = formatPopup.indexOfSelectedItem == 1 ? "srt" : "txt"
         let resolvedDestination: URL = {
-            if destination.pathExtension.lowercased() == selectedExtension {
+            if destination.pathExtension.lowercased() == format.fileExtension {
                 return destination
             }
-            return destination.deletingPathExtension().appendingPathExtension(selectedExtension)
+            return destination.deletingPathExtension().appendingPathExtension(format.fileExtension)
         }()
 
-        let ext = selectedExtension
-        let content: String
-        switch ext {
-        case "srt":
-            content = transcriptSRT()
-        case "txt", "":
-            content = transcriptPlainText()
-        default:
-            uiMessage = "Transcript export failed: Unsupported format \(ext)"
-            lastActivityState = .failed
-            notifyCompletion("Transcript Export Failed", message: uiMessage)
-            return
-        }
+        let content = TranscriptUtilities.content(from: transcriptSegments, format: format)
 
         do {
             try content.write(to: resolvedDestination, atomically: true, encoding: .utf8)

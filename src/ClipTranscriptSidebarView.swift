@@ -12,8 +12,10 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let isScrubbing: Bool
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
+    let transcriptExportFormat: TranscriptExportFormat
     let generateTranscript: () -> Void
-    let exportTranscript: () -> Void
+    let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
+    let exportTranscript: (TranscriptExportFormat?) -> Void
     let seekToTranscriptTime: (Double) -> Void
     let playTranscriptFromTime: (Double) -> Void
     let onCloseTranscript: () -> Void
@@ -42,6 +44,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
+        lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
         lhs.reduceTransparency == rhs.reduceTransparency
     }
 
@@ -266,12 +269,13 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 
     private var transcriptExportButton: some View {
-        Button("Export…") {
-            exportTranscript()
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .fixedSize(horizontal: true, vertical: false)
+        TranscriptExportControls(
+            selectedFormat: Binding(
+                get: { transcriptExportFormat },
+                set: { setTranscriptExportFormat($0) }
+            ),
+            exportTranscript: { exportTranscript(nil) }
+        )
     }
 
     var body: some View {
