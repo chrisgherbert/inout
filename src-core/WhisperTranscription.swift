@@ -55,6 +55,27 @@ public func findWhisperModel() -> URL? {
     return nil
 }
 
+public func findParakeetTranscriberExecutable() -> URL? {
+    if let bundled = Bundle.main.url(forResource: "parakeet-transcriber", withExtension: nil),
+       FileManager.default.isExecutableFile(atPath: bundled.path) {
+        return bundled
+    }
+    return nil
+}
+
+public func findParakeetModelDirectory() -> URL? {
+    if let bundled = Bundle.main.url(forResource: "parakeet-tdt-0.6b-v2", withExtension: nil),
+       FileManager.default.fileExists(atPath: bundled.path) {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: bundled.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+        return bundled
+    }
+    return nil
+}
+
 private func findSystemFFmpegExecutable() -> URL? {
     if let bundled = Bundle.main.url(forResource: "ffmpeg", withExtension: nil),
        FileManager.default.isExecutableFile(atPath: bundled.path) {
@@ -72,6 +93,17 @@ private func findSystemFFmpegExecutable() -> URL? {
         return URL(fileURLWithPath: candidate)
     }
     return nil
+}
+
+private struct ParakeetTranscriptionOutput: Decodable {
+    let text: String
+    let tokenTimings: [ParakeetTokenTiming]
+}
+
+private struct ParakeetTokenTiming: Decodable {
+    let token: String
+    let startTime: Double
+    let endTime: Double
 }
 
 private func runSynchronousProcess(
@@ -328,6 +360,224 @@ private func parseStreamingTranscriptSegment(from line: String) -> TranscriptSeg
     )
 }
 
+private func normalizedParakeetTranscriptText(_ text: String) -> String {
+    var result = text.replacingOccurrences(
+        of: #"\s+"#,
+        with: " ",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
+        of: #"\s+([,.;:!?])"#,
+        with: "$1",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
+        of: #"\(\s+"#,
+        with: "(",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
+        of: #"\s+\)"#,
+        with: ")",
+        options: .regularExpression
+    )
+    return result.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func parakeetTextHasSegmentBoundary(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let last = trimmed.last else { return false }
+    return ".!?".contains(last)
+}
+
+private func parakeetTextHasClauseBoundary(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let last = trimmed.last else { return false }
+    return ",;:".contains(last)
+}
+
+private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackText: String) -> [TranscriptSegment] {
+    let sortedTokens = tokens
+        .filter { !$0.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.endTime >= $0.startTime }
+        .sorted {
+            if abs($0.startTime - $1.startTime) > 0.0001 { return $0.startTime < $1.startTime }
+            return $0.endTime < $1.endTime
+        }
+
+    guard !sortedTokens.isEmpty else {
+        let text = normalizedParakeetTranscriptText(fallbackText)
+        return text.isEmpty ? [] : [TranscriptSegment(start: 0, end: 0.2, text: text)]
+    }
+
+    var segments: [TranscriptSegment] = []
+    var currentText = ""
+    var currentStart = max(0, sortedTokens[0].startTime)
+    var currentEnd = max(currentStart + 0.05, sortedTokens[0].endTime)
+    var previousEnd = currentEnd
+    let preferredLineLength = 86
+    let maximumLineLength = 118
+
+    func flush() {
+        let text = normalizedParakeetTranscriptText(currentText)
+        guard !text.isEmpty else {
+            currentText = ""
+            return
+        }
+        segments.append(
+            TranscriptSegment(
+                start: max(0, currentStart),
+                end: max(currentStart + 0.05, currentEnd),
+                text: text
+            )
+        )
+        currentText = ""
+    }
+
+    for token in sortedTokens {
+        let tokenStart = max(0, token.startTime)
+        let tokenEnd = max(tokenStart + 0.05, token.endTime)
+        let gap = tokenStart - previousEnd
+        let normalizedCurrent = normalizedParakeetTranscriptText(currentText)
+        let currentDuration = max(0, currentEnd - currentStart)
+        let shouldBreakForGap = !currentText.isEmpty && gap > 0.85 && currentDuration >= 1.5
+        let shouldBreakForSentence = currentDuration >= 1.2
+            && normalizedCurrent.count >= 42
+            && parakeetTextHasSegmentBoundary(normalizedCurrent)
+        let shouldBreakForClause = normalizedCurrent.count >= preferredLineLength
+            && parakeetTextHasClauseBoundary(normalizedCurrent)
+        let shouldBreakForLength = normalizedCurrent.count >= maximumLineLength || currentDuration >= 10.0
+
+        if shouldBreakForGap || shouldBreakForSentence || shouldBreakForClause || shouldBreakForLength {
+            flush()
+            currentStart = tokenStart
+            currentEnd = tokenEnd
+        }
+
+        currentText += token.token
+        currentEnd = max(currentEnd, tokenEnd)
+        previousEnd = tokenEnd
+    }
+
+    flush()
+    guard segments.count > 1 else { return segments }
+
+    var adjustedSegments: [TranscriptSegment] = []
+    adjustedSegments.reserveCapacity(segments.count)
+    for index in segments.indices {
+        let segment = segments[index]
+        let adjustedEnd: Double
+        if index < segments.index(before: segments.endIndex) {
+            let nextStart = segments[segments.index(after: index)].start
+            adjustedEnd = max(segment.end, nextStart)
+        } else {
+            adjustedEnd = segment.end
+        }
+        adjustedSegments.append(
+            TranscriptSegment(
+                id: segment.id,
+                start: segment.start,
+                end: max(segment.start + 0.05, adjustedEnd),
+                text: segment.text
+            )
+        )
+    }
+    return adjustedSegments
+}
+
+private func parseParakeetTranscriptionSegments(_ jsonData: Data) -> [TranscriptSegment] {
+    guard let output = try? JSONDecoder().decode(ParakeetTranscriptionOutput.self, from: jsonData) else {
+        return []
+    }
+    return makeParakeetSegments(from: output.tokenTimings, fallbackText: output.text)
+}
+
+public func transcribeAudioWithParakeet(
+    file: URL,
+    shouldCancel: @escaping @Sendable () -> Bool = { false },
+    progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
+    onConsoleOutput: @escaping @Sendable (String, String) -> Void = { _, _ in },
+    onTranscriptSegment: @escaping @Sendable (TranscriptSegment) -> Void = { _ in }
+) -> Result<[TranscriptSegment], DetectionError> {
+    if shouldCancel() {
+        return .failure(.cancelled)
+    }
+
+    guard let ffmpegURL = findSystemFFmpegExecutable() else {
+        return .failure(.failed("No ffmpeg executable found for Parakeet transcription."))
+    }
+    guard let parakeetURL = findParakeetTranscriberExecutable() else {
+        return .failure(.failed("Bundled Parakeet transcriber not found (Contents/Resources/parakeet-transcriber)."))
+    }
+    guard let modelURL = findParakeetModelDirectory() else {
+        return .failure(.failed("Bundled Parakeet model not found (Contents/Resources/parakeet-tdt-0.6b-v2)."))
+    }
+
+    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("bvt-parakeet-\(UUID().uuidString)", isDirectory: true)
+    do {
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+    } catch {
+        return .failure(.failed("Failed to create temp directory: \(error.localizedDescription)"))
+    }
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+    let wavURL = tempRoot.appendingPathComponent("audio.wav")
+    let outputJSON = tempRoot.appendingPathComponent("transcript.json")
+
+    let ffmpegResult = runSynchronousProcess(
+        executableURL: ffmpegURL,
+        arguments: [
+            "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-i", file.path,
+            "-vn",
+            "-ac", "1",
+            "-ar", "16000",
+            "-f", "wav",
+            wavURL.path
+        ],
+        shouldCancel: shouldCancel,
+        source: "ffmpeg",
+        onOutputLine: onConsoleOutput
+    )
+    switch ffmpegResult {
+    case .failure(let error):
+        return .failure(error)
+    case .success:
+        progressHandler(0.08)
+    }
+
+    let parakeetResult = runSynchronousProcess(
+        executableURL: parakeetURL,
+        arguments: [
+            wavURL.path,
+            "--model-version", "v2",
+            "--model-dir", modelURL.path,
+            "--output-json", outputJSON.path
+        ],
+        shouldCancel: shouldCancel,
+        source: "parakeet",
+        onOutputLine: onConsoleOutput
+    )
+    switch parakeetResult {
+    case .failure(let error):
+        return .failure(error)
+    case .success:
+        progressHandler(0.95)
+    }
+
+    guard let jsonData = try? Data(contentsOf: outputJSON) else {
+        return .failure(.failed("Parakeet did not produce transcript JSON output."))
+    }
+
+    let segments = parseParakeetTranscriptionSegments(jsonData)
+    for segment in segments {
+        onTranscriptSegment(segment)
+    }
+    progressHandler(1.0)
+    return .success(segments)
+}
+
 func computeProfanityHits(
     in transcriptSegments: [TranscriptSegment],
     profanityWords: Set<String>
@@ -486,7 +736,7 @@ func detectProfanityHits(
         return .success(computeProfanityHits(in: cachedTranscriptSegments, profanityWords: profanityWords))
     }
 
-    let transcriptResult = transcribeAudioWithWhisper(
+    let transcriptResult = transcribeAudioWithParakeet(
         file: file,
         shouldCancel: shouldCancel,
         progressHandler: progressHandler

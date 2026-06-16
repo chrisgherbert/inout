@@ -413,6 +413,9 @@ final class WorkspaceViewModel: ObservableObject {
     var cachedWhisperCLIAvailable = false
     var cachedWhisperModelAvailable = false
     var cachedWhisperAvailable = false
+    var cachedParakeetHelperAvailable = false
+    var cachedParakeetModelAvailable = false
+    var cachedParakeetAvailable = false
     init() {
         if PlayheadBenchmarkConfig.shared.enabled {
             PlayheadDiagnostics.shared.writeProgress(stage: "workspace_init_begin", scenario: nil)
@@ -642,6 +645,14 @@ final class WorkspaceViewModel: ObservableObject {
         cachedWhisperAvailable
     }
 
+    var parakeetTranscriptionAvailable: Bool {
+        cachedParakeetAvailable
+    }
+
+    var transcriptionAvailable: Bool {
+        parakeetTranscriptionAvailable
+    }
+
     var ffmpegAvailable: Bool {
         cachedFFmpegAvailable
     }
@@ -660,6 +671,14 @@ final class WorkspaceViewModel: ObservableObject {
 
     var whisperModelAvailable: Bool {
         cachedWhisperModelAvailable
+    }
+
+    var parakeetHelperAvailable: Bool {
+        cachedParakeetHelperAvailable
+    }
+
+    var parakeetModelAvailable: Bool {
+        cachedParakeetModelAvailable
     }
 
     var hasAudioTrack: Bool {
@@ -777,7 +796,7 @@ final class WorkspaceViewModel: ObservableObject {
     var canGenerateTranscript: Bool {
         sourceURL != nil
             && hasAudioTrack
-            && whisperTranscriptionAvailable
+            && transcriptionAvailable
             && !isAnalyzing
             && !isExporting
             && !isGeneratingTranscript

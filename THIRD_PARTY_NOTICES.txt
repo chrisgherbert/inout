@@ -1,0 +1,22 @@
+In/Out third-party notices
+==========================
+
+FluidAudio
+----------
+
+The Parakeet transcription helper uses FluidAudio.
+
+Project: https://github.com/FluidInference/FluidAudio
+License: Apache License 2.0
+
+NVIDIA Parakeet / FluidInference Core ML model
+----------------------------------------------
+
+The bundled Parakeet transcription model is derived from NVIDIA Parakeet TDT
+0.6B v2 and the FluidInference Core ML conversion.
+
+NVIDIA model: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+Core ML model: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml
+Model license: Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+This notice is included for attribution and license tracking.

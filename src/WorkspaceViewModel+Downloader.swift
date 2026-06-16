@@ -11,6 +11,9 @@ extension WorkspaceViewModel {
         cachedWhisperCLIAvailable = (findWhisperExecutable() != nil)
         cachedWhisperModelAvailable = (findWhisperModel() != nil)
         cachedWhisperAvailable = (cachedWhisperCLIAvailable && cachedWhisperModelAvailable)
+        cachedParakeetHelperAvailable = (findParakeetTranscriberExecutable() != nil)
+        cachedParakeetModelAvailable = (findParakeetModelDirectory() != nil)
+        cachedParakeetAvailable = (cachedParakeetHelperAvailable && cachedParakeetModelAvailable)
     }
 
     func recheckSetupChecks() {

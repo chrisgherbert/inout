@@ -42,3 +42,8 @@ scripts/release.env
 *.tmp
 *.swp
 /tmp
+
+# Local transcription benchmark fixtures and generated artifacts
+fixtures/transcription/*
+!fixtures/transcription/.gitkeep
+!fixtures/transcription/README.md

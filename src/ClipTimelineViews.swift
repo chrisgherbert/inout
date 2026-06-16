@@ -2061,7 +2061,7 @@ struct ClipToolView: View {
     }
 
     private var clipTranscriptSidebarMaxWidth: CGFloat {
-        920
+        1280
     }
 
     private func clampedTranscriptSidebarWidth(_ value: CGFloat) -> CGFloat {

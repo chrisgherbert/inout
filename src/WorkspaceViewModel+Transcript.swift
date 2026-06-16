@@ -224,8 +224,8 @@ extension WorkspaceViewModel {
             transcriptStatusText = "No audio track available for transcript."
             return
         }
-        guard whisperTranscriptionAvailable else {
-            transcriptStatusText = "Whisper binary/model is not bundled in this app build."
+        guard transcriptionAvailable else {
+            transcriptStatusText = "Transcription resources are not bundled in this app build."
             return
         }
         guard !isAnalyzing && !isExporting && !isGeneratingTranscript else { return }
@@ -392,7 +392,7 @@ extension WorkspaceViewModel {
         transcriptGenerationRelay = relay
 
         let result = await Task.detached(priority: .userInitiated) {
-            transcribeAudioWithWhisper(
+            transcribeAudioWithParakeet(
                 file: file,
                 shouldCancel: shouldCancel,
                 progressHandler: { progress in

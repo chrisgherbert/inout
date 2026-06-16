@@ -26,7 +26,7 @@ CORE_MODULE_NAME="InOutCore"
 BUNDLE_ID="com.bulwark.BulwarkVideoTools"
 APP_VERSION="${APP_VERSION:-1.0}"
 APP_BUILD_NUMBER="${APP_BUILD_NUMBER:-1}"
-MIN_MACOS_VERSION="${MIN_MACOS_VERSION:-13.0}"
+MIN_MACOS_VERSION="${MIN_MACOS_VERSION:-14.0}"
 APP_NAME_XML="$(python3 - <<'PY'
 from xml.sax.saxutils import escape
 print(escape("In/Out"))
@@ -48,12 +48,20 @@ FRAME_SOUND_SOURCE="$ROOT_DIR/assets/FrameShutter.aiff"
 FRAME_SOUND_DEST="$APP_RESOURCES/FrameShutter.aiff"
 QUICK_EXPORT_SOUND_SOURCE="$ROOT_DIR/assets/QuickExportSnip.aiff"
 QUICK_EXPORT_SOUND_DEST="$APP_RESOURCES/QuickExportSnip.aiff"
+THIRD_PARTY_NOTICES_SOURCE="$ROOT_DIR/THIRD_PARTY_NOTICES.txt"
+THIRD_PARTY_NOTICES_DEST="$APP_RESOURCES/THIRD_PARTY_NOTICES.txt"
 PINNED_FFMPEG_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg"
 PINNED_FFMPEG_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg.sha256"
 PINNED_FFPROBE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffprobe"
 PINNED_FFPROBE_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffprobe.sha256"
 PINNED_YTDLP_DEFAULT="$ROOT_DIR/vendor/yt-dlp/macos-arm64/yt-dlp"
 PINNED_YTDLP_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/yt-dlp/macos-arm64/yt-dlp.sha256"
+PARAKEET_HELPER_PACKAGE="$ROOT_DIR/tools/parakeet-transcriber"
+PARAKEET_HELPER_BUILD_DIR="$ROOT_DIR/.build/parakeet-transcriber"
+PARAKEET_HELPER_BIN="$PARAKEET_HELPER_BUILD_DIR/release/ParakeetTranscriber"
+PARAKEET_HELPER_DEST="$APP_RESOURCES/parakeet-transcriber"
+PARAKEET_MODEL_DEFAULT="$HOME/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v2"
+PARAKEET_MODEL_DEST="$APP_RESOURCES/parakeet-tdt-0.6b-v2"
 
 clean_swift_module_outputs() {
   local module_dir="$1"
@@ -468,6 +476,15 @@ else
   echo "Quick export sound not bundled (missing $QUICK_EXPORT_SOUND_SOURCE)."
 fi
 
+if [[ -f "$THIRD_PARTY_NOTICES_SOURCE" ]]; then
+  if should_refresh_bundle_item "$THIRD_PARTY_NOTICES_SOURCE" "$THIRD_PARTY_NOTICES_DEST"; then
+    cp "$THIRD_PARTY_NOTICES_SOURCE" "$THIRD_PARTY_NOTICES_DEST"
+    echo "Bundled third-party notices: $THIRD_PARTY_NOTICES_SOURCE"
+  else
+    echo "Keeping existing third-party notices."
+  fi
+fi
+
 FFMPEG_SOURCE="${BUNDLED_FFMPEG_PATH:-}"
 PINNED_FFMPEG_SHA_FILE="${BUNDLED_FFMPEG_SHA_FILE:-$PINNED_FFMPEG_SHA_FILE_DEFAULT}"
 EXPECTED_FFMPEG_SHA="${BUNDLED_FFMPEG_SHA256:-}"
@@ -766,7 +783,7 @@ else
     local_vendor_model="$(ls "$ROOT_DIR"/vendor/models/ggml-*.bin 2>/dev/null | head -n 1 || true)"
   fi
 
-  if [[ -n "$local_vendor_model" && -f "$local_vendor_model" ]]; then
+if [[ -n "$local_vendor_model" && -f "$local_vendor_model" ]]; then
     if should_refresh_bundle_item "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"; then
       cp "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"
       echo "Bundled Whisper model: $local_vendor_model"
@@ -776,6 +793,47 @@ else
   else
     echo "Whisper model not bundled (set BUNDLED_WHISPER_MODEL_PATH or place a model in $ROOT_DIR/vendor/models)."
   fi
+fi
+
+PARAKEET_HELPER_SOURCE="${BUNDLED_PARAKEET_HELPER_PATH:-}"
+if [[ -z "$PARAKEET_HELPER_SOURCE" && -d "$PARAKEET_HELPER_PACKAGE" ]]; then
+  if [[ "$QUICK_BUILD" -eq 0 || ! -x "$PARAKEET_HELPER_BIN" ]]; then
+    echo "Building Parakeet transcription helper..."
+    swift build \
+      --package-path "$PARAKEET_HELPER_PACKAGE" \
+      --build-path "$PARAKEET_HELPER_BUILD_DIR" \
+      -c release
+  fi
+  PARAKEET_HELPER_SOURCE="$PARAKEET_HELPER_BIN"
+fi
+
+if [[ -n "$PARAKEET_HELPER_SOURCE" && -x "$PARAKEET_HELPER_SOURCE" ]]; then
+  if should_refresh_bundle_item "$PARAKEET_HELPER_SOURCE" "$PARAKEET_HELPER_DEST"; then
+    cp "$PARAKEET_HELPER_SOURCE" "$PARAKEET_HELPER_DEST"
+    chmod +x "$PARAKEET_HELPER_DEST"
+    echo "Bundled Parakeet helper: $PARAKEET_HELPER_SOURCE"
+  else
+    echo "Keeping existing bundled Parakeet helper."
+  fi
+else
+  echo "Parakeet helper not bundled (set BUNDLED_PARAKEET_HELPER_PATH or build tools/parakeet-transcriber)."
+fi
+
+PARAKEET_MODEL_SOURCE="${BUNDLED_PARAKEET_MODEL_DIR:-}"
+if [[ -z "$PARAKEET_MODEL_SOURCE" && -d "$PARAKEET_MODEL_DEFAULT" ]]; then
+  PARAKEET_MODEL_SOURCE="$PARAKEET_MODEL_DEFAULT"
+fi
+
+if [[ -n "$PARAKEET_MODEL_SOURCE" && -d "$PARAKEET_MODEL_SOURCE" ]]; then
+  if [[ "$BUILD_MODE" == "release" || "$REFRESH_BUNDLED_TOOLS" -eq 1 || ! -d "$PARAKEET_MODEL_DEST" ]]; then
+    rm -rf "$PARAKEET_MODEL_DEST"
+    /usr/bin/ditto "$PARAKEET_MODEL_SOURCE" "$PARAKEET_MODEL_DEST"
+    echo "Bundled Parakeet model: $PARAKEET_MODEL_SOURCE"
+  else
+    echo "Keeping existing bundled Parakeet model."
+  fi
+else
+  echo "Parakeet model not bundled (set BUNDLED_PARAKEET_MODEL_DIR or run scripts/transcription_benchmark.sh --parakeet-only once)."
 fi
 
 echo "Built: $APP"

@@ -169,8 +169,8 @@ struct InspectToolView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
-                            if !whisperTranscriptionAvailable {
-                                Text("Whisper binary/model is not available in this app bundle.")
+                            if !canGenerateTranscript && hasAudioTrack {
+                                Text("Transcription resources are not available in this app bundle.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             } else if !hasAudioTrack {

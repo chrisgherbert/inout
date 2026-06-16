@@ -263,42 +263,11 @@ struct DetailView: View {
                     ScrollView {
                         LazyVStack(spacing: 4) {
                             ForEach(file.silentSegments) { segment in
-                                HStack {
-                                    Text(formatSeconds(segment.start))
-                                        .font(.system(.body, design: .monospaced))
-                                        .frame(width: 130, alignment: .leading)
-                                    Text("→")
-                                        .foregroundStyle(.secondary)
-                                    Text(formatSeconds(segment.end))
-                                        .font(.system(.body, design: .monospaced))
-                                        .frame(width: 130, alignment: .leading)
-                                    Spacer()
-                                    Text(String(format: "%.3fs", segment.duration))
-                                        .font(.system(.body, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                        .fill(hoveredSilentSegmentID == segment.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                                SilentGapResultRow(
+                                    segment: segment,
+                                    hoveredSegmentID: $hoveredSilentSegmentID,
+                                    play: play
                                 )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                        .stroke(
-                                            hoveredSilentSegmentID == segment.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
-                                            lineWidth: hoveredSilentSegmentID == segment.id ? 0.9 : 0.4
-                                        )
-                                )
-                                .contentShape(Rectangle())
-                                .onHover { isHovering in
-                                    hoveredSilentSegmentID = isHovering ? segment.id : (hoveredSilentSegmentID == segment.id ? nil : hoveredSilentSegmentID)
-                                }
-                                .onTapGesture(count: 2) {
-                                    play(from: segment.start)
-                                }
-                                .help("Double-click to play from this silent-gap start")
                             }
                         }
                     }
@@ -333,42 +302,11 @@ struct DetailView: View {
                     ScrollView {
                         LazyVStack(spacing: 4) {
                             ForEach(file.profanityHits) { hit in
-                                HStack {
-                                    Text(formatSeconds(hit.start))
-                                        .font(.system(.body, design: .monospaced))
-                                        .frame(width: 130, alignment: .leading)
-                                    Text("→")
-                                        .foregroundStyle(.secondary)
-                                    Text(formatSeconds(hit.end))
-                                        .font(.system(.body, design: .monospaced))
-                                        .frame(width: 130, alignment: .leading)
-                                    Spacer()
-                                    Text(hit.word)
-                                        .font(.system(.body, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                        .fill(hoveredProfanityHitID == hit.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                                ProfanityHitResultRow(
+                                    hit: hit,
+                                    hoveredHitID: $hoveredProfanityHitID,
+                                    play: play
                                 )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                                        .stroke(
-                                            hoveredProfanityHitID == hit.id ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
-                                            lineWidth: hoveredProfanityHitID == hit.id ? 0.9 : 0.4
-                                        )
-                                )
-                                .contentShape(Rectangle())
-                                .onHover { isHovering in
-                                    hoveredProfanityHitID = isHovering ? hit.id : (hoveredProfanityHitID == hit.id ? nil : hoveredProfanityHitID)
-                                }
-                                .onTapGesture(count: 2) {
-                                    play(from: hit.start)
-                                }
-                                .help("Double-click to play from this profanity hit")
                             }
                         }
                     }
@@ -550,5 +488,103 @@ struct DetailView: View {
         .onDisappear {
             player.pause()
         }
+    }
+}
+
+private struct SilentGapResultRow: View {
+    let segment: Segment
+    @Binding var hoveredSegmentID: UUID?
+    let play: (Double) -> Void
+
+    private var isHovered: Bool {
+        hoveredSegmentID == segment.id
+    }
+
+    var body: some View {
+        HStack {
+            Text(formatSeconds(segment.start))
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 130, alignment: .leading)
+            Text("→")
+                .foregroundStyle(.secondary)
+            Text(formatSeconds(segment.end))
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 130, alignment: .leading)
+            Spacer()
+            Text(String(format: "%.3fs", segment.duration))
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                .fill(isHovered ? Color.accentColor.opacity(0.16) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                .stroke(
+                    isHovered ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
+                    lineWidth: isHovered ? 0.9 : 0.4
+                )
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovering in
+            hoveredSegmentID = isHovering ? segment.id : (isHovered ? nil : hoveredSegmentID)
+        }
+        .onTapGesture(count: 2) {
+            play(segment.start)
+        }
+        .help("Double-click to play from this silent-gap start")
+    }
+}
+
+private struct ProfanityHitResultRow: View {
+    let hit: ProfanityHit
+    @Binding var hoveredHitID: UUID?
+    let play: (Double) -> Void
+
+    private var isHovered: Bool {
+        hoveredHitID == hit.id
+    }
+
+    var body: some View {
+        HStack {
+            Text(formatSeconds(hit.start))
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 130, alignment: .leading)
+            Text("→")
+                .foregroundStyle(.secondary)
+            Text(formatSeconds(hit.end))
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 130, alignment: .leading)
+            Spacer()
+            Text(hit.word)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                .fill(isHovered ? Color.accentColor.opacity(0.16) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                .stroke(
+                    isHovered ? Color.accentColor.opacity(0.26) : Color.primary.opacity(0.045),
+                    lineWidth: isHovered ? 0.9 : 0.4
+                )
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovering in
+            hoveredHitID = isHovering ? hit.id : (isHovered ? nil : hoveredHitID)
+        }
+        .onTapGesture(count: 2) {
+            play(hit.start)
+        }
+        .help("Double-click to play from this profanity hit")
     }
 }
