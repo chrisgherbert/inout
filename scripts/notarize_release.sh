@@ -120,7 +120,7 @@ if ! security find-identity -v -p codesigning | grep -F "$DEV_ID_APP" >/dev/null
 fi
 
 echo "Signing nested binaries..."
-for binary in "$APP_PATH/Contents/Resources/ffmpeg" "$APP_PATH/Contents/Resources/ffprobe" "$APP_PATH/Contents/Resources/whisper-cli" "$APP_PATH"/Contents/Resources/libwhisper*.dylib "$APP_PATH"/Contents/Resources/libggml*.dylib; do
+for binary in "$APP_PATH/Contents/Resources/ffmpeg" "$APP_PATH/Contents/Resources/ffprobe" "$APP_PATH/Contents/Resources/whisper-cli" "$APP_PATH/Contents/Resources/parakeet-transcriber" "$APP_PATH"/Contents/Resources/libwhisper*.dylib "$APP_PATH"/Contents/Resources/libggml*.dylib; do
   if [[ -f "$binary" ]]; then
     codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$binary"
   else
