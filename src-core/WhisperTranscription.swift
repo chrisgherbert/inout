@@ -106,6 +106,31 @@ private struct ParakeetTokenTiming: Decodable {
     let endTime: Double
 }
 
+private struct ParakeetProgressUpdate {
+    let progress: Double
+    let phase: String?
+}
+
+private func parseParakeetProgressLine(_ line: String) -> ParakeetProgressUpdate? {
+    let pattern = #"^PARAKEET_PROGRESS\s+([0-9]*\.?[0-9]+)(?:\s+(.+))?$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let range = NSRange(line.startIndex..<line.endIndex, in: line)
+    guard let match = regex.firstMatch(in: line, range: range),
+          let valueRange = Range(match.range(at: 1), in: line),
+          let value = Double(line[valueRange]) else {
+        return nil
+    }
+    let phase: String?
+    if match.range(at: 2).location != NSNotFound,
+       let phaseRange = Range(match.range(at: 2), in: line) {
+        let trimmedPhase = line[phaseRange].trimmingCharacters(in: .whitespacesAndNewlines)
+        phase = trimmedPhase.isEmpty ? nil : trimmedPhase
+    } else {
+        phase = nil
+    }
+    return ParakeetProgressUpdate(progress: min(max(value, 0.0), 1.0), phase: phase)
+}
+
 private func runSynchronousProcess(
     executableURL: URL,
     arguments: [String],
@@ -495,6 +520,7 @@ public func transcribeAudioWithParakeet(
     file: URL,
     shouldCancel: @escaping @Sendable () -> Bool = { false },
     progressHandler: @escaping @Sendable (Double) -> Void = { _ in },
+    progressPhaseHandler: @escaping @Sendable (String) -> Void = { _ in },
     onConsoleOutput: @escaping @Sendable (String, String) -> Void = { _, _ in },
     onTranscriptSegment: @escaping @Sendable (TranscriptSegment) -> Void = { _ in }
 ) -> Result<[TranscriptSegment], DetectionError> {
@@ -523,6 +549,7 @@ public func transcribeAudioWithParakeet(
     let wavURL = tempRoot.appendingPathComponent("audio.wav")
     let outputJSON = tempRoot.appendingPathComponent("transcript.json")
 
+    progressPhaseHandler("Extracting audio")
     let ffmpegResult = runSynchronousProcess(
         executableURL: ffmpegURL,
         arguments: [
@@ -547,6 +574,18 @@ public func transcribeAudioWithParakeet(
         progressHandler(0.08)
     }
 
+    let parakeetOutputHandler: @Sendable (String, String) -> Void = { line, source in
+        onConsoleOutput(line, source)
+        guard source == "parakeet",
+              let helperProgress = parseParakeetProgressLine(line) else {
+            return
+        }
+        if let phase = helperProgress.phase {
+            progressPhaseHandler(phase)
+        }
+        progressHandler(0.08 + (helperProgress.progress * 0.90))
+    }
+
     let parakeetResult = runSynchronousProcess(
         executableURL: parakeetURL,
         arguments: [
@@ -557,13 +596,14 @@ public func transcribeAudioWithParakeet(
         ],
         shouldCancel: shouldCancel,
         source: "parakeet",
-        onOutputLine: onConsoleOutput
+        onOutputLine: parakeetOutputHandler
     )
     switch parakeetResult {
     case .failure(let error):
         return .failure(error)
     case .success:
-        progressHandler(0.95)
+        progressPhaseHandler("Finalizing transcript")
+        progressHandler(0.98)
     }
 
     guard let jsonData = try? Data(contentsOf: outputJSON) else {

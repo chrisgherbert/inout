@@ -180,16 +180,19 @@ final class TranscriptGenerationRelay {
     private let progressBatcher: ProgressBatcher
     private let segmentBatcher: SegmentBatcher
     private let consoleBatcher: ConsoleBatcher?
+    private let phaseSink: @Sendable (String) -> Void
 
     init(
         disableBatching: Bool,
         captureConsoleOutput: Bool,
         progressSink: @escaping @Sendable (Double) -> Void,
         segmentSink: @escaping @Sendable ([TranscriptSegment]) -> Void,
-        consoleSink: @escaping @Sendable (String) -> Void
+        consoleSink: @escaping @Sendable (String) -> Void,
+        phaseSink: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         progressBatcher = ProgressBatcher(disableBatching: disableBatching, sink: progressSink)
         segmentBatcher = SegmentBatcher(disableBatching: disableBatching, sink: segmentSink)
+        self.phaseSink = phaseSink
         if captureConsoleOutput {
             consoleBatcher = ConsoleBatcher(disableBatching: disableBatching, sink: consoleSink)
         } else {
@@ -199,6 +202,10 @@ final class TranscriptGenerationRelay {
 
     func enqueueProgress(_ progress: Double) {
         progressBatcher.enqueue(progress)
+    }
+
+    func enqueuePhase(_ phase: String) {
+        phaseSink(phase)
     }
 
     func enqueueSegment(_ segment: TranscriptSegment) {
@@ -363,6 +370,22 @@ extension WorkspaceViewModel {
         cancelFlag.reset()
     }
 
+    func updateTranscriptGenerationStatus(progress: Double) {
+        guard isGeneratingTranscript else { return }
+        let statusText = renderedAnalyzeStatusText(progress: progress)
+        transcriptStatusText = statusText
+        analyzeStatusText = statusText
+        uiMessage = statusText
+    }
+
+    func setTranscriptGenerationPhase(_ phase: String, fileName: String) {
+        guard !phase.isEmpty else { return }
+        if analyzePhaseText != phase {
+            setAnalyzePhase(phase, fileName: fileName)
+        }
+        updateTranscriptGenerationStatus(progress: analyzeProgress)
+    }
+
     func runSharedTranscriptGeneration(
         file: URL,
         fileName: String,
@@ -375,7 +398,9 @@ extension WorkspaceViewModel {
             captureConsoleOutput: captureConsoleOutput,
             progressSink: { [weak self] progress in
                 Task { @MainActor [weak self] in
-                    self?.setAnalyzeProgress(Self.mapTranscriptProgress(progress, in: progressRange), fileName: fileName)
+                    let mappedProgress = Self.mapTranscriptProgress(progress, in: progressRange)
+                    self?.setAnalyzeProgress(mappedProgress, fileName: fileName)
+                    self?.updateTranscriptGenerationStatus(progress: mappedProgress)
                 }
             },
             segmentSink: { [weak self] segments in
@@ -387,6 +412,11 @@ extension WorkspaceViewModel {
                 Task { @MainActor [weak self] in
                     self?.appendActivityConsoleChunk(chunk)
                 }
+            },
+            phaseSink: { [weak self] phase in
+                Task { @MainActor [weak self] in
+                    self?.setTranscriptGenerationPhase(phase, fileName: fileName)
+                }
             }
         )
         transcriptGenerationRelay = relay
@@ -397,6 +427,9 @@ extension WorkspaceViewModel {
                 shouldCancel: shouldCancel,
                 progressHandler: { progress in
                     relay.enqueueProgress(progress)
+                },
+                progressPhaseHandler: { phase in
+                    relay.enqueuePhase(phase)
                 },
                 onConsoleOutput: { line, source in
                     relay.enqueueConsole(line: line, source: source)

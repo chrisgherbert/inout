@@ -70,6 +70,11 @@ private func parseArgs() -> (
     return (audioPath, outputJSON, modelDirectory, version, versionLabel)
 }
 
+private func emitProgress(_ value: Double, phase: String) {
+    let clamped = min(max(value, 0.0), 1.0)
+    FileHandle.standardError.write(Data(String(format: "PARAKEET_PROGRESS %.4f %@\n", clamped, phase).utf8))
+}
+
 @main
 struct ParakeetTranscriber {
     static func main() async {
@@ -77,6 +82,7 @@ struct ParakeetTranscriber {
         let outputURL = URL(fileURLWithPath: parsed.outputJSON)
 
         do {
+            emitProgress(0.02, phase: "Loading Parakeet model")
             let models: AsrModels
             if let modelDirectory = parsed.modelDirectory {
                 models = try await AsrModels.load(
@@ -91,6 +97,7 @@ struct ParakeetTranscriber {
                 )
             }
 
+            emitProgress(0.12, phase: "Preparing Parakeet engine")
             let asrConfig = ASRConfig(
                 tdtConfig: TdtConfig(blankId: parsed.version.blankId),
                 encoderHiddenSize: parsed.version.encoderHiddenSize
@@ -98,10 +105,25 @@ struct ParakeetTranscriber {
             let asrManager = AsrManager(config: asrConfig)
             try await asrManager.loadModels(models)
 
+            emitProgress(0.18, phase: "Preparing audio")
             var decoderState = try TdtDecoderState(decoderLayers: parsed.version.decoderLayers)
             let samples = try AudioConverter().resampleAudioFile(path: parsed.audioPath)
+            let progressStream = await asrManager.transcriptionProgressStream
+            let progressTask = Task {
+                do {
+                    for try await progress in progressStream {
+                        emitProgress(0.22 + (progress * 0.68), phase: "Transcribing")
+                    }
+                } catch {
+                    FileHandle.standardError.write(Data("PARAKEET_PROGRESS_ERROR \(error)\n".utf8))
+                }
+            }
+
             let start = Date()
             let result = try await asrManager.transcribe(samples, decoderState: &decoderState)
+            progressTask.cancel()
+            _ = await progressTask.result
+            emitProgress(0.92, phase: "Writing transcript")
             let measuredProcessingTime = Date().timeIntervalSince(start)
             let processingTime = result.processingTime > 0 ? result.processingTime : measuredProcessingTime
             let duration = result.duration
@@ -125,6 +147,7 @@ struct ParakeetTranscriber {
                 withIntermediateDirectories: true
             )
             try encoder.encode(output).write(to: outputURL)
+            emitProgress(1.0, phase: "Transcript complete")
             print(result.text)
         } catch {
             FileHandle.standardError.write(Data("Parakeet transcription failed: \(error)\n".utf8))
