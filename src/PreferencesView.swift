@@ -152,12 +152,15 @@ struct PreferencesView: View {
                 setupCheckRow("ffmpeg", available: model.ffmpegAvailable)
                 setupCheckRow("ffprobe", available: model.ffprobeAvailable)
                 setupCheckRow("Managed Python 3", available: model.managedPythonVersionText != "Unavailable")
+                setupCheckRow("Deno JavaScript runtime", available: model.denoRuntimeAvailable)
                 setupCheckRow("yt-dlp", available: model.ytDLPToolAvailable)
                 setupCheckRow("whisper-cli", available: model.whisperCLIAvailable)
                 setupCheckRow("Whisper model", available: model.whisperModelAvailable)
+                setupCheckRow("Parakeet helper", available: model.parakeetHelperAvailable)
+                setupCheckRow("Parakeet model", available: model.parakeetModelAvailable)
 
                 settingsRow("") {
-                    Text("Use this tab to check the bundled and managed tools the app depends on. URL downloads rely on both `Managed Python 3` and `yt-dlp`, while clipping, conversion, and transcription rely on ffmpeg, ffprobe, and Whisper.")
+                    Text("Use this tab to check the bundled and managed tools the app depends on. URL downloads rely on Managed Python 3, Deno, and yt-dlp, while clipping, conversion, captions, and transcription rely on ffmpeg, ffprobe, Whisper, and Parakeet.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -174,7 +177,7 @@ struct PreferencesView: View {
 
             settingsSection("Downloader Runtime") {
                 settingsRow("") {
-                    Text("In/Out manages the URL download stack for you. `yt-dlp` handles site extraction, and `Managed Python 3` is the runtime used to launch it. Updates and repairs happen automatically or from the controls below.")
+                    Text("In/Out manages the URL download stack for you. yt-dlp handles site extraction, Managed Python 3 launches yt-dlp, and Deno provides the JavaScript runtime YouTube now expects. Updates and repairs happen automatically or from the controls below.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -185,6 +188,11 @@ struct PreferencesView: View {
 
                 settingsRow("Managed Python 3") {
                     Text(model.managedPythonVersionText)
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                settingsRow("Deno") {
+                    Text(model.managedDenoVersionText)
                         .font(.system(.body, design: .monospaced))
                 }
 

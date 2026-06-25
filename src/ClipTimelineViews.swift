@@ -2527,7 +2527,7 @@ struct ClipToolView: View {
                 set: { model.urlDownloadBrowserCookiesSource = $0 }
             ),
             reduceTransparency: reduceTransparency,
-            isURLDownloadEnabled: model.ytDLPAvailable && model.canRequestURLDownload,
+            isURLDownloadEnabled: model.canRequestURLDownload,
             onChooseFile: {
                 model.chooseSource()
             },

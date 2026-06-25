@@ -641,11 +641,11 @@ extension WorkspaceViewModel {
                         return
                     }
 
-                    let stderrText = nonWarningLines.suffix(8).joined(separator: "\n")
+                    let stderrText = stderrSnapshot.joined(separator: "\n")
                     if stderrText.isEmpty {
                         continuation.resume(returning: (nil, "yt-dlp exited with status \(proc.terminationStatus)"))
                     } else {
-                        continuation.resume(returning: (nil, stderrText))
+                        continuation.resume(returning: (nil, "yt-dlp exited with status \(proc.terminationStatus)\n\(stderrText)"))
                     }
                 }
             }

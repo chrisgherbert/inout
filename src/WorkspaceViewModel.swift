@@ -336,6 +336,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var downloaderCanRollback = false
     @Published var downloaderPreviousVersionText = ""
     @Published var managedPythonVersionText = "Unavailable"
+    @Published var managedDenoVersionText = "Unavailable"
     @Published var downloaderActionStatusText = ""
 
     var analyzeTask: Task<Void, Never>?
@@ -410,6 +411,7 @@ final class WorkspaceViewModel: ObservableObject {
     var cachedFFmpegAvailable = false
     var cachedFFprobeAvailable = false
     var cachedYTDLPAvailable = false
+    var cachedDenoAvailable = false
     var cachedWhisperCLIAvailable = false
     var cachedWhisperModelAvailable = false
     var cachedWhisperAvailable = false
@@ -665,6 +667,10 @@ final class WorkspaceViewModel: ObservableObject {
         cachedYTDLPAvailable
     }
 
+    var denoRuntimeAvailable: Bool {
+        cachedDenoAvailable
+    }
+
     var whisperCLIAvailable: Bool {
         cachedWhisperCLIAvailable
     }
@@ -880,8 +886,8 @@ final class WorkspaceViewModel: ObservableObject {
         copyToClipboard(activityConsoleText)
     }
 
-    func appendActivityConsoleChunk(_ chunk: String) {
-        guard showActivityConsole else { return }
+    func appendActivityConsoleChunk(_ chunk: String, force: Bool = false) {
+        guard showActivityConsole || force else { return }
         let cleanedChunk = chunk.trimmingCharacters(in: .newlines)
         guard !cleanedChunk.isEmpty else { return }
 
@@ -894,8 +900,8 @@ final class WorkspaceViewModel: ObservableObject {
         scheduleActivityConsoleFlush()
     }
 
-    func appendActivityConsole(_ line: String, source: String? = nil) {
-        guard showActivityConsole else { return }
+    func appendActivityConsole(_ line: String, source: String? = nil, force: Bool = false) {
+        guard showActivityConsole || force else { return }
 
         let cleaned = line.replacingOccurrences(of: "\r", with: "").trimmingCharacters(in: .newlines)
         guard !cleaned.isEmpty else { return }
@@ -907,7 +913,7 @@ final class WorkspaceViewModel: ObservableObject {
             renderedLine = cleaned
         }
 
-        appendActivityConsoleChunk(renderedLine)
+        appendActivityConsoleChunk(renderedLine, force: force)
     }
 
     private func scheduleActivityConsoleFlush() {

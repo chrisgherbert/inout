@@ -71,10 +71,6 @@ extension WorkspaceViewModel {
             uiMessage = "Finish current task before downloading."
             return
         }
-        guard let ytDLPLaunch = resolveYTDLPLaunch() else {
-            uiMessage = "Downloader support is required to import from URL."
-            return
-        }
         guard let normalized = URLDownloadUtilities.normalizedDownloadURL(from: urlText) else {
             uiMessage = "Invalid URL. Please use an http(s) link."
             return
@@ -87,6 +83,20 @@ extension WorkspaceViewModel {
         }
         urlDownloadAuthenticationMode = authenticationMode
         urlDownloadBrowserCookiesSource = browserCookiesSource
+
+        guard let ytDLPLaunch = resolveYTDLPLaunch() else {
+            ensureManagedDownloaderReadyIfNeeded { [weak self] in
+                self?.startURLImport(
+                    urlText: urlText,
+                    preset: preset,
+                    saveMode: saveMode,
+                    customFolderPath: customFolderPath,
+                    authenticationMode: authenticationMode,
+                    browserCookiesSource: browserCookiesSource
+                )
+            }
+            return
+        }
 
         if preset.requiresTranscodeWarning && !confirmTranscodeDownloadWarning() {
             uiMessage = "Download cancelled."
@@ -202,11 +212,17 @@ extension WorkspaceViewModel {
 
             if let errorText {
                 await MainActor.run {
+                    let conciseError = errorText
+                        .split(whereSeparator: \.isNewline)
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .first { !$0.isEmpty } ?? errorText
+                    self.showActivityConsole = true
+                    self.appendActivityConsole("Full yt-dlp error:\n\(errorText)", source: "yt-dlp", force: true)
                     self.exportTask = nil
                     self.activeProcess = nil
                     self.isExporting = false
                     self.exportProgress = 0
-                    self.exportStatusText = "Download failed: \(errorText)"
+                    self.exportStatusText = "Download failed: \(conciseError)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
                 }

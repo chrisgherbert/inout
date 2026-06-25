@@ -6,6 +6,7 @@ extension WorkspaceViewModel {
     func refreshExternalToolAvailabilityCache() {
         cachedFFmpegAvailable = (findFFmpegExecutable() != nil)
         cachedFFprobeAvailable = (findFFprobeExecutable() != nil)
+        cachedDenoAvailable = downloaderManager.denoRuntimeAvailable()
         cachedYTDLPAvailable = downloaderManager.pythonRuntimeAvailable()
             && (downloaderManager.activeLaunchCommand() != nil)
         cachedWhisperCLIAvailable = (findWhisperExecutable() != nil)
@@ -31,6 +32,7 @@ extension WorkspaceViewModel {
         downloaderCanRollback = downloaderManager.canRollbackToPrevious
         downloaderPreviousVersionText = downloaderManager.rollbackManifest()?.version ?? ""
         managedPythonVersionText = downloaderManager.pythonRuntimeVersion() ?? "Unavailable"
+        managedDenoVersionText = downloaderManager.denoRuntimeVersion() ?? "Unavailable"
         downloaderStatusText = status.label
         switch status {
         case .bundledFallback:
@@ -63,7 +65,7 @@ extension WorkspaceViewModel {
             do {
                 let manifest = try await self.downloaderManager.installOrUpdateDownloader()
                 self.uiMessage = "Downloader updated to \(manifest.version)."
-                self.downloaderActionStatusText = "Downloader updated to \(manifest.version)."
+                self.downloaderActionStatusText = "Downloader updated to \(manifest.version); Deno ready."
             } catch {
                 self.downloaderLastErrorText = error.localizedDescription
                 self.uiMessage = error.localizedDescription
@@ -85,7 +87,7 @@ extension WorkspaceViewModel {
             do {
                 let manifest = try await self.downloaderManager.repairDownloader()
                 self.uiMessage = "Downloader repaired (\(manifest.version))."
-                self.downloaderActionStatusText = "Downloader repaired (\(manifest.version))."
+                self.downloaderActionStatusText = "Downloader repaired (\(manifest.version)); Deno ready."
             } catch {
                 self.downloaderLastErrorText = error.localizedDescription
                 self.uiMessage = error.localizedDescription
@@ -143,7 +145,7 @@ extension WorkspaceViewModel {
                 do {
                     let manifest = try await self.downloaderManager.installOrUpdateDownloader()
                     self.uiMessage = "Downloader ready (\(manifest.version))."
-                    self.downloaderActionStatusText = "Downloader ready (\(manifest.version))."
+                    self.downloaderActionStatusText = "Downloader ready (\(manifest.version)); Deno ready."
                 } catch {
                     self.downloaderLastErrorText = error.localizedDescription
                     if self.ytDLPAvailable {

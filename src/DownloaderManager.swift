@@ -16,6 +16,13 @@ struct DownloaderRuntimeManifest: Codable {
     let installedAt: Date
 }
 
+struct DenoRuntimeManifest: Codable {
+    let version: String
+    let sha256: String
+    let sourceURL: String
+    let installedAt: Date
+}
+
 struct YTDLPLaunchCommand {
     let executableURL: URL
     let preArguments: [String]
@@ -82,6 +89,7 @@ final class DownloaderManager {
     private let repoName = "inout"
     private let runtimeAssetName = "In-Out-python-runtime.tar.gz"
     private let runtimeSHAAssetName = "In-Out-python-runtime.tar.gz.sha256"
+    private let officialDenoBaseURL = URL(string: "https://github.com/denoland/deno/releases/latest/download/")!
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -95,12 +103,13 @@ final class DownloaderManager {
         if let manifest = externalManifest(),
            let externalScriptURL,
            let pythonHome = activePythonHomeURL,
+           activeDenoExecutableURL != nil,
            fileManager.fileExists(atPath: externalScriptURL.path),
            fileManager.isExecutableFile(atPath: pythonHome.appendingPathComponent("bin/python3").path) {
             return .externalCurrent(version: manifest.version)
         }
 
-        if bundledYTDLPScriptURL != nil, activePythonURL != nil {
+        if bundledYTDLPScriptURL != nil, activePythonURL != nil, activeDenoExecutableURL != nil {
             return .bundledFallback
         }
 
@@ -109,10 +118,16 @@ final class DownloaderManager {
         }
 
         if externalScriptURL != nil {
+            if activeDenoExecutableURL == nil {
+                return .broken("Deno JavaScript runtime is missing.")
+            }
             return .broken("External downloader files are present but metadata is incomplete.")
         }
 
         if bundledYTDLPScriptURL != nil {
+            if activeDenoExecutableURL == nil {
+                return .broken("Deno JavaScript runtime is missing.")
+            }
             return .broken("Bundled fallback downloader files are present but runtime is unavailable.")
         }
 
@@ -135,6 +150,10 @@ final class DownloaderManager {
 
         if activePythonURL == nil {
             return .missing
+        }
+
+        if activeDenoExecutableURL == nil {
+            return .broken("Deno JavaScript runtime did not validate.")
         }
 
         if externalScriptURL != nil {
@@ -162,6 +181,20 @@ final class DownloaderManager {
         return nil
     }
 
+    func denoRuntimeAvailable() -> Bool {
+        activeDenoExecutableURL != nil
+    }
+
+    func denoRuntimeVersion() -> String? {
+        if bundledDenoExecutableURL != nil {
+            return "Bundled (dev)"
+        }
+        if let installed = denoRuntimeManifest()?.version, !installed.isEmpty {
+            return installed
+        }
+        return nil
+    }
+
     func activeLaunchCommand() -> YTDLPLaunchCommand? {
         if let externalScriptURL,
            let command = externalLaunchCommand(for: externalScriptURL) {
@@ -174,13 +207,14 @@ final class DownloaderManager {
         guard let scriptURL = bundledYTDLPScriptURL,
               let pythonURL = activePythonURL,
               let pythonHome = activePythonHomeURL,
+              let denoURL = activeDenoExecutableURL,
               fileManager.fileExists(atPath: scriptURL.path) else {
             return nil
         }
 
         return YTDLPLaunchCommand(
             executableURL: pythonURL,
-            preArguments: [scriptURL.path] + Self.ytdlpIsolationArguments,
+            preArguments: [scriptURL.path] + Self.ytdlpIsolationArguments + ytDLPJavaScriptRuntimeArguments(denoURL: denoURL),
             environment: pythonEnvironment(homeURL: pythonHome),
             removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys,
             source: "bundled"
@@ -219,12 +253,21 @@ final class DownloaderManager {
         return try? decoder.decode(DownloaderRuntimeManifest.self, from: data)
     }
 
+    func denoRuntimeManifest() -> DenoRuntimeManifest? {
+        let manifestURL = denoRuntimeManifestURL
+        guard let data = try? Data(contentsOf: manifestURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(DenoRuntimeManifest.self, from: data)
+    }
+
     var canRollbackToPrevious: Bool {
         rollbackManifest() != nil && (previousScriptURL?.path).map(fileManager.fileExists(atPath:)) == true
     }
 
     func installOrUpdateDownloader() async throws -> DownloaderManifest {
         let pythonHome = try await ensurePythonRuntimeReady(forceRefresh: false)
+        _ = try await ensureDenoRuntimeReady(forceRefresh: true)
         guard let appSupportRoot else {
             throw DownloaderManagerError.appSupportUnavailable
         }
@@ -263,6 +306,7 @@ final class DownloaderManager {
 
     func repairDownloader() async throws -> DownloaderManifest {
         _ = try await ensurePythonRuntimeReady(forceRefresh: true)
+        _ = try await ensureDenoRuntimeReady(forceRefresh: true)
         return try await installOrUpdateDownloader()
     }
 
@@ -412,6 +456,81 @@ final class DownloaderManager {
         return runtimeCurrentDirectoryURL
     }
 
+    private func ensureDenoRuntimeReady(forceRefresh: Bool) async throws -> URL {
+        if let bundledDenoExecutableURL {
+            return bundledDenoExecutableURL
+        }
+        if !forceRefresh,
+           let installed = installedDenoExecutableURL,
+           let manifest = denoRuntimeManifest(),
+           !manifest.version.isEmpty {
+            return installed
+        }
+
+        guard let appSupportRoot else {
+            throw DownloaderManagerError.appSupportUnavailable
+        }
+        try fileManager.createDirectory(at: appSupportRoot, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: tmpDirectoryURL, withIntermediateDirectories: true)
+
+        let target = Self.denoReleaseTarget
+        let archiveName = "deno-\(target).zip"
+        let archiveSourceURL = officialDenoBaseURL.appendingPathComponent(archiveName)
+        let tempDirectory = tmpDirectoryURL.appendingPathComponent("deno-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let archiveURL = tempDirectory.appendingPathComponent(archiveName)
+        let (archiveData, archiveResponse) = try await session.data(from: archiveSourceURL)
+        guard let http = archiveResponse as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw DownloaderManagerError.downloadFailed("Unexpected Deno runtime response.")
+        }
+        try archiveData.write(to: archiveURL, options: .atomic)
+
+        let extractDirectory = tempDirectory.appendingPathComponent("extract", isDirectory: true)
+        try fileManager.createDirectory(at: extractDirectory, withIntermediateDirectories: true)
+        let extractProcess = Process()
+        extractProcess.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        extractProcess.arguments = ["-q", archiveURL.path, "-d", extractDirectory.path]
+        let extractError = Pipe()
+        extractProcess.standardError = extractError
+        try extractProcess.run()
+        extractProcess.waitUntilExit()
+        guard extractProcess.terminationStatus == 0 else {
+            let errorText = String(decoding: extractError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw DownloaderManagerError.validationFailed(
+                errorText.isEmpty ? "Failed to extract Deno runtime." : errorText.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+
+        let extractedDeno = extractDirectory.appendingPathComponent("deno")
+        guard fileManager.fileExists(atPath: extractedDeno.path) else {
+            throw DownloaderManagerError.validationFailed("Downloaded Deno runtime is missing deno.")
+        }
+        try setExecutablePermissions(at: extractedDeno)
+        let version = try readDenoVersion(at: extractedDeno)
+
+        let stagedRoot = tempDirectory.appendingPathComponent("DenoRuntime", isDirectory: true)
+        let stagedCurrent = stagedRoot.appendingPathComponent("current", isDirectory: true)
+        try fileManager.createDirectory(at: stagedCurrent, withIntermediateDirectories: true)
+        let stagedDeno = stagedCurrent.appendingPathComponent("deno")
+        try fileManager.moveItem(at: extractedDeno, to: stagedDeno)
+        try setExecutablePermissions(at: stagedDeno)
+
+        let manifest = DenoRuntimeManifest(
+            version: version,
+            sha256: sha256Hex(for: archiveData),
+            sourceURL: archiveSourceURL.absoluteString,
+            installedAt: Date()
+        )
+
+        try? fileManager.removeItem(at: denoRuntimeRootDirectoryURL)
+        try fileManager.moveItem(at: stagedRoot, to: denoRuntimeRootDirectoryURL)
+        let manifestData = try JSONEncoder.pretty.encode(manifest)
+        try manifestData.write(to: denoRuntimeManifestURL, options: .atomic)
+        return denoRuntimeCurrentDirectoryURL.appendingPathComponent("deno")
+    }
+
     private func readVersion(using command: YTDLPLaunchCommand) throws -> String {
         let output = try runProcess(
             executableURL: command.executableURL,
@@ -439,6 +558,22 @@ final class DownloaderManager {
             throw DownloaderManagerError.validationFailed("Empty Python version response.")
         }
         return version
+    }
+
+    private func readDenoVersion(at executableURL: URL) throws -> String {
+        let output = try runProcess(
+            executableURL: executableURL,
+            arguments: ["--version"],
+            environment: [:]
+        )
+        guard let firstLine = output.split(whereSeparator: \.isNewline).first else {
+            throw DownloaderManagerError.validationFailed("Empty Deno version response.")
+        }
+        let parts = firstLine.split(whereSeparator: \.isWhitespace)
+        guard parts.count >= 2 else {
+            throw DownloaderManagerError.validationFailed("Unexpected Deno version response.")
+        }
+        return String(parts[1])
     }
 
     private func runProcess(
@@ -479,16 +614,21 @@ final class DownloaderManager {
     private func externalLaunchCommand(for scriptURL: URL, pythonHome: URL? = nil) -> YTDLPLaunchCommand? {
         guard let pythonHome = pythonHome ?? activePythonHomeURL,
               let pythonURL = pythonExecutableURL(forHome: pythonHome),
+              let denoURL = activeDenoExecutableURL,
               fileManager.fileExists(atPath: scriptURL.path) else {
             return nil
         }
         return YTDLPLaunchCommand(
             executableURL: pythonURL,
-            preArguments: [scriptURL.path] + Self.ytdlpIsolationArguments,
+            preArguments: [scriptURL.path] + Self.ytdlpIsolationArguments + ytDLPJavaScriptRuntimeArguments(denoURL: denoURL),
             environment: pythonEnvironment(homeURL: pythonHome),
             removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys,
             source: "external"
         )
+    }
+
+    private func ytDLPJavaScriptRuntimeArguments(denoURL: URL) -> [String] {
+        ["--js-runtimes", "deno:\(denoURL.path)"]
     }
 
     private func pythonEnvironment(homeURL: URL) -> [String: String] {
@@ -635,6 +775,31 @@ final class DownloaderManager {
         return pythonExecutableURL(forHome: home)
     }
 
+    private var bundledDenoExecutableURL: URL? {
+        var candidates: [URL] = []
+        if let resourceURL = Bundle.main.resourceURL {
+            candidates.append(
+                resourceURL
+                    .appendingPathComponent("DenoRuntime", isDirectory: true)
+                    .appendingPathComponent("current", isDirectory: true)
+                    .appendingPathComponent("deno")
+            )
+        }
+        if let standaloneDeno = Bundle.main.url(forResource: "deno", withExtension: nil) {
+            candidates.append(standaloneDeno)
+        }
+        return candidates.first(where: { fileManager.isExecutableFile(atPath: $0.path) })
+    }
+
+    private var installedDenoExecutableURL: URL? {
+        let deno = denoRuntimeCurrentDirectoryURL.appendingPathComponent("deno")
+        return fileManager.isExecutableFile(atPath: deno.path) ? deno : nil
+    }
+
+    private var activeDenoExecutableURL: URL? {
+        bundledDenoExecutableURL ?? installedDenoExecutableURL
+    }
+
     private var tmpPycacheRoot: URL {
         fileManager.temporaryDirectory.appendingPathComponent("inout-python-pyc", isDirectory: true)
     }
@@ -649,6 +814,26 @@ final class DownloaderManager {
 
     private var runtimeManifestURL: URL {
         runtimeRootDirectoryURL.appendingPathComponent("manifest.json")
+    }
+
+    private var denoRuntimeRootDirectoryURL: URL {
+        (appSupportRoot ?? fileManager.temporaryDirectory).appendingPathComponent("DenoRuntime", isDirectory: true)
+    }
+
+    private var denoRuntimeCurrentDirectoryURL: URL {
+        denoRuntimeRootDirectoryURL.appendingPathComponent("current", isDirectory: true)
+    }
+
+    private var denoRuntimeManifestURL: URL {
+        denoRuntimeRootDirectoryURL.appendingPathComponent("manifest.json")
+    }
+
+    private static var denoReleaseTarget: String {
+        #if arch(arm64)
+        return "aarch64-apple-darwin"
+        #else
+        return "x86_64-apple-darwin"
+        #endif
     }
 
     private func fetchLatestRelease() async throws -> GitHubRelease {

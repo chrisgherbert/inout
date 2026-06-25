@@ -148,7 +148,7 @@ struct HelpDocumentationView: View {
                 HelpSection(
                     title: "Generate a transcript",
                     paragraphs: [
-                        "You can generate a transcript from the Clip tab or from Inspect. In/Out uses the bundled Whisper model to create transcript segments and keep them aligned to time."
+                        "You can generate a transcript from the Clip tab or from Inspect. In/Out uses its bundled transcription tools to create transcript segments and keep them aligned to time."
                     ],
                     bullets: [
                         "Open the transcript sidebar from the Clip tab, then choose Generate Transcript.",
@@ -252,7 +252,9 @@ struct HelpDocumentationView: View {
                         "ffmpeg and ffprobe for export, conversion, and media inspection.",
                         "yt-dlp for supported URL downloads.",
                         "A managed Python runtime for URL download setup.",
-                        "whisper-cli and a bundled model for transcripts, captions, and transcript-backed analysis."
+                        "Deno for JavaScript-heavy site extraction during URL downloads.",
+                        "Parakeet for fast transcript generation in the app.",
+                        "whisper-cli and a bundled model for burned captions and transcript-backed analysis."
                     ],
                     note: "If one of these components is missing or unavailable, the related feature is hidden or disabled rather than failing unexpectedly."
                 )
