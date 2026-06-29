@@ -53,6 +53,115 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     let normalizedText: String
 }
 
+func makeTranscriptDisplayRows(from segments: [TranscriptSegment]) -> [TranscriptDisplayRow] {
+    var rows: [TranscriptDisplayRow] = []
+    rows.reserveCapacity(segments.count)
+
+    for segment in segments {
+        let text = normalizedTranscriptDisplayText(segment.text)
+        guard !text.isEmpty else { continue }
+
+        if let last = rows.last,
+           shouldMergeTranscriptDisplayText(previous: last.text, current: text) {
+            let mergedText = mergedTranscriptDisplayText(previous: last.text, current: text)
+            rows[rows.count - 1] = TranscriptDisplayRow(
+                id: last.id,
+                start: last.start,
+                startLabel: last.startLabel,
+                text: mergedText,
+                normalizedText: normalizedTranscriptSearchText(mergedText)
+            )
+        } else {
+            rows.append(
+                TranscriptDisplayRow(
+                    id: segment.id,
+                    start: segment.start,
+                    startLabel: formatSeconds(segment.start),
+                    text: text,
+                    normalizedText: normalizedTranscriptSearchText(text)
+                )
+            )
+        }
+    }
+
+    return rows
+}
+
+private func normalizedTranscriptDisplayText(_ text: String) -> String {
+    var result = text.replacingOccurrences(
+        of: #"\s+"#,
+        with: " ",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
+        of: #"\s+([,.;:!?])"#,
+        with: "$1",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
+        of: #"([a-z])([0-9])"#,
+        with: "$1 $2",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
+        of: #"([0-9])([A-Z][a-z])"#,
+        with: "$1 $2",
+        options: .regularExpression
+    )
+    return result.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func shouldMergeTranscriptDisplayText(previous: String, current: String) -> Bool {
+    let current = current.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !previous.isEmpty, let first = current.first else { return false }
+
+    if transcriptLeadingPunctuation.contains(first) {
+        if ",;:".contains(first),
+           let previousLast = previous.last,
+           ".!?".contains(previousLast) {
+            return false
+        }
+        return true
+    }
+
+    guard let previousLast = previous.last,
+          previousLast.isLetter || previousLast.isNumber,
+          first.isLowercase else {
+        return false
+    }
+
+    let firstPiece = current.split(separator: " ", maxSplits: 1).first.map(String.init) ?? current
+    return firstPiece.count <= 4 && firstPiece.contains(where: { transcriptTrailingPunctuation.contains($0) })
+}
+
+private func mergedTranscriptDisplayText(previous: String, current: String) -> String {
+    let previous = previous.trimmingCharacters(in: .whitespacesAndNewlines)
+    var current = current.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !previous.isEmpty else { return current }
+    guard let first = current.first else { return previous }
+
+    if transcriptLeadingPunctuation.contains(first) {
+        if let previousLast = previous.last,
+           previousLast == first || (".!?".contains(previousLast) && ".!?".contains(first)) {
+            current.removeFirst()
+            current = current.trimmingCharacters(in: .whitespacesAndNewlines)
+            return current.isEmpty ? previous : previous + " " + current
+        }
+        return previous + current
+    }
+
+    let firstPiece = current.split(separator: " ", maxSplits: 1).first.map(String.init) ?? current
+    if firstPiece.count <= 4,
+       firstPiece.contains(where: { transcriptTrailingPunctuation.contains($0) }) {
+        return previous + current
+    }
+
+    return previous + " " + current
+}
+
+private let transcriptLeadingPunctuation = Set(".,;:!?)]}%")
+private let transcriptTrailingPunctuation = Set(".,;:!?")
+
 final class TranscriptNSTableView: NSTableView {
     var copySelectionHandler: (() -> Void)?
 

@@ -2076,15 +2076,7 @@ struct ClipToolView: View {
     }
 
     private func bestFitTranscriptSidebarWidth(maximumSidebarWidth: CGFloat) -> CGFloat {
-        let rows = sourcePresentation.transcriptSegments.map { segment in
-            TranscriptDisplayRow(
-                id: segment.id,
-                start: segment.start,
-                startLabel: formatSeconds(segment.start),
-                text: segment.text,
-                normalizedText: normalizedTranscriptSearchText(segment.text)
-            )
-        }
+        let rows = makeTranscriptDisplayRows(from: sourcePresentation.transcriptSegments)
 
         guard !rows.isEmpty else {
             return min(clipTranscriptSidebarMinWidth, maximumSidebarWidth)

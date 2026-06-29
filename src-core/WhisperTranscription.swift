@@ -106,6 +106,12 @@ private struct ParakeetTokenTiming: Decodable {
     let endTime: Double
 }
 
+private struct ParakeetWordTiming {
+    let word: String
+    let startTime: Double
+    let endTime: Double
+}
+
 private struct ParakeetProgressUpdate {
     let progress: Double
     let phase: String?
@@ -406,6 +412,16 @@ private func normalizedParakeetTranscriptText(_ text: String) -> String {
         with: ")",
         options: .regularExpression
     )
+    result = result.replacingOccurrences(
+        of: #"([a-z])([0-9])"#,
+        with: "$1 $2",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
+        of: #"([0-9])([A-Z][a-z])"#,
+        with: "$1 $2",
+        options: .regularExpression
+    )
     return result.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
@@ -421,23 +437,107 @@ private func parakeetTextHasClauseBoundary(_ text: String) -> Bool {
     return ",;:".contains(last)
 }
 
-private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackText: String) -> [TranscriptSegment] {
+private func parakeetTokenStartsWord(_ token: String) -> Bool {
+    token.hasPrefix(" ") || token.hasPrefix("▁")
+}
+
+private func parakeetTokenWithoutWordBoundary(_ token: String) -> String {
+    if token.hasPrefix(" ") || token.hasPrefix("▁") {
+        return String(token.dropFirst())
+    }
+    return token
+}
+
+private func makeParakeetWordTimings(from tokens: [ParakeetTokenTiming], fallbackText: String) -> [ParakeetWordTiming] {
     let sortedTokens = tokens
         .filter { !$0.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.endTime >= $0.startTime }
         .sorted {
             if abs($0.startTime - $1.startTime) > 0.0001 { return $0.startTime < $1.startTime }
             return $0.endTime < $1.endTime
         }
+    guard !sortedTokens.isEmpty else { return [] }
 
-    guard !sortedTokens.isEmpty else {
+    var words: [ParakeetWordTiming] = []
+    var currentWord = ""
+    var currentStart = max(0, sortedTokens[0].startTime)
+    var currentEnd = max(currentStart + 0.05, sortedTokens[0].endTime)
+    var sawExplicitBoundary = false
+
+    func flushWord() {
+        let word = normalizedParakeetTranscriptText(currentWord)
+        guard !word.isEmpty else {
+            currentWord = ""
+            return
+        }
+        words.append(
+            ParakeetWordTiming(
+                word: word,
+                startTime: max(0, currentStart),
+                endTime: max(currentStart + 0.05, currentEnd)
+            )
+        )
+        currentWord = ""
+    }
+
+    for token in sortedTokens {
+        let startsWord = parakeetTokenStartsWord(token.token)
+        sawExplicitBoundary = sawExplicitBoundary || startsWord
+        let tokenText = startsWord ? parakeetTokenWithoutWordBoundary(token.token) : token.token
+        guard !tokenText.isEmpty else { continue }
+        let tokenStart = max(0, token.startTime)
+        let tokenEnd = max(tokenStart + 0.05, token.endTime)
+
+        if startsWord && !currentWord.isEmpty {
+            flushWord()
+            currentStart = tokenStart
+        } else if currentWord.isEmpty {
+            currentStart = tokenStart
+        }
+
+        currentWord += tokenText
+        currentEnd = max(currentEnd, tokenEnd)
+    }
+    flushWord()
+
+    if sawExplicitBoundary, words.count > 1 {
+        return words
+    }
+
+    let fallbackWords = normalizedParakeetTranscriptText(fallbackText)
+        .split(whereSeparator: \.isWhitespace)
+        .map(String.init)
+        .filter { !$0.isEmpty }
+    guard !fallbackWords.isEmpty else {
+        return words
+    }
+
+    let tokenCount = sortedTokens.count
+    let wordCount = fallbackWords.count
+    return fallbackWords.enumerated().map { index, word in
+        let startFraction = Double(index) / Double(wordCount)
+        let endFraction = Double(index + 1) / Double(wordCount)
+        let estimatedStart = Int((startFraction * Double(tokenCount)).rounded(.down))
+        let estimatedEnd = Int((endFraction * Double(tokenCount)).rounded())
+        let startTokenIndex = min(tokenCount - 1, max(0, estimatedStart))
+        let exclusiveEndIndex = min(tokenCount, max(startTokenIndex + 1, estimatedEnd))
+        let endTokenIndex = max(startTokenIndex, exclusiveEndIndex - 1)
+        let start = max(0, sortedTokens[startTokenIndex].startTime)
+        let end = max(start + 0.05, sortedTokens[endTokenIndex].endTime)
+        return ParakeetWordTiming(word: word, startTime: start, endTime: end)
+    }
+}
+
+private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackText: String) -> [TranscriptSegment] {
+    let words = makeParakeetWordTimings(from: tokens, fallbackText: fallbackText)
+    guard !words.isEmpty else {
         let text = normalizedParakeetTranscriptText(fallbackText)
         return text.isEmpty ? [] : [TranscriptSegment(start: 0, end: 0.2, text: text)]
     }
 
     var segments: [TranscriptSegment] = []
     var currentText = ""
-    var currentStart = max(0, sortedTokens[0].startTime)
-    var currentEnd = max(currentStart + 0.05, sortedTokens[0].endTime)
+    var currentStart = max(0, words[0].startTime)
+    var currentEnd = max(currentStart + 0.05, words[0].endTime)
     var previousEnd = currentEnd
     let preferredLineLength = 86
     let maximumLineLength = 118
@@ -458,10 +558,10 @@ private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackTe
         currentText = ""
     }
 
-    for token in sortedTokens {
-        let tokenStart = max(0, token.startTime)
-        let tokenEnd = max(tokenStart + 0.05, token.endTime)
-        let gap = tokenStart - previousEnd
+    for word in words {
+        let wordStart = max(0, word.startTime)
+        let wordEnd = max(wordStart + 0.05, word.endTime)
+        let gap = wordStart - previousEnd
         let normalizedCurrent = normalizedParakeetTranscriptText(currentText)
         let currentDuration = max(0, currentEnd - currentStart)
         let shouldBreakForGap = !currentText.isEmpty && gap > 0.85 && currentDuration >= 1.5
@@ -474,13 +574,17 @@ private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackTe
 
         if shouldBreakForGap || shouldBreakForSentence || shouldBreakForClause || shouldBreakForLength {
             flush()
-            currentStart = tokenStart
-            currentEnd = tokenEnd
+            currentStart = wordStart
+            currentEnd = wordEnd
         }
 
-        currentText += token.token
-        currentEnd = max(currentEnd, tokenEnd)
-        previousEnd = tokenEnd
+        if currentText.isEmpty {
+            currentText = word.word
+        } else {
+            currentText += " " + word.word
+        }
+        currentEnd = max(currentEnd, wordEnd)
+        previousEnd = wordEnd
     }
 
     flush()

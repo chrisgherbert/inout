@@ -49,15 +49,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 
     private func makeTranscriptRows() -> [TranscriptDisplayRow] {
-        transcriptSegments.map { segment in
-            TranscriptDisplayRow(
-                id: segment.id,
-                start: segment.start,
-                startLabel: formatSeconds(segment.start),
-                text: segment.text,
-                normalizedText: normalizedTranscriptSearchText(segment.text)
-            )
-        }
+        makeTranscriptDisplayRows(from: transcriptSegments)
     }
 
     private var normalizedSearchText: String {
