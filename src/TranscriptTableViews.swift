@@ -99,8 +99,8 @@ private func normalizedTranscriptDisplayText(_ text: String) -> String {
         options: .regularExpression
     )
     result = result.replacingOccurrences(
-        of: #",(?=[0-9])"#,
-        with: ", ",
+        of: #"([^0-9]),(?=[0-9])"#,
+        with: "$1, ",
         options: .regularExpression
     )
     result = result.replacingOccurrences(
@@ -146,6 +146,14 @@ private func mergedTranscriptDisplayText(previous: String, current: String) -> S
     guard let first = current.first else { return previous }
 
     if transcriptLeadingPunctuation.contains(first) {
+        if first == ",",
+           let previousLast = previous.last,
+           !previousLast.isNumber,
+           current.dropFirst().first?.isNumber == true {
+            current.removeFirst()
+            current = current.trimmingCharacters(in: .whitespacesAndNewlines)
+            return current.isEmpty ? previous : previous + ", " + current
+        }
         if let previousLast = previous.last,
            previousLast == first || (".!?".contains(previousLast) && ".!?".contains(first)) {
             current.removeFirst()

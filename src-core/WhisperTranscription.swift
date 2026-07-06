@@ -403,8 +403,8 @@ private func normalizedParakeetTranscriptText(_ text: String) -> String {
         options: .regularExpression
     )
     result = result.replacingOccurrences(
-        of: #",(?=[0-9])"#,
-        with: ", ",
+        of: #"([^0-9]),(?=[0-9])"#,
+        with: "$1, ",
         options: .regularExpression
     )
     result = result.replacingOccurrences(
