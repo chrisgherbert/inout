@@ -99,6 +99,11 @@ private func normalizedTranscriptDisplayText(_ text: String) -> String {
         options: .regularExpression
     )
     result = result.replacingOccurrences(
+        of: #",(?=[0-9])"#,
+        with: ", ",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
         of: #"([a-z])([0-9])"#,
         with: "$1 $2",
         options: .regularExpression

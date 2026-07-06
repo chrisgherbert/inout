@@ -403,6 +403,11 @@ private func normalizedParakeetTranscriptText(_ text: String) -> String {
         options: .regularExpression
     )
     result = result.replacingOccurrences(
+        of: #",(?=[0-9])"#,
+        with: ", ",
+        options: .regularExpression
+    )
+    result = result.replacingOccurrences(
         of: #"\(\s+"#,
         with: "(",
         options: .regularExpression
@@ -455,13 +460,43 @@ private func makeParakeetWordTimings(from tokens: [ParakeetTokenTiming], fallbac
             if abs($0.startTime - $1.startTime) > 0.0001 { return $0.startTime < $1.startTime }
             return $0.endTime < $1.endTime
         }
-    guard !sortedTokens.isEmpty else { return [] }
+    let fallbackWords = normalizedParakeetTranscriptText(fallbackText)
+        .split(whereSeparator: \.isWhitespace)
+        .map(String.init)
+        .filter { !$0.isEmpty }
+
+    guard !sortedTokens.isEmpty else {
+        guard !fallbackWords.isEmpty else { return [] }
+        return fallbackWords.enumerated().map { index, word in
+            ParakeetWordTiming(
+                word: word,
+                startTime: Double(index) * 0.05,
+                endTime: Double(index + 1) * 0.05
+            )
+        }
+    }
+
+    if !fallbackWords.isEmpty {
+        let tokenCount = sortedTokens.count
+        let wordCount = fallbackWords.count
+        return fallbackWords.enumerated().map { index, word in
+            let startFraction = Double(index) / Double(wordCount)
+            let endFraction = Double(index + 1) / Double(wordCount)
+            let estimatedStart = Int((startFraction * Double(tokenCount)).rounded(.down))
+            let estimatedEnd = Int((endFraction * Double(tokenCount)).rounded())
+            let startTokenIndex = min(tokenCount - 1, max(0, estimatedStart))
+            let exclusiveEndIndex = min(tokenCount, max(startTokenIndex + 1, estimatedEnd))
+            let endTokenIndex = max(startTokenIndex, exclusiveEndIndex - 1)
+            let start = max(0, sortedTokens[startTokenIndex].startTime)
+            let end = max(start + 0.05, sortedTokens[endTokenIndex].endTime)
+            return ParakeetWordTiming(word: word, startTime: start, endTime: end)
+        }
+    }
 
     var words: [ParakeetWordTiming] = []
     var currentWord = ""
     var currentStart = max(0, sortedTokens[0].startTime)
     var currentEnd = max(currentStart + 0.05, sortedTokens[0].endTime)
-    var sawExplicitBoundary = false
 
     func flushWord() {
         let word = normalizedParakeetTranscriptText(currentWord)
@@ -481,7 +516,6 @@ private func makeParakeetWordTimings(from tokens: [ParakeetTokenTiming], fallbac
 
     for token in sortedTokens {
         let startsWord = parakeetTokenStartsWord(token.token)
-        sawExplicitBoundary = sawExplicitBoundary || startsWord
         let tokenText = startsWord ? parakeetTokenWithoutWordBoundary(token.token) : token.token
         guard !tokenText.isEmpty else { continue }
         let tokenStart = max(0, token.startTime)
@@ -499,32 +533,7 @@ private func makeParakeetWordTimings(from tokens: [ParakeetTokenTiming], fallbac
     }
     flushWord()
 
-    if sawExplicitBoundary, words.count > 1 {
-        return words
-    }
-
-    let fallbackWords = normalizedParakeetTranscriptText(fallbackText)
-        .split(whereSeparator: \.isWhitespace)
-        .map(String.init)
-        .filter { !$0.isEmpty }
-    guard !fallbackWords.isEmpty else {
-        return words
-    }
-
-    let tokenCount = sortedTokens.count
-    let wordCount = fallbackWords.count
-    return fallbackWords.enumerated().map { index, word in
-        let startFraction = Double(index) / Double(wordCount)
-        let endFraction = Double(index + 1) / Double(wordCount)
-        let estimatedStart = Int((startFraction * Double(tokenCount)).rounded(.down))
-        let estimatedEnd = Int((endFraction * Double(tokenCount)).rounded())
-        let startTokenIndex = min(tokenCount - 1, max(0, estimatedStart))
-        let exclusiveEndIndex = min(tokenCount, max(startTokenIndex + 1, estimatedEnd))
-        let endTokenIndex = max(startTokenIndex, exclusiveEndIndex - 1)
-        let start = max(0, sortedTokens[startTokenIndex].startTime)
-        let end = max(start + 0.05, sortedTokens[endTokenIndex].endTime)
-        return ParakeetWordTiming(word: word, startTime: start, endTime: end)
-    }
+    return words
 }
 
 private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackText: String) -> [TranscriptSegment] {
