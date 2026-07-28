@@ -476,23 +476,6 @@ private func makeParakeetWordTimings(from tokens: [ParakeetTokenTiming], fallbac
         }
     }
 
-    if !fallbackWords.isEmpty {
-        let tokenCount = sortedTokens.count
-        let wordCount = fallbackWords.count
-        return fallbackWords.enumerated().map { index, word in
-            let startFraction = Double(index) / Double(wordCount)
-            let endFraction = Double(index + 1) / Double(wordCount)
-            let estimatedStart = Int((startFraction * Double(tokenCount)).rounded(.down))
-            let estimatedEnd = Int((endFraction * Double(tokenCount)).rounded())
-            let startTokenIndex = min(tokenCount - 1, max(0, estimatedStart))
-            let exclusiveEndIndex = min(tokenCount, max(startTokenIndex + 1, estimatedEnd))
-            let endTokenIndex = max(startTokenIndex, exclusiveEndIndex - 1)
-            let start = max(0, sortedTokens[startTokenIndex].startTime)
-            let end = max(start + 0.05, sortedTokens[endTokenIndex].endTime)
-            return ParakeetWordTiming(word: word, startTime: start, endTime: end)
-        }
-    }
-
     var words: [ParakeetWordTiming] = []
     var currentWord = ""
     var currentStart = max(0, sortedTokens[0].startTime)
@@ -532,6 +515,16 @@ private func makeParakeetWordTimings(from tokens: [ParakeetTokenTiming], fallbac
         currentEnd = max(currentEnd, tokenEnd)
     }
     flushWord()
+
+    if words.count == fallbackWords.count {
+        return zip(words, fallbackWords).map { word, fallbackWord in
+            ParakeetWordTiming(
+                word: fallbackWord,
+                startTime: word.startTime,
+                endTime: word.endTime
+            )
+        }
+    }
 
     return words
 }
