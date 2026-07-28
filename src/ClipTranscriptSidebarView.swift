@@ -1,13 +1,58 @@
 import SwiftUI
 import AppKit
 
+@MainActor
+final class ClipTranscriptPlaybackPresentation {
+    private var segments: [TranscriptSegment] = []
+    private var rowIDBySegmentID: [UUID: UUID] = [:]
+    private var lastUpdateTimestamp: CFTimeInterval = 0
+    private(set) var displayRows: [TranscriptDisplayRow] = []
+
+    var activeRowID: UUID? {
+        didSet {
+            guard activeRowID != oldValue else { return }
+            activeRowDidChange?(activeRowID)
+        }
+    }
+
+    var activeRowDidChange: ((UUID?) -> Void)?
+
+    func configure(
+        segments: [TranscriptSegment],
+        displayRows: [TranscriptDisplayRow],
+        rowIDBySegmentID: [UUID: UUID]
+    ) {
+        self.segments = segments
+        self.displayRows = displayRows
+        self.rowIDBySegmentID = rowIDBySegmentID
+        update(time: 0, force: true)
+    }
+
+    func update(time: Double, force: Bool = false) {
+        guard !PlayheadBenchmarkConfig.shared.disableTranscriptActiveRowUpdates else { return }
+        let now = CACurrentMediaTime()
+        guard force || (now - lastUpdateTimestamp) >= (1.0 / 12.0) else { return }
+
+        let resolvedRowID = activeTranscriptDisplayRowID(
+            at: time,
+            in: segments,
+            rowIDBySegmentID: rowIDBySegmentID
+        )
+        if activeRowID != resolvedRowID {
+            activeRowID = resolvedRowID
+            PlayheadDiagnostics.shared.noteModelWrite("transcript_active_row")
+        }
+        lastUpdateTimestamp = now
+    }
+}
+
 struct ClipTranscriptSidebarView: View, Equatable {
+    let playbackPresentation: ClipTranscriptPlaybackPresentation
     let transcriptSegments: [TranscriptSegment]
     let transcriptStatusText: String
     let canGenerateTranscript: Bool
     let isGeneratingTranscript: Bool
     let hasAudioTrack: Bool
-    let activePlaybackRowID: UUID?
     let isPlaying: Bool
     let isScrubbing: Bool
     let reduceTransparency: Bool
@@ -39,7 +84,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
         lhs.hasAudioTrack == rhs.hasAudioTrack &&
-        lhs.activePlaybackRowID == rhs.activePlaybackRowID &&
+        lhs.playbackPresentation === rhs.playbackPresentation &&
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
@@ -56,10 +101,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 
     private var resolvedTranscriptRows: [TranscriptDisplayRow] {
-        if transcriptRows.isEmpty && !transcriptSegments.isEmpty {
-            return makeTranscriptRows()
-        }
-        return transcriptRows
+        transcriptRows.isEmpty ? playbackPresentation.displayRows : transcriptRows
     }
 
     private var matchingTranscriptRowCount: Int {
@@ -87,7 +129,10 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 
     private var followsPlaybackRow: Bool {
-        !isScrubbing && !isUserScrollingTranscript && (normalizedSearchText.isEmpty || isPlaying)
+        !PlayheadBenchmarkConfig.shared.disableTranscriptFollow &&
+            !isScrubbing &&
+            !isUserScrollingTranscript &&
+            (normalizedSearchText.isEmpty || isPlaying)
     }
 
     private var transcriptRefreshToken: Int {
@@ -95,7 +140,6 @@ struct ClipTranscriptSidebarView: View, Equatable {
         hasher.combine(transcriptSegments.count)
         hasher.combine(transcriptSegments.first?.id)
         hasher.combine(transcriptSegments.last?.id)
-        hasher.combine(transcriptStatusText)
         return hasher.finalize()
     }
 
@@ -318,7 +362,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     rows: displayedTranscriptRows,
                     rowsVersion: transcriptRowsVersion,
                     fontSize: 13,
-                    activeRowID: suspendsPlaybackHighlightDuringScroll ? nil : activePlaybackRowID,
+                    playbackPresentation: playbackPresentation,
+                    allowsPlaybackRow: !suspendsPlaybackHighlightDuringScroll,
                     followsActiveRow: followsPlaybackRow,
                     showsPlaybackIndicator: showsPlaybackIndicator && !suspendsPlaybackHighlightDuringScroll,
                     searchQuery: normalizedSearchText,

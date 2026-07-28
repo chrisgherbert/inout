@@ -19,6 +19,9 @@ SAMPLE_PATH="$DEFAULT_SAMPLE"
 SCENARIOS="slow_drag,fast_scrub,back_and_forth,edge_auto_pan,transcript_playback"
 TRANSCRIPT_STRESS=""
 COMPLETED_TRANSCRIPT=""
+PLAYBACK_DURATION=""
+DISABLE_TRANSCRIPT_FOLLOW=0
+DISABLE_TRANSCRIPT_ACTIVE_ROW=0
 DISABLE_TRANSCRIPT_BATCHING=0
 TIMEOUT_SECONDS=120
 SHOULD_BUILD=1
@@ -37,6 +40,12 @@ Options:
                        Simulate transcript preview updates at N segments/sec during the run.
   --completed-transcript N
                        Preload a completed transcript containing N segments.
+  --playback-duration SECONDS
+                       Override the transcript playback scenario duration.
+  --disable-transcript-follow
+                       Highlight active transcript rows without scrolling the table.
+  --disable-transcript-active-row
+                       Keep the transcript active row fixed during playback.
   --disable-transcript-batching
                        Benchmark with preview segments published immediately instead of batched.
   --timeout SECONDS    Benchmark timeout. Default: ${TIMEOUT_SECONDS}
@@ -76,6 +85,18 @@ while [[ $# -gt 0 ]]; do
     --completed-transcript)
       COMPLETED_TRANSCRIPT="$2"
       shift 2
+      ;;
+    --playback-duration)
+      PLAYBACK_DURATION="$2"
+      shift 2
+      ;;
+    --disable-transcript-follow)
+      DISABLE_TRANSCRIPT_FOLLOW=1
+      shift
+      ;;
+    --disable-transcript-active-row)
+      DISABLE_TRANSCRIPT_ACTIVE_ROW=1
+      shift
       ;;
     --disable-transcript-batching)
       DISABLE_TRANSCRIPT_BATCHING=1
@@ -208,6 +229,15 @@ while (( ATTEMPT <= MAX_ATTEMPTS )); do
   fi
   if [[ -n "$COMPLETED_TRANSCRIPT" ]]; then
     app_args+=(--playhead-benchmark-completed-transcript "$COMPLETED_TRANSCRIPT")
+  fi
+  if [[ -n "$PLAYBACK_DURATION" ]]; then
+    app_args+=(--playhead-benchmark-playback-duration "$PLAYBACK_DURATION")
+  fi
+  if (( DISABLE_TRANSCRIPT_FOLLOW )); then
+    app_args+=(--playhead-benchmark-disable-transcript-follow)
+  fi
+  if (( DISABLE_TRANSCRIPT_ACTIVE_ROW )); then
+    app_args+=(--playhead-benchmark-disable-transcript-active-row)
   fi
   if (( DISABLE_TRANSCRIPT_BATCHING )); then
     app_args+=(--playhead-benchmark-disable-transcript-batching)

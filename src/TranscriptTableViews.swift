@@ -245,6 +245,7 @@ final class TranscriptNSScrollView: NSScrollView {
     private var lastReportedContentSize: NSSize = .zero
 
     override func layout() {
+        PlayheadDiagnostics.shared.noteTranscriptRowLayout()
         super.layout()
         let currentSize = contentView.bounds.size
         guard abs(currentSize.width - lastReportedContentSize.width) > 0.5 ||
@@ -310,7 +311,6 @@ final class TranscriptNSTableRowView: NSTableRowView {
         super.layout()
         updatePlaybackIndicatorFrame()
         updateCurrentMatchOutlineFrame()
-        updateHoverStateForCurrentMousePosition()
     }
 
     override func updateTrackingAreas() {
@@ -460,7 +460,9 @@ struct TranscriptTableView: NSViewRepresentable {
     let rows: [TranscriptDisplayRow]
     let rowsVersion: Int
     let fontSize: CGFloat
+    var playbackPresentation: ClipTranscriptPlaybackPresentation? = nil
     var activeRowID: UUID? = nil
+    var allowsPlaybackRow = true
     var followsActiveRow = false
     var showsPlaybackIndicator = false
     var searchQuery: String = ""
@@ -478,6 +480,7 @@ struct TranscriptTableView: NSViewRepresentable {
         var rowsVersion: Int = 0
         var fontSize: CGFloat = 14
         var activeRowID: UUID?
+        var allowsPlaybackRow = true
         var followsActiveRow = false
         var showsPlaybackIndicator = false
         var searchQuery: String = ""
@@ -508,9 +511,6 @@ struct TranscriptTableView: NSViewRepresentable {
         var scrollEndWorkItem: DispatchWorkItem?
         var isUserScrolling = false
         var lastObservedClipBounds: NSRect = .zero
-        var playbackFollowAnimationTimer: Timer?
-        var playbackFollowTargetY: CGFloat?
-        var lastPlaybackFollowRetargetTime: CFTimeInterval = 0
 
         private enum Column {
             static let time = NSUserInterfaceItemIdentifier("transcript_time")
@@ -528,7 +528,6 @@ struct TranscriptTableView: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(liveScrollEndObserver)
             }
             scrollEndWorkItem?.cancel()
-            playbackFollowAnimationTimer?.invalidate()
         }
 
         func configureScrollObservation(for scrollView: NSScrollView) {
@@ -596,7 +595,6 @@ struct TranscriptTableView: NSViewRepresentable {
             scrollEndWorkItem?.cancel()
             if !isUserScrolling {
                 isUserScrolling = true
-                stopPlaybackFollowAnimation()
                 onUserScrollActivityChanged?(true)
             }
         }
@@ -673,6 +671,7 @@ struct TranscriptTableView: NSViewRepresentable {
             guard row >= 0 && row < rows.count, let tableColumn else { return nil }
             let cellIdentifier = NSUserInterfaceItemIdentifier(tableColumn.identifier.rawValue + "_cell")
             let cell = (tableView.makeView(withIdentifier: cellIdentifier, owner: nil) as? NSTableCellView) ?? {
+                PlayheadDiagnostics.shared.noteTranscriptCellCreated()
                 let cell = NSTableCellView(frame: .zero)
                 cell.identifier = cellIdentifier
 
@@ -713,6 +712,7 @@ struct TranscriptTableView: NSViewRepresentable {
         }
 
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            PlayheadDiagnostics.shared.noteTranscriptRowViewCreated()
             let rowView = TranscriptNSTableRowView()
             if row >= 0, row < rows.count {
                 rowView.isSearchMatch = matchingRowIDs.contains(rows[row].id)
@@ -766,6 +766,22 @@ struct TranscriptTableView: NSViewRepresentable {
 
             for rowIndex in uniqueRowIndexes {
                 refreshRowState(at: rowIndex, in: tableView)
+            }
+        }
+
+        func applyPlaybackActiveRowID(_ proposedRowID: UUID?) {
+            let diagnosticsStart = CACurrentMediaTime()
+            let resolvedRowID = allowsPlaybackRow ? proposedRowID : nil
+            guard activeRowID != resolvedRowID else { return }
+
+            let previousRowID = activeRowID
+            activeRowID = resolvedRowID
+            refreshRowStates(forRowIDs: [previousRowID, resolvedRowID])
+            applyActiveSelectionIfNeeded()
+            MainActor.assumeIsolated {
+                PlayheadDiagnostics.shared.noteTranscriptTableUpdate(
+                    duration: CACurrentMediaTime() - diagnosticsStart
+                )
             }
         }
 
@@ -888,7 +904,6 @@ struct TranscriptTableView: NSViewRepresentable {
             let searchRevealChanged = lastRequestedSearchRevealRowID != requestedSearchRevealRowID
 
             guard activeRowID != nil || currentSearchResultRowID != nil else {
-                stopPlaybackFollowAnimation()
                 if showsPlaybackIndicator || !allowsDeselectionWorkaround(tableView.selectedRowIndexes) {
                     return
                 }
@@ -926,7 +941,6 @@ struct TranscriptTableView: NSViewRepresentable {
                let searchRowIndex = rowIndexByID[requestedSearchRevealRowID],
                (searchRevealChanged || forceScroll),
                !isUserScrolling {
-                stopPlaybackFollowAnimation()
                 smoothlyRevealRow(searchRowIndex, in: tableView)
             }
             lastAppliedActiveRowID = activeRowID
@@ -947,87 +961,36 @@ struct TranscriptTableView: NSViewRepresentable {
             let verticalInset = min(64.0, max(18.0, visibleRect.height * 0.22))
             let deadZoneRect = visibleRect.insetBy(dx: 0, dy: verticalInset)
 
-            if !forceCentering && deadZoneRect.contains(rowRect) {
-                stopPlaybackFollowAnimation()
+            let targetY: CGFloat
+            if forceCentering {
+                targetY = rowRect.midY - (visibleRect.height / 2.0)
+            } else if rowRect.maxY > deadZoneRect.maxY {
+                targetY = rowRect.midY - (visibleRect.height * 0.72)
+            } else if rowRect.minY < deadZoneRect.minY {
+                targetY = rowRect.midY - (visibleRect.height * 0.28)
+            } else {
                 return
             }
-
-            let targetY = max(
+            let clampedTargetY = max(
                 0,
-                min(
-                    rowRect.midY - (visibleRect.height / 2.0),
-                    max(0, tableView.bounds.height - visibleRect.height)
-                )
+                min(targetY, max(0, tableView.bounds.height - visibleRect.height))
             )
 
-            requestPlaybackFollow(to: targetY, in: scrollView, forceRetarget: forceCentering)
+            let clipView = scrollView.contentView
+            if abs(clipView.bounds.origin.y - clampedTargetY) > 1 {
+                let followStart = CACurrentMediaTime()
+                clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: clampedTargetY))
+                scrollView.reflectScrolledClipView(clipView)
+                MainActor.assumeIsolated {
+                    PlayheadDiagnostics.shared.noteTranscriptFollow(
+                        duration: CACurrentMediaTime() - followStart
+                    )
+                }
+            }
         }
 
         private func allowsDeselectionWorkaround(_ selectedIndexes: IndexSet) -> Bool {
             !selectedIndexes.isEmpty || lastAppliedActiveRowID != nil
-        }
-
-        private func requestPlaybackFollow(to targetY: CGFloat, in scrollView: NSScrollView, forceRetarget: Bool) {
-            let currentY = scrollView.documentVisibleRect.origin.y
-            guard abs(currentY - targetY) > 1 else {
-                stopPlaybackFollowAnimation()
-                return
-            }
-
-            let now = CACurrentMediaTime()
-            let minimumRetargetInterval = 1.0 / 12.0
-            if !forceRetarget,
-               playbackFollowTargetY != nil,
-               (now - lastPlaybackFollowRetargetTime) < minimumRetargetInterval {
-                return
-            }
-
-            lastPlaybackFollowRetargetTime = now
-            playbackFollowTargetY = targetY
-            ensurePlaybackFollowAnimation(in: scrollView)
-        }
-
-        private func ensurePlaybackFollowAnimation(in scrollView: NSScrollView) {
-            guard playbackFollowAnimationTimer == nil else { return }
-            let timer = Timer(
-                timeInterval: 1.0 / 30.0,
-                repeats: true
-            ) { [weak self, weak scrollView] timer in
-                guard let self, let scrollView else {
-                    timer.invalidate()
-                    return
-                }
-                self.tickPlaybackFollowAnimation(in: scrollView)
-            }
-            playbackFollowAnimationTimer = timer
-            RunLoop.main.add(timer, forMode: .common)
-        }
-
-        private func tickPlaybackFollowAnimation(in scrollView: NSScrollView) {
-            guard let targetY = playbackFollowTargetY else {
-                stopPlaybackFollowAnimation()
-                return
-            }
-
-            let clipView = scrollView.contentView
-            let currentY = clipView.bounds.origin.y
-            let delta = targetY - currentY
-            guard abs(delta) > 0.75 else {
-                clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: targetY))
-                scrollView.reflectScrolledClipView(clipView)
-                stopPlaybackFollowAnimation()
-                return
-            }
-
-            let nextY = currentY + (delta * 0.26)
-            clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: nextY))
-            scrollView.reflectScrolledClipView(clipView)
-        }
-
-        func stopPlaybackFollowAnimation() {
-            playbackFollowTargetY = nil
-            playbackFollowAnimationTimer?.invalidate()
-            playbackFollowAnimationTimer = nil
         }
 
         private func smoothlyRevealRow(_ rowIndex: Int, in tableView: TranscriptNSTableView) {
@@ -1114,7 +1077,10 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.tableView = tableView
         context.coordinator.rowsVersion = rowsVersion
         context.coordinator.rowIndexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
-        context.coordinator.activeRowID = activeRowID
+        context.coordinator.allowsPlaybackRow = allowsPlaybackRow
+        context.coordinator.activeRowID = allowsPlaybackRow
+            ? (playbackPresentation?.activeRowID ?? activeRowID)
+            : nil
         context.coordinator.followsActiveRow = followsActiveRow
         context.coordinator.showsPlaybackIndicator = showsPlaybackIndicator
         context.coordinator.searchQuery = searchQuery
@@ -1137,6 +1103,9 @@ struct TranscriptTableView: NSViewRepresentable {
         }
         context.coordinator.configureScrollObservation(for: scrollView)
         context.coordinator.updateColumnWidths(in: scrollView)
+        playbackPresentation?.activeRowDidChange = { [weak coordinator = context.coordinator] rowID in
+            coordinator?.applyPlaybackActiveRowID(rowID)
+        }
 
         context.coordinator.applyActiveSelectionIfNeeded(forceScroll: true)
         return scrollView
@@ -1144,13 +1113,17 @@ struct TranscriptTableView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let tableView = context.coordinator.tableView else { return }
+        let diagnosticsStart = CACurrentMediaTime()
         let previousActiveRowID = context.coordinator.activeRowID
+        let resolvedActiveRowID = allowsPlaybackRow
+            ? (playbackPresentation?.activeRowID ?? activeRowID)
+            : nil
         let previousCurrentSearchResultRowID = context.coordinator.currentSearchResultRowID
         let rowsChanged = context.coordinator.rowsVersion != rowsVersion
         let fontChanged = context.coordinator.fontSize != fontSize
         let searchChanged = context.coordinator.searchVersion != searchVersion
         let currentSearchResultChanged = context.coordinator.currentSearchResultRowID != currentSearchResultRowID
-        let activeRowChanged = context.coordinator.activeRowID != activeRowID
+        let activeRowChanged = context.coordinator.activeRowID != resolvedActiveRowID
         let playbackIndicatorChanged = context.coordinator.showsPlaybackIndicator != showsPlaybackIndicator
         let followsActiveRowChanged = context.coordinator.followsActiveRow != followsActiveRow
         let searchRevealChanged = context.coordinator.requestedSearchRevealRowID != requestedSearchRevealRowID
@@ -1169,7 +1142,8 @@ struct TranscriptTableView: NSViewRepresentable {
         }
         context.coordinator.rowsVersion = rowsVersion
         context.coordinator.fontSize = fontSize
-        context.coordinator.activeRowID = activeRowID
+        context.coordinator.allowsPlaybackRow = allowsPlaybackRow
+        context.coordinator.activeRowID = resolvedActiveRowID
         context.coordinator.followsActiveRow = followsActiveRow
         context.coordinator.showsPlaybackIndicator = showsPlaybackIndicator
         context.coordinator.searchQuery = searchQuery
@@ -1180,9 +1154,6 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.onUserScrollActivityChanged = onUserScrollActivityChanged
         context.coordinator.onActivateRow = onActivateRow
         context.coordinator.onDoubleActivateRow = onDoubleActivateRow
-        if !followsActiveRow {
-            context.coordinator.stopPlaybackFollowAnimation()
-        }
         tableView.allowsMultipleSelection = allowsMultipleSelection
         tableView.selectionHighlightStyle = showsPlaybackIndicator ? .none : .regular
         if shouldReload {
@@ -1199,7 +1170,7 @@ struct TranscriptTableView: NSViewRepresentable {
                 context.coordinator.refreshRowStates(
                     forRowIDs: [
                         previousActiveRowID,
-                        activeRowID,
+                        resolvedActiveRowID,
                         previousCurrentSearchResultRowID,
                         currentSearchResultRowID
                     ]
@@ -1207,5 +1178,8 @@ struct TranscriptTableView: NSViewRepresentable {
             }
         }
         context.coordinator.applyActiveSelectionIfNeeded()
+        PlayheadDiagnostics.shared.noteTranscriptTableUpdate(
+            duration: CACurrentMediaTime() - diagnosticsStart
+        )
     }
 }

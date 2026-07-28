@@ -10,6 +10,7 @@ import UserNotifications
 
 @MainActor
 private final class ClipToolRuntimeState: ObservableObject {
+    let transcriptPlaybackPresentation = ClipTranscriptPlaybackPresentation()
     var waveformTask: Task<Void, Never>?
     var thumbnailStripTask: Task<[TimelineThumbnailTile], Never>?
     var thumbnailStripDebounceTask: Task<Void, Never>?
@@ -44,7 +45,6 @@ private final class ClipToolRuntimeState: ObservableObject {
     var selectionPlaybackBoundaryObserverToken: Any?
     var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
     var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
-    var lastTranscriptSidebarPlaybackUpdateTimestamp: CFTimeInterval = 0
     var transcriptDisplayRowIDBySegmentID: [UUID: UUID] = [:]
     var selectionPlaybackEndSeconds: Double?
     var lastThumbnailStripRequestKey: String?
@@ -84,7 +84,7 @@ private struct ClipPlayerStageSection: View {
     let canGenerateTranscript: Bool
     let isGeneratingTranscript: Bool
     let hasAudioTrack: Bool
-    let activeTranscriptRowID: UUID?
+    let transcriptPlaybackPresentation: ClipTranscriptPlaybackPresentation
     let isPlaying: Bool
     let isScrubbing: Bool
     let reduceTransparency: Bool
@@ -168,12 +168,12 @@ private struct ClipPlayerStageSection: View {
 
                     EquatableView(content:
                         ClipTranscriptSidebarView(
+                            playbackPresentation: transcriptPlaybackPresentation,
                             transcriptSegments: transcriptSegments,
                             transcriptStatusText: transcriptStatusText,
                             canGenerateTranscript: canGenerateTranscript,
                             isGeneratingTranscript: isGeneratingTranscript,
                             hasAudioTrack: hasAudioTrack,
-                            activePlaybackRowID: activeTranscriptRowID,
                             isPlaying: isPlaying,
                             isScrubbing: isScrubbing,
                             reduceTransparency: reduceTransparency,
@@ -236,7 +236,7 @@ extension ClipPlayerStageSection: Equatable {
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
         lhs.hasAudioTrack == rhs.hasAudioTrack &&
-        lhs.activeTranscriptRowID == rhs.activeTranscriptRowID &&
+        lhs.transcriptPlaybackPresentation === rhs.transcriptPlaybackPresentation &&
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.reduceTransparency == rhs.reduceTransparency &&
@@ -297,7 +297,6 @@ struct ClipToolView: View {
     @SceneStorage("clip.transcriptSidebarVisible") private var storedTranscriptSidebarVisible = true
     @State private var livePlayerHeight: CGFloat?
     @State private var liveTranscriptSidebarWidth: CGFloat?
-    @State private var clipTranscriptActiveRowID: UUID?
     @State private var clipTranscriptSearchFocusToken: Int = 0
     @State private var importURLText: String = ""
     @State private var importURLPreset: URLDownloadPreset = .compatibleBest
@@ -476,6 +475,7 @@ struct ClipToolView: View {
                             }
                             runtime.lastPlaybackUIUpdateTimestamp = now
                         }
+                        runtime.transcriptPlaybackPresentation.update(time: newPlayhead)
                         // Avoid high-frequency @Published writes while playback is active.
                         // Persist shared playhead state only while paused or on explicit actions.
                         if !isPlaying {
@@ -530,7 +530,6 @@ struct ClipToolView: View {
         runtime.playerTimeObserverToken = nil
         runtime.lastPlaybackUIUpdateTimestamp = 0
         runtime.lastPlaybackFollowUpdateTimestamp = 0
-        runtime.lastTranscriptSidebarPlaybackUpdateTimestamp = 0
         clearSelectionPlaybackState()
     }
 
@@ -1187,33 +1186,17 @@ struct ClipToolView: View {
     }
 
     private func syncClipTranscriptSidebarTimeIfNeeded(_ time: Double, force: Bool = false) {
-        guard shouldDriveClipTranscriptSidebarTime else { return }
-
-        let clamped = max(0, min(time, max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)))
-        let now = CACurrentMediaTime()
-        let isPlaybackDriven = player.rate != 0 && !isPlayheadDragActive
-        let minimumPlaybackInterval = 1.0 / 12.0
-
-        guard force || !isPlaybackDriven ||
-                (now - runtime.lastTranscriptSidebarPlaybackUpdateTimestamp) >= minimumPlaybackInterval else {
-            return
-        }
-
-        let activeRowID = activeTranscriptDisplayRowID(
-            at: clamped,
-            in: sourcePresentation.transcriptSegments,
-            rowIDBySegmentID: runtime.transcriptDisplayRowIDBySegmentID
-        )
-        if clipTranscriptActiveRowID != activeRowID {
-            clipTranscriptActiveRowID = activeRowID
-            PlayheadDiagnostics.shared.noteModelWrite("transcript_active_row")
-        }
-        runtime.lastTranscriptSidebarPlaybackUpdateTimestamp = now
+        runtime.transcriptPlaybackPresentation.update(time: time, force: force)
     }
 
     private func refreshClipTranscriptLookup(_ segments: [TranscriptSegment]) {
-        runtime.transcriptDisplayRowIDBySegmentID =
-            makeTranscriptDisplayRowsWithLookup(from: segments).rowIDBySegmentID
+        let displayRows = makeTranscriptDisplayRowsWithLookup(from: segments)
+        runtime.transcriptDisplayRowIDBySegmentID = displayRows.rowIDBySegmentID
+        runtime.transcriptPlaybackPresentation.configure(
+            segments: segments,
+            displayRows: displayRows.rows,
+            rowIDBySegmentID: runtime.transcriptDisplayRowIDBySegmentID
+        )
         syncClipTranscriptSidebarTimeIfNeeded(displayedPlayheadSeconds, force: true)
     }
 
@@ -1668,6 +1651,7 @@ struct ClipToolView: View {
                     }
                 },
                 loadCompletedTranscript: { count in
+                    storedTranscriptSidebarVisible = true
                     model.loadBenchmarkCompletedTranscript(segmentCount: count)
                 },
                 startPlayback: {
@@ -2162,7 +2146,7 @@ struct ClipToolView: View {
                 canGenerateTranscript: model.canGenerateTranscript,
                 isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
                 hasAudioTrack: sourcePresentation.hasAudioTrack,
-                activeTranscriptRowID: clipTranscriptActiveRowID,
+                transcriptPlaybackPresentation: runtime.transcriptPlaybackPresentation,
                 isPlaying: player.rate != 0,
                 isScrubbing: isPlayheadDragActive,
                 reduceTransparency: reduceTransparency,
@@ -2678,10 +2662,6 @@ struct ClipToolView: View {
             .onChange(of: clip.clipEndSeconds) { _ in
                 guard !isClipBoundaryDragActive else { return }
                 syncDisplayedClipRangeImmediately()
-            }
-            .onChange(of: displayedPlayheadSeconds) { newValue in
-                guard shouldDriveClipTranscriptSidebarTime, !isPlayheadDragActive else { return }
-                syncClipTranscriptSidebarTimeIfNeeded(newValue)
             }
             .onChange(of: isPlayheadDragActive) { active in
                 if shouldDriveClipTranscriptSidebarTime, !active {

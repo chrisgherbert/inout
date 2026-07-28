@@ -11,6 +11,9 @@ struct PlayheadBenchmarkConfig {
     let scenarios: [PlayheadBenchmarkScenario]
     let transcriptStressSegmentsPerSecond: Double
     let completedTranscriptSegmentCount: Int
+    let playbackScenarioDurationSeconds: Double
+    let disableTranscriptFollow: Bool
+    let disableTranscriptActiveRowUpdates: Bool
     let disableTranscriptPreviewBatching: Bool
 
     private init() {
@@ -68,6 +71,24 @@ struct PlayheadBenchmarkConfig {
         } else {
             completedTranscriptSegmentCount = 0
         }
+
+        let rawPlaybackDuration = env["INOUT_PLAYHEAD_BENCHMARK_PLAYBACK_DURATION"] ??
+            Self.argumentValue(named: "--playhead-benchmark-playback-duration", in: args)
+        if let rawPlaybackDuration,
+           let parsed = Double(rawPlaybackDuration),
+           parsed.isFinite {
+            playbackScenarioDurationSeconds = min(max(parsed, 0.5), 60)
+        } else {
+            playbackScenarioDurationSeconds = 4
+        }
+
+        disableTranscriptFollow =
+            env["INOUT_PLAYHEAD_BENCHMARK_DISABLE_TRANSCRIPT_FOLLOW"] == "1" ||
+            args.contains("--playhead-benchmark-disable-transcript-follow")
+
+        disableTranscriptActiveRowUpdates =
+            env["INOUT_PLAYHEAD_BENCHMARK_DISABLE_TRANSCRIPT_ACTIVE_ROW"] == "1" ||
+            args.contains("--playhead-benchmark-disable-transcript-active-row")
 
         disableTranscriptPreviewBatching =
             env["INOUT_PLAYHEAD_BENCHMARK_DISABLE_TRANSCRIPT_BATCHING"] == "1" ||
@@ -133,6 +154,12 @@ struct PlayheadBenchmarkScenarioSummary: Codable {
     let decorationDuration: PlayheadTimingSummary?
     let markerLayoutDuration: PlayheadTimingSummary?
     let waveformRebuildDuration: PlayheadTimingSummary?
+    let transcriptTableUpdateDuration: PlayheadTimingSummary?
+    let transcriptFollowDuration: PlayheadTimingSummary?
+    let transcriptFollowUpdates: PlayheadCounterSummary
+    let transcriptRowLayouts: PlayheadCounterSummary
+    let transcriptRowViewsCreated: PlayheadCounterSummary
+    let transcriptCellsCreated: PlayheadCounterSummary
     let modelWrites: [String: Int]
 }
 
@@ -151,7 +178,7 @@ struct PlayheadBenchmarkProgress: Codable {
 final class PlayheadDiagnostics {
     static let shared = PlayheadDiagnostics()
 
-    private struct RunningScenario {
+    private final class RunningScenario {
         let name: String
         let startTime: CFTimeInterval
         var endTime: CFTimeInterval?
@@ -165,6 +192,8 @@ final class PlayheadDiagnostics {
         var decorationDurations: [Double] = []
         var markerLayoutDurations: [Double] = []
         var waveformRebuildDurations: [Double] = []
+        var transcriptTableUpdateDurations: [Double] = []
+        var transcriptFollowDurations: [Double] = []
         var lastInputTime: CFTimeInterval?
         var lastVisualTime: CFTimeInterval?
         var lastInputSeconds: Double?
@@ -187,7 +216,16 @@ final class PlayheadDiagnostics {
         var miniMapBodyEvaluations = 0
         var utilityRowBodyEvaluations = 0
         var selectionPanelBodyEvaluations = 0
+        var transcriptFollowUpdates = 0
+        var transcriptRowLayouts = 0
+        var transcriptRowViewsCreated = 0
+        var transcriptCellsCreated = 0
         var modelWrites: [String: Int] = [:]
+
+        init(name: String, startTime: CFTimeInterval) {
+            self.name = name
+            self.startTime = startTime
+        }
     }
 
     private let config = PlayheadBenchmarkConfig.shared
@@ -338,6 +376,37 @@ final class PlayheadDiagnostics {
         currentScenario = scenario
     }
 
+    func noteTranscriptTableUpdate(duration: CFTimeInterval) {
+        guard var scenario = currentScenario else { return }
+        scenario.transcriptTableUpdateDurations.append(duration)
+        currentScenario = scenario
+    }
+
+    func noteTranscriptFollow(duration: CFTimeInterval) {
+        guard var scenario = currentScenario else { return }
+        scenario.transcriptFollowUpdates += 1
+        scenario.transcriptFollowDurations.append(duration)
+        currentScenario = scenario
+    }
+
+    func noteTranscriptRowLayout() {
+        guard var scenario = currentScenario else { return }
+        scenario.transcriptRowLayouts += 1
+        currentScenario = scenario
+    }
+
+    func noteTranscriptRowViewCreated() {
+        guard var scenario = currentScenario else { return }
+        scenario.transcriptRowViewsCreated += 1
+        currentScenario = scenario
+    }
+
+    func noteTranscriptCellCreated() {
+        guard var scenario = currentScenario else { return }
+        scenario.transcriptCellsCreated += 1
+        currentScenario = scenario
+    }
+
     func noteModelWrite(_ kind: String) {
         guard var scenario = currentScenario else { return }
         scenario.modelWrites[kind, default: 0] += 1
@@ -445,6 +514,12 @@ final class PlayheadDiagnostics {
             decorationDuration: timingSummary(scenario.decorationDurations),
             markerLayoutDuration: timingSummary(scenario.markerLayoutDurations),
             waveformRebuildDuration: timingSummary(scenario.waveformRebuildDurations),
+            transcriptTableUpdateDuration: timingSummary(scenario.transcriptTableUpdateDurations),
+            transcriptFollowDuration: timingSummary(scenario.transcriptFollowDurations),
+            transcriptFollowUpdates: counterSummary(count: scenario.transcriptFollowUpdates, duration: duration),
+            transcriptRowLayouts: counterSummary(count: scenario.transcriptRowLayouts, duration: duration),
+            transcriptRowViewsCreated: counterSummary(count: scenario.transcriptRowViewsCreated, duration: duration),
+            transcriptCellsCreated: counterSummary(count: scenario.transcriptCellsCreated, duration: duration),
             modelWrites: scenario.modelWrites.sorted { $0.key < $1.key }.reduce(into: [:]) { $0[$1.key] = $1.value }
         )
     }
@@ -581,7 +656,9 @@ final class PlayheadBenchmarkCoordinator {
             try? await Task.sleep(nanoseconds: 150_000_000)
             PlayheadDiagnostics.shared.beginScenario(scenario)
             driver.startPlayback()
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            try? await Task.sleep(
+                nanoseconds: UInt64(config.playbackScenarioDurationSeconds * 1_000_000_000)
+            )
             driver.stopPlayback()
             PlayheadDiagnostics.shared.endScenario()
         }
