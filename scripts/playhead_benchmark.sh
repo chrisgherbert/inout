@@ -16,8 +16,9 @@ OUTPUT_PATH="$DEFAULT_OUTPUT"
 PROGRESS_PATH="$DEFAULT_PROGRESS"
 BASELINE_PATH=""
 SAMPLE_PATH="$DEFAULT_SAMPLE"
-SCENARIOS="slow_drag,fast_scrub,back_and_forth,edge_auto_pan"
+SCENARIOS="slow_drag,fast_scrub,back_and_forth,edge_auto_pan,transcript_playback"
 TRANSCRIPT_STRESS=""
+COMPLETED_TRANSCRIPT=""
 DISABLE_TRANSCRIPT_BATCHING=0
 TIMEOUT_SECONDS=120
 SHOULD_BUILD=1
@@ -34,6 +35,8 @@ Options:
   --scenarios CSV      Override scenarios (comma-separated).
   --transcript-stress N
                        Simulate transcript preview updates at N segments/sec during the run.
+  --completed-transcript N
+                       Preload a completed transcript containing N segments.
   --disable-transcript-batching
                        Benchmark with preview segments published immediately instead of batched.
   --timeout SECONDS    Benchmark timeout. Default: ${TIMEOUT_SECONDS}
@@ -68,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --transcript-stress)
       TRANSCRIPT_STRESS="$2"
+      shift 2
+      ;;
+    --completed-transcript)
+      COMPLETED_TRANSCRIPT="$2"
       shift 2
       ;;
     --disable-transcript-batching)
@@ -198,6 +205,9 @@ while (( ATTEMPT <= MAX_ATTEMPTS )); do
   )
   if [[ -n "$TRANSCRIPT_STRESS" ]]; then
     app_args+=(--playhead-benchmark-transcript-stress "$TRANSCRIPT_STRESS")
+  fi
+  if [[ -n "$COMPLETED_TRANSCRIPT" ]]; then
+    app_args+=(--playhead-benchmark-completed-transcript "$COMPLETED_TRANSCRIPT")
   fi
   if (( DISABLE_TRANSCRIPT_BATCHING )); then
     app_args+=(--playhead-benchmark-disable-transcript-batching)

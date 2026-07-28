@@ -45,6 +45,7 @@ private final class ClipToolRuntimeState: ObservableObject {
     var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
     var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
     var lastTranscriptSidebarPlaybackUpdateTimestamp: CFTimeInterval = 0
+    var transcriptDisplayRowIDBySegmentID: [UUID: UUID] = [:]
     var selectionPlaybackEndSeconds: Double?
     var lastThumbnailStripRequestKey: String?
     var lastThumbnailStripPrewarmKey: String?
@@ -83,7 +84,7 @@ private struct ClipPlayerStageSection: View {
     let canGenerateTranscript: Bool
     let isGeneratingTranscript: Bool
     let hasAudioTrack: Bool
-    let currentTimeSeconds: Double
+    let activeTranscriptRowID: UUID?
     let isPlaying: Bool
     let isScrubbing: Bool
     let reduceTransparency: Bool
@@ -172,7 +173,7 @@ private struct ClipPlayerStageSection: View {
                             canGenerateTranscript: canGenerateTranscript,
                             isGeneratingTranscript: isGeneratingTranscript,
                             hasAudioTrack: hasAudioTrack,
-                            currentTimeSeconds: currentTimeSeconds,
+                            activePlaybackRowID: activeTranscriptRowID,
                             isPlaying: isPlaying,
                             isScrubbing: isScrubbing,
                             reduceTransparency: reduceTransparency,
@@ -235,7 +236,7 @@ extension ClipPlayerStageSection: Equatable {
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
         lhs.hasAudioTrack == rhs.hasAudioTrack &&
-        lhs.currentTimeSeconds == rhs.currentTimeSeconds &&
+        lhs.activeTranscriptRowID == rhs.activeTranscriptRowID &&
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.reduceTransparency == rhs.reduceTransparency &&
@@ -296,7 +297,7 @@ struct ClipToolView: View {
     @SceneStorage("clip.transcriptSidebarVisible") private var storedTranscriptSidebarVisible = true
     @State private var livePlayerHeight: CGFloat?
     @State private var liveTranscriptSidebarWidth: CGFloat?
-    @State private var clipTranscriptSidebarTimeSeconds: Double = 0
+    @State private var clipTranscriptActiveRowID: UUID?
     @State private var clipTranscriptSearchFocusToken: Int = 0
     @State private var importURLText: String = ""
     @State private var importURLPreset: URLDownloadPreset = .compatibleBest
@@ -1193,17 +1194,27 @@ struct ClipToolView: View {
         let isPlaybackDriven = player.rate != 0 && !isPlayheadDragActive
         let minimumPlaybackInterval = 1.0 / 12.0
 
-        if force || !isPlaybackDriven {
-            clipTranscriptSidebarTimeSeconds = clamped
-            runtime.lastTranscriptSidebarPlaybackUpdateTimestamp = now
+        guard force || !isPlaybackDriven ||
+                (now - runtime.lastTranscriptSidebarPlaybackUpdateTimestamp) >= minimumPlaybackInterval else {
             return
         }
 
-        let timeDelta = abs(clamped - clipTranscriptSidebarTimeSeconds)
-        if timeDelta >= 0.20 || (now - runtime.lastTranscriptSidebarPlaybackUpdateTimestamp) >= minimumPlaybackInterval {
-            clipTranscriptSidebarTimeSeconds = clamped
-            runtime.lastTranscriptSidebarPlaybackUpdateTimestamp = now
+        let activeRowID = activeTranscriptDisplayRowID(
+            at: clamped,
+            in: sourcePresentation.transcriptSegments,
+            rowIDBySegmentID: runtime.transcriptDisplayRowIDBySegmentID
+        )
+        if clipTranscriptActiveRowID != activeRowID {
+            clipTranscriptActiveRowID = activeRowID
+            PlayheadDiagnostics.shared.noteModelWrite("transcript_active_row")
         }
+        runtime.lastTranscriptSidebarPlaybackUpdateTimestamp = now
+    }
+
+    private func refreshClipTranscriptLookup(_ segments: [TranscriptSegment]) {
+        runtime.transcriptDisplayRowIDBySegmentID =
+            makeTranscriptDisplayRowsWithLookup(from: segments).rowIDBySegmentID
+        syncClipTranscriptSidebarTimeIfNeeded(displayedPlayheadSeconds, force: true)
     }
 
     private func togglePlayback() {
@@ -1655,6 +1666,15 @@ struct ClipToolView: View {
                     } else {
                         model.stopBenchmarkTranscriptPreviewStress()
                     }
+                },
+                loadCompletedTranscript: { count in
+                    model.loadBenchmarkCompletedTranscript(segmentCount: count)
+                },
+                startPlayback: {
+                    player.playImmediately(atRate: 1.0)
+                },
+                stopPlayback: {
+                    player.pause()
                 }
             )
         )
@@ -2142,7 +2162,7 @@ struct ClipToolView: View {
                 canGenerateTranscript: model.canGenerateTranscript,
                 isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
                 hasAudioTrack: sourcePresentation.hasAudioTrack,
-                currentTimeSeconds: clipTranscriptSidebarTimeSeconds,
+                activeTranscriptRowID: clipTranscriptActiveRowID,
                 isPlaying: player.rate != 0,
                 isScrubbing: isPlayheadDragActive,
                 reduceTransparency: reduceTransparency,
@@ -2635,6 +2655,9 @@ struct ClipToolView: View {
             loadPlayerItem()
             scheduleThumbnailStripGeneration(immediate: true)
             registerBenchmarkDriverIfNeeded()
+        }
+        .onReceive(sourcePresentation.$transcriptSegments) { segments in
+            refreshClipTranscriptLookup(segments)
         }
 
         let step3 = step2.onChange(of: model.clipEncodingMode) { mode in

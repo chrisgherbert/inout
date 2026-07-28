@@ -323,6 +323,18 @@ extension WorkspaceViewModel {
         }
     }
 
+    func loadBenchmarkCompletedTranscript(segmentCount: Int) {
+        guard PlayheadDiagnostics.shared.isEnabled, segmentCount > 0 else { return }
+        stopBenchmarkTranscriptPreviewStress()
+        let segments = (0..<segmentCount).map(Self.syntheticBenchmarkTranscriptSegment)
+        transcriptSegments = segments
+        hasCachedTranscript = true
+        isGeneratingTranscript = false
+        transcriptStatusText = "Benchmark transcript loaded (\(segmentCount) segments)."
+        analyzeStatusText = transcriptStatusText
+        uiMessage = transcriptStatusText
+    }
+
     func stopBenchmarkTranscriptPreviewStress() {
         benchmarkTranscriptStressTask?.cancel()
         benchmarkTranscriptStressTask = nil

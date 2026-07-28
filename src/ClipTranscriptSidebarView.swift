@@ -7,7 +7,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let canGenerateTranscript: Bool
     let isGeneratingTranscript: Bool
     let hasAudioTrack: Bool
-    let currentTimeSeconds: Double
+    let activePlaybackRowID: UUID?
     let isPlaying: Bool
     let isScrubbing: Bool
     let reduceTransparency: Bool
@@ -28,7 +28,6 @@ struct ClipTranscriptSidebarView: View, Equatable {
     @State private var matchingTranscriptRowsInOrder: [TranscriptDisplayRow] = []
     @State private var transcriptRowsVersion: Int = 0
     @State private var transcriptSearchVersion: Int = 0
-    @State private var settledCurrentTimeSeconds: Double = 0
     @State private var isUserScrollingTranscript = false
     @State private var transcriptControlsAvailableWidth: CGFloat = 0
 
@@ -40,7 +39,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
         lhs.hasAudioTrack == rhs.hasAudioTrack &&
-        lhs.currentTimeSeconds == rhs.currentTimeSeconds &&
+        lhs.activePlaybackRowID == rhs.activePlaybackRowID &&
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
@@ -99,59 +98,6 @@ struct ClipTranscriptSidebarView: View, Equatable {
         hasher.combine(transcriptStatusText)
         return hasher.finalize()
     }
-
-    private func resolvedRowID(for segment: TranscriptSegment) -> UUID? {
-        if let exactMatch = resolvedTranscriptRows.first(where: { $0.id == segment.id }) {
-            return exactMatch.id
-        }
-
-        if let matchedRow = resolvedTranscriptRows.first(where: {
-            abs($0.start - segment.start) < 0.03 && $0.text == segment.text
-        }) {
-            return matchedRow.id
-        }
-
-        return nil
-    }
-
-    private var activeTranscriptSegmentID: UUID? {
-        guard !transcriptSegments.isEmpty else { return nil }
-        let trailingGrace: Double = 0.55
-        let leadingGrace: Double = 0.12
-        var low = 0
-        var high = transcriptSegments.count - 1
-
-        while low <= high {
-            let mid = (low + high) / 2
-            let segment = transcriptSegments[mid]
-            if settledCurrentTimeSeconds < segment.start {
-                high = mid - 1
-            } else if settledCurrentTimeSeconds >= segment.end {
-                low = mid + 1
-            } else {
-                return resolvedRowID(for: segment)
-            }
-        }
-
-        if high >= 0, high < transcriptSegments.count {
-            let previous = transcriptSegments[high]
-            if settledCurrentTimeSeconds >= previous.start,
-               settledCurrentTimeSeconds <= previous.end + trailingGrace {
-                return resolvedRowID(for: previous)
-            }
-        }
-
-        if low >= 0, low < transcriptSegments.count {
-            let upcoming = transcriptSegments[low]
-            if settledCurrentTimeSeconds < upcoming.start,
-               upcoming.start - settledCurrentTimeSeconds <= leadingGrace {
-                return resolvedRowID(for: upcoming)
-            }
-        }
-
-        return nil
-    }
-
 
     private var hasTranscript: Bool {
         !transcriptSegments.isEmpty
@@ -372,7 +318,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     rows: displayedTranscriptRows,
                     rowsVersion: transcriptRowsVersion,
                     fontSize: 13,
-                    activeRowID: suspendsPlaybackHighlightDuringScroll ? nil : activeTranscriptSegmentID,
+                    activeRowID: suspendsPlaybackHighlightDuringScroll ? nil : activePlaybackRowID,
                     followsActiveRow: followsPlaybackRow,
                     showsPlaybackIndicator: showsPlaybackIndicator && !suspendsPlaybackHighlightDuringScroll,
                     searchQuery: normalizedSearchText,
@@ -439,27 +385,12 @@ struct ClipTranscriptSidebarView: View, Equatable {
         }
         .onAppear {
             refreshTranscriptRows()
-            settledCurrentTimeSeconds = currentTimeSeconds
         }
         .onChange(of: transcriptRefreshToken) { _ in
             refreshTranscriptRows()
         }
         .onChange(of: normalizedSearchText) { _ in
             refreshSearchMatches()
-        }
-        .onChange(of: currentTimeSeconds) { newValue in
-            guard !isScrubbing, !suspendsPlaybackHighlightDuringScroll else { return }
-            settledCurrentTimeSeconds = newValue
-        }
-        .onChange(of: isScrubbing) { newValue in
-            if !newValue {
-                settledCurrentTimeSeconds = currentTimeSeconds
-            }
-        }
-        .onChange(of: suspendsPlaybackHighlightDuringScroll) { suspended in
-            if !suspended, !isScrubbing {
-                settledCurrentTimeSeconds = currentTimeSeconds
-            }
         }
         .padding(12)
         .frame(maxHeight: .infinity, alignment: .top)

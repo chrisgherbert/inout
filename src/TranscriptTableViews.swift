@@ -53,9 +53,20 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     let normalizedText: String
 }
 
+struct TranscriptDisplayRows {
+    let rows: [TranscriptDisplayRow]
+    let rowIDBySegmentID: [UUID: UUID]
+}
+
 func makeTranscriptDisplayRows(from segments: [TranscriptSegment]) -> [TranscriptDisplayRow] {
+    makeTranscriptDisplayRowsWithLookup(from: segments).rows
+}
+
+func makeTranscriptDisplayRowsWithLookup(from segments: [TranscriptSegment]) -> TranscriptDisplayRows {
     var rows: [TranscriptDisplayRow] = []
     rows.reserveCapacity(segments.count)
+    var rowIDBySegmentID: [UUID: UUID] = [:]
+    rowIDBySegmentID.reserveCapacity(segments.count)
 
     for segment in segments {
         let text = normalizedTranscriptDisplayText(segment.text)
@@ -71,20 +82,61 @@ func makeTranscriptDisplayRows(from segments: [TranscriptSegment]) -> [Transcrip
                 text: mergedText,
                 normalizedText: normalizedTranscriptSearchText(mergedText)
             )
+            rowIDBySegmentID[segment.id] = last.id
         } else {
-            rows.append(
-                TranscriptDisplayRow(
-                    id: segment.id,
-                    start: segment.start,
-                    startLabel: formatSeconds(segment.start),
-                    text: text,
-                    normalizedText: normalizedTranscriptSearchText(text)
-                )
+            let row = TranscriptDisplayRow(
+                id: segment.id,
+                start: segment.start,
+                startLabel: formatSeconds(segment.start),
+                text: text,
+                normalizedText: normalizedTranscriptSearchText(text)
             )
+            rows.append(row)
+            rowIDBySegmentID[segment.id] = row.id
         }
     }
 
-    return rows
+    return TranscriptDisplayRows(rows: rows, rowIDBySegmentID: rowIDBySegmentID)
+}
+
+func activeTranscriptDisplayRowID(
+    at time: Double,
+    in segments: [TranscriptSegment],
+    rowIDBySegmentID: [UUID: UUID]
+) -> UUID? {
+    guard !segments.isEmpty else { return nil }
+    let trailingGrace: Double = 0.55
+    let leadingGrace: Double = 0.12
+    var low = 0
+    var high = segments.count - 1
+
+    while low <= high {
+        let mid = (low + high) / 2
+        let segment = segments[mid]
+        if time < segment.start {
+            high = mid - 1
+        } else if time >= segment.end {
+            low = mid + 1
+        } else {
+            return rowIDBySegmentID[segment.id]
+        }
+    }
+
+    if high >= 0, high < segments.count {
+        let previous = segments[high]
+        if time >= previous.start, time <= previous.end + trailingGrace {
+            return rowIDBySegmentID[previous.id]
+        }
+    }
+
+    if low >= 0, low < segments.count {
+        let upcoming = segments[low]
+        if time < upcoming.start, upcoming.start - time <= leadingGrace {
+            return rowIDBySegmentID[upcoming.id]
+        }
+    }
+
+    return nil
 }
 
 private func normalizedTranscriptDisplayText(_ text: String) -> String {
@@ -582,11 +634,9 @@ struct TranscriptTableView: NSViewRepresentable {
             let textColumn = tableView.tableColumns[1]
 
             let visibleDocumentWidth = max(0, scrollView.documentVisibleRect.width)
-            let exactDocumentWidth = exactTranscriptTableDocumentWidth(
-                for: rows,
-                fontSize: fontSize,
-                timeColumnWidth: timeColumn.width
-            )
+            let exactDocumentWidth = timeColumn.width +
+                preferredTranscriptTextColumnWidth() +
+                transcriptTableWidthSlack
             let shouldPreferIntrinsicTextWidth = exactDocumentWidth > (visibleDocumentWidth + 1)
 
             let availableTextWidth = max(
@@ -940,7 +990,7 @@ struct TranscriptTableView: NSViewRepresentable {
         private func ensurePlaybackFollowAnimation(in scrollView: NSScrollView) {
             guard playbackFollowAnimationTimer == nil else { return }
             let timer = Timer(
-                timeInterval: 1.0 / 60.0,
+                timeInterval: 1.0 / 30.0,
                 repeats: true
             ) { [weak self, weak scrollView] timer in
                 guard let self, let scrollView else {

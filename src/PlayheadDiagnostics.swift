@@ -10,6 +10,7 @@ struct PlayheadBenchmarkConfig {
     let exitWhenDone: Bool
     let scenarios: [PlayheadBenchmarkScenario]
     let transcriptStressSegmentsPerSecond: Double
+    let completedTranscriptSegmentCount: Int
     let disableTranscriptPreviewBatching: Bool
 
     private init() {
@@ -58,6 +59,16 @@ struct PlayheadBenchmarkConfig {
             transcriptStressSegmentsPerSecond = 0
         }
 
+        let rawCompletedTranscript = env["INOUT_PLAYHEAD_BENCHMARK_COMPLETED_TRANSCRIPT"] ??
+            Self.argumentValue(named: "--playhead-benchmark-completed-transcript", in: args)
+        if let rawCompletedTranscript,
+           let parsed = Int(rawCompletedTranscript),
+           parsed > 0 {
+            completedTranscriptSegmentCount = parsed
+        } else {
+            completedTranscriptSegmentCount = 0
+        }
+
         disableTranscriptPreviewBatching =
             env["INOUT_PLAYHEAD_BENCHMARK_DISABLE_TRANSCRIPT_BATCHING"] == "1" ||
             args.contains("--playhead-benchmark-disable-transcript-batching")
@@ -76,8 +87,9 @@ enum PlayheadBenchmarkScenario: String, Codable, CaseIterable {
     case fastScrub = "fast_scrub"
     case backAndForth = "back_and_forth"
     case edgeAutoPan = "edge_auto_pan"
+    case transcriptPlayback = "transcript_playback"
 
-    static let defaultScenarios: [PlayheadBenchmarkScenario] = [.slowDrag, .fastScrub, .backAndForth, .edgeAutoPan]
+    static let defaultScenarios: [PlayheadBenchmarkScenario] = [.slowDrag, .fastScrub, .backAndForth, .edgeAutoPan, .transcriptPlayback]
 }
 
 struct PlayheadTimingSummary: Codable {
@@ -476,6 +488,9 @@ final class PlayheadBenchmarkCoordinator {
         let updateScrubToRatio: (Double) -> Void
         let endScrubAtRatio: (Double) -> Void
         let setTranscriptStressRate: (Double?) -> Void
+        let loadCompletedTranscript: (Int) -> Void
+        let startPlayback: () -> Void
+        let stopPlayback: () -> Void
     }
 
     private let config = PlayheadBenchmarkConfig.shared
@@ -512,6 +527,10 @@ final class PlayheadBenchmarkCoordinator {
         }
 
         PlayheadDiagnostics.shared.writeProgress(stage: "ready", scenario: nil)
+        if config.completedTranscriptSegmentCount > 0 {
+            driver.loadCompletedTranscript(config.completedTranscriptSegmentCount)
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
         if config.transcriptStressSegmentsPerSecond > 0 {
             driver.setTranscriptStressRate(config.transcriptStressSegmentsPerSecond)
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -554,6 +573,16 @@ final class PlayheadBenchmarkCoordinator {
             try? await Task.sleep(nanoseconds: 150_000_000)
             PlayheadDiagnostics.shared.beginScenario(scenario)
             await animateScrub(driver: driver, keyframes: [(0.82, 0.0), (0.97, 0.25), (0.98, 1.35)])
+            PlayheadDiagnostics.shared.endScenario()
+        case .transcriptPlayback:
+            driver.setZoomIndex(min(maxZoomIndex, 6))
+            driver.beginScrubAtRatio(0.08)
+            driver.endScrubAtRatio(0.08)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            PlayheadDiagnostics.shared.beginScenario(scenario)
+            driver.startPlayback()
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            driver.stopPlayback()
             PlayheadDiagnostics.shared.endScenario()
         }
     }
