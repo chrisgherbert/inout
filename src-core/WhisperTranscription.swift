@@ -455,7 +455,7 @@ private func parakeetTokenWithoutWordBoundary(_ token: String) -> String {
 
 private func makeParakeetWordTimings(from tokens: [ParakeetTokenTiming], fallbackText: String) -> [ParakeetWordTiming] {
     let sortedTokens = tokens
-        .filter { !$0.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.endTime >= $0.startTime }
+        .filter { !$0.token.isEmpty && $0.endTime >= $0.startTime }
         .sorted {
             if abs($0.startTime - $1.startTime) > 0.0001 { return $0.startTime < $1.startTime }
             return $0.endTime < $1.endTime
@@ -500,6 +500,10 @@ private func makeParakeetWordTimings(from tokens: [ParakeetTokenTiming], fallbac
     for token in sortedTokens {
         let startsWord = parakeetTokenStartsWord(token.token)
         let tokenText = startsWord ? parakeetTokenWithoutWordBoundary(token.token) : token.token
+        if startsWord && tokenText.isEmpty {
+            flushWord()
+            continue
+        }
         guard !tokenText.isEmpty else { continue }
         let tokenStart = max(0, token.startTime)
         let tokenEnd = max(tokenStart + 0.05, token.endTime)
