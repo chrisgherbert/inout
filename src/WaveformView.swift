@@ -17,7 +17,9 @@ struct WaveformView: View {
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
     let captureMarkers: [CaptureTimelineMarker]
+    let suggestedMarkers: [SmartMarkerSuggestion]
     let highlightedMarkerID: UUID?
+    let highlightedSuggestionID: UUID?
     let highlightedClipBoundary: ClipBoundaryHighlight?
     let captureFrameFlashToken: Int
     let quickExportFlashToken: Int
@@ -33,6 +35,8 @@ struct WaveformView: View {
     let thumbnailStripSourceEndSeconds: Double
     let thumbnailStripSourceVisibleDurationSeconds: Double
     let onSeek: (Double, Bool) -> Void
+    let onSuggestionSeek: (SmartMarkerSuggestion) -> Void
+    let onSuggestionDoubleClick: (SmartMarkerSuggestion) -> Void
     let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
     let onClipBoundaryDragStateChanged: (Bool) -> Void
@@ -62,7 +66,9 @@ struct WaveformView: View {
             playheadJumpAnimationToken: playheadJumpAnimationToken,
             isPlayheadCaptureFlashing: isPlayheadCaptureFlashing,
             captureMarkers: captureMarkers,
+            suggestedMarkers: suggestedMarkers,
             highlightedMarkerID: highlightedMarkerID,
+            highlightedSuggestionID: highlightedSuggestionID,
             highlightedClipBoundary: highlightedClipBoundary,
             quickExportFlashToken: quickExportFlashToken,
             showsThumbnailStrip: showsThumbnailStrip,
@@ -78,6 +84,20 @@ struct WaveformView: View {
             thumbnailStripSourceVisibleDurationSeconds: thumbnailStripSourceVisibleDurationSeconds,
             onMarkerSeek: { seconds in
                 onSeek(seconds, true)
+            },
+            onSuggestionSeek: { suggestionID, seconds in
+                guard let suggestion = suggestedMarkers.first(where: { $0.id == suggestionID }) else {
+                    onSeek(seconds, true)
+                    return
+                }
+                onSuggestionSeek(suggestion)
+            },
+            onSuggestionDoubleClick: { suggestionID, seconds in
+                guard let suggestion = suggestedMarkers.first(where: { $0.id == suggestionID }) else {
+                    onSeek(seconds, true)
+                    return
+                }
+                onSuggestionDoubleClick(suggestion)
             },
             onInteractiveSeek: onSeek,
             onPlayheadDragStateChanged: onPlayheadDragStateChanged,

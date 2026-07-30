@@ -106,6 +106,22 @@ struct CheckBlackFramesApp: App {
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
 
                 Button {
+                    NotificationCenter.default.post(name: .clipSuggestMarkers, object: focusedModel)
+                } label: {
+                    Label("AI Suggestions…", systemImage: "sparkles")
+                }
+                .disabled(
+                    focusedModel?.selectedTool != .clip ||
+                        focusedModel?.sourceURL == nil ||
+                        focusedModel?.hasAudioTrack != true ||
+                        focusedModel?.isGeneratingTranscript == true ||
+                        (
+                            focusedModel?.transcriptSegments.isEmpty != false &&
+                            focusedModel?.canGenerateTranscript != true
+                        )
+                )
+
+                Button {
                     NotificationCenter.default.post(name: .clipJumpToStart, object: focusedModel)
                 } label: {
                     Label("Previous Marker (or In/Out)", systemImage: "chevron.up.circle")

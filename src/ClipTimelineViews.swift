@@ -90,6 +90,10 @@ private struct ClipPlayerStageSection: View {
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
+    let smartMarkerTabs: [SmartMarkerAnalysisTab]
+    let activeSmartMarkerTabID: UUID?
+    let showsSmartMarkerSuggestions: Bool
+    let smartMarkerRevision: Int
     let isMiddleMousePanning: Bool
     let onDismissTimecodeFieldFocus: () -> Void
     let onAutoFitTranscriptSidebar: (_ maximumSidebarWidth: CGFloat) -> Void
@@ -100,6 +104,15 @@ private struct ClipPlayerStageSection: View {
     let onExportTranscript: (_ format: TranscriptExportFormat?) -> Void
     let onSeekToTranscriptTime: (_ seconds: Double) -> Void
     let onPlayTranscriptFromTime: (_ seconds: Double) -> Void
+    let onSetShowsSmartMarkerSuggestions: (_ shows: Bool) -> Void
+    let onSelectSmartMarkerTab: (_ id: UUID) -> Void
+    let onCloseSmartMarkerTab: (_ id: UUID) -> Void
+    let onStartNewSmartMarkerAnalysis: () -> Void
+    let onHighlightSmartMarker: (_ suggestion: SmartMarkerSuggestion) -> Void
+    let onPlaySmartMarker: (_ suggestion: SmartMarkerSuggestion) -> Void
+    let onDeleteSmartMarkerSuggestion: (_ id: UUID) -> Void
+    let onSetSmartMarkerScrollPosition: (_ suggestionID: UUID?, _ tabID: UUID) -> Void
+    let onCancelSmartMarkerAnalysis: (_ tabID: UUID) -> Void
     let onCloseTranscript: () -> Void
     let onShowTranscript: () -> Void
 
@@ -179,11 +192,24 @@ private struct ClipPlayerStageSection: View {
                             reduceTransparency: reduceTransparency,
                             focusSearchFieldToken: focusSearchFieldToken,
                             transcriptExportFormat: transcriptExportFormat,
+                            smartMarkerTabs: smartMarkerTabs,
+                            activeSmartMarkerTabID: activeSmartMarkerTabID,
+                            showsSmartMarkerSuggestions: showsSmartMarkerSuggestions,
+                            smartMarkerRevision: smartMarkerRevision,
                             generateTranscript: onGenerateTranscript,
                             setTranscriptExportFormat: onSetTranscriptExportFormat,
                             exportTranscript: onExportTranscript,
                             seekToTranscriptTime: onSeekToTranscriptTime,
                             playTranscriptFromTime: onPlayTranscriptFromTime,
+                            setShowsSmartMarkerSuggestions: onSetShowsSmartMarkerSuggestions,
+                            selectSmartMarkerTab: onSelectSmartMarkerTab,
+                            closeSmartMarkerTab: onCloseSmartMarkerTab,
+                            startNewSmartMarkerAnalysis: onStartNewSmartMarkerAnalysis,
+                            highlightSmartMarker: onHighlightSmartMarker,
+                            playSmartMarker: onPlaySmartMarker,
+                            deleteSmartMarkerSuggestion: onDeleteSmartMarkerSuggestion,
+                            setSmartMarkerScrollPosition: onSetSmartMarkerScrollPosition,
+                            cancelSmartMarkerAnalysis: onCancelSmartMarkerAnalysis,
                             onCloseTranscript: onCloseTranscript
                         )
                     )
@@ -242,6 +268,8 @@ extension ClipPlayerStageSection: Equatable {
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
+        lhs.smartMarkerRevision == rhs.smartMarkerRevision &&
+        lhs.showsSmartMarkerSuggestions == rhs.showsSmartMarkerSuggestions &&
         lhs.isMiddleMousePanning == rhs.isMiddleMousePanning
     }
 }
@@ -260,6 +288,7 @@ struct ClipToolView: View {
     @Environment(\.undoManager) private var undoManager
 
     @StateObject private var runtime = ClipToolRuntimeState()
+    @StateObject private var smartMarkers = SmartMarkerPresentationModel()
     @State private var player = AVPlayer()
     @State private var playheadSeconds: Double = 0
     @State private var playerDurationSeconds: Double = 0
@@ -307,6 +336,8 @@ struct ClipToolView: View {
     @State private var showURLImportAdvancedOptions = false
     @State private var emptyStateURLText: String = ""
     @State private var isEmptyDropTargeted = false
+    @State private var isSmartMarkerSetupPresented = false
+    @State private var pendingSmartMarkerConfiguration: SmartMarkerAnalysisConfiguration?
     @FocusState private var isImportURLFieldFocused: Bool
 
     private var clip: ClipTimelinePresentationModel { clipTimelinePresentation }
@@ -1276,42 +1307,82 @@ struct ClipToolView: View {
 
     private func navigateToMarker(previous: Bool) {
         let epsilon = 1.0 / 240.0
-        var points = clip.captureTimelineMarkers.map(\.seconds)
-        points.append(clip.clipStartSeconds)
-        points.append(clip.clipEndSeconds)
-        points.sort()
+        enum NavigationPointKind {
+            case savedMarker(UUID)
+            case suggestion(UUID)
+            case boundary(ClipBoundaryHighlight)
 
-        var deduped: [Double] = []
+            var priority: Int {
+                switch self {
+                case .savedMarker: return 2
+                case .suggestion: return 1
+                case .boundary: return 0
+                }
+            }
+        }
+        struct NavigationPoint {
+            let seconds: Double
+            let kind: NavigationPointKind
+        }
+
+        var points = clip.captureTimelineMarkers.map {
+            NavigationPoint(seconds: $0.seconds, kind: .savedMarker($0.id))
+        }
+        points.append(contentsOf: smartMarkers.suggestions.flatMap { suggestion in
+            suggestion.navigationSeconds.map {
+                NavigationPoint(seconds: $0, kind: .suggestion(suggestion.id))
+            }
+        })
+        points.append(NavigationPoint(seconds: clip.clipStartSeconds, kind: .boundary(.start)))
+        points.append(NavigationPoint(seconds: clip.clipEndSeconds, kind: .boundary(.end)))
+        points.sort {
+            if abs($0.seconds - $1.seconds) <= epsilon {
+                return $0.kind.priority > $1.kind.priority
+            }
+            return $0.seconds < $1.seconds
+        }
+
+        var deduped: [NavigationPoint] = []
         for point in points {
-            if let last = deduped.last, abs(point - last) <= epsilon {
+            if let last = deduped.last, abs(point.seconds - last.seconds) <= epsilon {
                 continue
             }
             deduped.append(point)
         }
         guard !deduped.isEmpty else { return }
 
-        let target: Double?
+        let target: NavigationPoint?
         if previous {
-            target = deduped.last(where: { $0 < playheadSeconds - epsilon }) ?? deduped.first
+            target = deduped.last(where: { $0.seconds < playheadSeconds - epsilon }) ?? deduped.first
         } else {
-            target = deduped.first(where: { $0 > playheadSeconds + epsilon }) ?? deduped.last
+            target = deduped.first(where: { $0.seconds > playheadSeconds + epsilon }) ?? deduped.last
         }
 
         guard let target else { return }
-        let didChange = abs(target - playheadSeconds) > (1.0 / 240.0)
+        let didChange = abs(target.seconds - playheadSeconds) > (1.0 / 240.0)
         // Keep viewport stable unless target is offscreen; then reveal it.
-        seekPlayerAndFocusViewport(to: target, focusViewport: true)
+        seekPlayerAndFocusViewport(to: target.seconds, focusViewport: true)
         if didChange {
-            springAnimateVisualPlayhead(to: target)
+            springAnimateVisualPlayhead(to: target.seconds)
         } else {
-            syncVisualPlayheadImmediately(target)
+            syncVisualPlayheadImmediately(target.seconds)
         }
-        if model.nearestTimelineMarker(to: target, tolerance: 1.0 / 120.0) != nil {
-            model.selectTimelineMarkerIfAligned(near: target, tolerance: 1.0 / 120.0)
+
+        switch target.kind {
+        case .savedMarker(let id):
+            clip.highlightedCaptureTimelineMarkerID = id
             clip.highlightedClipBoundary = nil
-        } else {
+            smartMarkers.highlightedSuggestionID = nil
+        case .suggestion(let id):
             clip.highlightedCaptureTimelineMarkerID = nil
-            model.highlightBoundaryIfNeeded(near: target, clipStart: clip.clipStartSeconds, clipEnd: clip.clipEndSeconds)
+            clip.highlightedClipBoundary = nil
+            smartMarkers.highlightedSuggestionID = id
+            smartMarkers.showsSuggestions = true
+            storedTranscriptSidebarVisible = true
+        case .boundary(let boundary):
+            clip.highlightedCaptureTimelineMarkerID = nil
+            smartMarkers.highlightedSuggestionID = nil
+            clip.highlightedClipBoundary = boundary
         }
     }
 
@@ -2053,7 +2124,7 @@ struct ClipToolView: View {
     }
 
     private var canShowClipTranscriptSidebar: Bool {
-        !isCompactLayout && sourcePresentation.hasAudioTrack
+        (!isCompactLayout || smartMarkers.showsSuggestions) && sourcePresentation.hasAudioTrack
     }
 
     private var showsClipTranscriptSidebar: Bool {
@@ -2101,9 +2172,63 @@ struct ClipToolView: View {
     }
 
     private func playTranscript(from seconds: Double) {
+        clearSelectionPlaybackState()
         seekPlayerAndFocusViewport(to: seconds, focusViewport: true)
         springAnimateVisualPlayhead(to: seconds)
         player.playImmediately(atRate: 1.0)
+    }
+
+    private func playSmartMarkerSuggestion(_ suggestion: SmartMarkerSuggestion) {
+        clearSelectionPlaybackState()
+        if let endSeconds = suggestion.endSeconds {
+            installSelectionPlaybackBoundaryObserver(endSeconds: endSeconds)
+        }
+        seekPlayerAndFocusViewport(to: suggestion.seconds, focusViewport: true)
+        springAnimateVisualPlayhead(to: suggestion.seconds)
+        player.playImmediately(atRate: 1.0)
+    }
+
+    private func startSmartMarkerAnalysis(
+        configuration: SmartMarkerAnalysisConfiguration,
+        segments: [TranscriptSegment]
+    ) {
+        storedTranscriptSidebarVisible = true
+        smartMarkers.start(
+            segments: segments,
+            configuration: configuration,
+            clipStart: clip.clipStartSeconds,
+            clipEnd: clip.clipEndSeconds,
+            totalDuration: totalDurationSeconds,
+            waveformSamples: waveformSamples
+        )
+    }
+
+    private func prepareSmartMarkerAnalysis(_ configuration: SmartMarkerAnalysisConfiguration) {
+        if !sourcePresentation.transcriptSegments.isEmpty {
+            startSmartMarkerAnalysis(
+                configuration: configuration,
+                segments: sourcePresentation.transcriptSegments
+            )
+            return
+        }
+
+        guard model.canGenerateTranscript else { return }
+        pendingSmartMarkerConfiguration = configuration
+        storedTranscriptSidebarVisible = true
+        model.generateTranscript()
+    }
+
+    private func finishPendingSmartMarkerTranscription() {
+        guard let configuration = pendingSmartMarkerConfiguration,
+              !sourcePresentation.isGeneratingTranscript else {
+            return
+        }
+        pendingSmartMarkerConfiguration = nil
+        guard sourcePresentation.hasCachedTranscript else { return }
+        startSmartMarkerAnalysis(
+            configuration: configuration,
+            segments: sourcePresentation.transcriptSegments
+        )
     }
 
     private var currentPlayerAspectRatio: CGFloat {
@@ -2152,6 +2277,10 @@ struct ClipToolView: View {
                 reduceTransparency: reduceTransparency,
                 focusSearchFieldToken: clipTranscriptSearchFocusToken,
                 transcriptExportFormat: model.transcriptExportFormat,
+                smartMarkerTabs: smartMarkers.tabs,
+                activeSmartMarkerTabID: smartMarkers.activeTabID,
+                showsSmartMarkerSuggestions: smartMarkers.showsSuggestions,
+                smartMarkerRevision: smartMarkers.revision,
                 isMiddleMousePanning: runtime.isMiddleMousePanning,
                 onDismissTimecodeFieldFocus: dismissTimecodeFieldFocus,
                 onAutoFitTranscriptSidebar: { maximumSidebarWidth in
@@ -2194,6 +2323,37 @@ struct ClipToolView: View {
                 },
                 onPlayTranscriptFromTime: { seconds in
                     playTranscript(from: seconds)
+                },
+                onSetShowsSmartMarkerSuggestions: { shows in
+                    smartMarkers.showsSuggestions = shows
+                },
+                onSelectSmartMarkerTab: { id in
+                    smartMarkers.selectTab(id)
+                },
+                onCloseSmartMarkerTab: { id in
+                    smartMarkers.closeTab(id)
+                },
+                onStartNewSmartMarkerAnalysis: {
+                    guard !smartMarkers.isAnalyzing else { return }
+                    isSmartMarkerSetupPresented = true
+                },
+                onHighlightSmartMarker: { suggestion in
+                    smartMarkers.highlightedSuggestionID = suggestion.id
+                    seekPlayerAndFocusViewport(to: suggestion.seconds, focusViewport: true)
+                    springAnimateVisualPlayhead(to: suggestion.seconds)
+                },
+                onPlaySmartMarker: { suggestion in
+                    smartMarkers.highlightedSuggestionID = suggestion.id
+                    playSmartMarkerSuggestion(suggestion)
+                },
+                onDeleteSmartMarkerSuggestion: { id in
+                    smartMarkers.deleteSuggestion(id, undoManager: undoManager)
+                },
+                onSetSmartMarkerScrollPosition: { suggestionID, tabID in
+                    smartMarkers.setScrollPosition(suggestionID, for: tabID)
+                },
+                onCancelSmartMarkerAnalysis: { tabID in
+                    smartMarkers.cancelAnalysis(tabID: tabID)
                 },
                 onCloseTranscript: {
                     storedTranscriptSidebarVisible = false
@@ -2267,6 +2427,12 @@ struct ClipToolView: View {
                 playheadCopyFlash: playheadCopyFlash,
                 compactZoomDisplayText: compactPlayerZoomDisplayText,
                 timelineZoomLevelCount: allowedTimelineZoomLevels.count,
+                canSuggestMarkers: (
+                    !sourcePresentation.transcriptSegments.isEmpty ||
+                    model.canGenerateTranscript
+                ) && !sourcePresentation.isGeneratingTranscript,
+                isSuggestingMarkers: smartMarkers.isAnalyzing,
+                isTranscribingForMarkers: pendingSmartMarkerConfiguration != nil,
                 onCopyPlayheadTimecode: copyPlayheadTimecode,
                 onJumpToStart: {
                     seekPlayer(to: clip.clipStartSeconds)
@@ -2278,6 +2444,9 @@ struct ClipToolView: View {
                 },
                 onCaptureFrame: {
                     model.captureFrame(at: displayedPlayheadSeconds)
+                },
+                onSuggestMarkers: {
+                    isSmartMarkerSetupPresented = true
                 },
                 onZoomOut: {
                     setTimelineZoomIndex(max(0, timelineZoomIndex - 1))
@@ -2379,7 +2548,9 @@ struct ClipToolView: View {
             playheadSeconds: displayedPlayheadSeconds,
             playheadCopyFlash: playheadCopyFlash,
             captureMarkers: clip.captureTimelineMarkers,
+            suggestedMarkers: smartMarkers.timelineSuggestions,
             highlightedMarkerID: clip.highlightedCaptureTimelineMarkerID,
+            highlightedSuggestionID: smartMarkers.highlightedSuggestionID,
             highlightedClipBoundary: clip.highlightedClipBoundary,
             captureFrameFlashToken: clip.captureFrameFlashToken,
             quickExportFlashToken: clip.quickExportFlashToken,
@@ -2393,6 +2564,31 @@ struct ClipToolView: View {
                     seekPlayer(to: target)
                 } else {
                     seekPlayerInteractive(to: target)
+                }
+            },
+            onSuggestionSeek: { suggestion in
+                smartMarkers.highlightedSuggestionID = suggestion.id
+                smartMarkers.showsSuggestions = true
+                storedTranscriptSidebarVisible = true
+                seekPlayerAndFocusViewport(to: suggestion.seconds, focusViewport: true)
+                springAnimateVisualPlayhead(to: suggestion.seconds)
+            },
+            onSuggestionDoubleClick: { suggestion in
+                smartMarkers.highlightedSuggestionID = suggestion.id
+                smartMarkers.showsSuggestions = true
+                storedTranscriptSidebarVisible = true
+                if let endSeconds = suggestion.endSeconds {
+                    clearSelectionPlaybackState()
+                    model.setClipRange(
+                        start: suggestion.seconds,
+                        end: endSeconds,
+                        undoManager: undoManager
+                    )
+                    syncDisplayedClipRangeImmediately()
+                    seekPlayerAndFocusViewport(to: suggestion.seconds, focusViewport: true)
+                    springAnimateVisualPlayhead(to: suggestion.seconds)
+                } else {
+                    playSmartMarkerSuggestion(suggestion)
                 }
             },
             onPlayheadDragEdgePan: { x, width in
@@ -2495,6 +2691,29 @@ struct ClipToolView: View {
             )
         ) {
             urlImportSheetView
+        }
+        .sheet(isPresented: $isSmartMarkerSetupPresented) {
+            SmartMarkerSetupSheet(
+                canUseSelectedClip: clip.clipEndSeconds > clip.clipStartSeconds,
+                onCancel: {
+                    isSmartMarkerSetupPresented = false
+                },
+                onStart: { configuration in
+                    isSmartMarkerSetupPresented = false
+                    prepareSmartMarkerAnalysis(configuration)
+                }
+            )
+            .preferredColorScheme(model.appearance.colorScheme)
+        }
+        .onChange(of: sourcePresentation.sourceSessionID) { _ in
+            pendingSmartMarkerConfiguration = nil
+            smartMarkers.reset()
+        }
+        .onChange(of: sourcePresentation.isGeneratingTranscript) { isGenerating in
+            guard !isGenerating, pendingSmartMarkerConfiguration != nil else { return }
+            DispatchQueue.main.async {
+                finishPendingSmartMarkerTranscription()
+            }
         }
     }
 
@@ -2708,6 +2927,12 @@ struct ClipToolView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipAddMarkerAtPlayhead, object: model)) { _ in
                 model.addTimelineMarker(at: effectivePlayheadSeconds(), undoManager: undoManager)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clipSuggestMarkers, object: model)) { _ in
+                guard (!sourcePresentation.transcriptSegments.isEmpty || model.canGenerateTranscript),
+                      !sourcePresentation.isGeneratingTranscript,
+                      !smartMarkers.isAnalyzing else { return }
+                isSmartMarkerSetupPresented = true
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipJumpToStart, object: model)) { _ in
                 navigateToMarker(previous: true)

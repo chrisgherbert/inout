@@ -4,11 +4,13 @@ import AppKit
 struct PreferencesView: View {
     @ObservedObject var model: WorkspaceViewModel
     @State private var profanityEntry = ""
+    @State private var openAIAPIKeyEntry = ""
     @State private var selectedPane: PreferencesPane = .general
 
     private enum PreferencesPane: String, CaseIterable, Identifiable {
         case general = "General"
         case tools = "Tools"
+        case ai = "AI"
         case analyze = "Analyze"
         case clip = "Clip"
         case audio = "Audio"
@@ -19,6 +21,7 @@ struct PreferencesView: View {
             switch self {
             case .general: return "gearshape"
             case .tools: return "wrench.and.screwdriver"
+            case .ai: return "sparkles"
             case .analyze: return "waveform.path.ecg"
             case .clip: return "timeline.selection"
             case .audio: return "waveform"
@@ -257,6 +260,112 @@ struct PreferencesView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .disabled(model.isUpdatingDownloader || !model.downloaderCanRollback)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var aiPane: some View {
+        paneScroll {
+            settingsSection("AI Suggestions") {
+                settingsRow("AI provider") {
+                    valueMenuPicker("AI Provider", selection: $model.smartMarkerProvider) {
+                        ForEach(SmartMarkerProviderID.allCases) { provider in
+                            Text(provider.title).tag(provider)
+                        }
+                    }
+                }
+
+                settingsRow("Provider notes") {
+                    Text(model.smartMarkerProvider.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if model.smartMarkerProvider == .openAI {
+                    settingsRow("Model") {
+                        TextField(
+                            SmartMarkerPreferences.defaultOpenAIModel,
+                            text: $model.openAISmartMarkerModel
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 300)
+                    }
+
+                    settingsRow("API key") {
+                        HStack(spacing: 8) {
+                            SecureField(
+                                model.openAIAPIKeyConfigured ? "Key stored in Keychain" : "sk-...",
+                                text: $openAIAPIKeyEntry
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 300)
+
+                            Button("Save") {
+                                if model.saveOpenAIAPIKey(openAIAPIKeyEntry) {
+                                    openAIAPIKeyEntry = ""
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(
+                                openAIAPIKeyEntry.trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                ).isEmpty
+                            )
+
+                            if model.openAIAPIKeyConfigured {
+                                Button("Remove", role: .destructive) {
+                                    model.removeOpenAIAPIKey()
+                                    openAIAPIKeyEntry = ""
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+
+                    settingsRow("") {
+                        HStack(spacing: 8) {
+                            Button(
+                                model.isTestingOpenAIConnection ? "Testing..." : "Test Connection"
+                            ) {
+                                model.testOpenAIConnection()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(
+                                !model.openAIAPIKeyConfigured ||
+                                    model.isTestingOpenAIConnection
+                            )
+
+                            if !model.openAIConnectionStatusText.isEmpty {
+                                Label(
+                                    model.openAIConnectionStatusText,
+                                    systemImage: model.openAIConnectionSucceeded
+                                        ? "checkmark.circle.fill"
+                                        : "info.circle"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(
+                                    model.openAIConnectionSucceeded ? Color.green : Color.secondary
+                                )
+                                .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+
+                    settingsRow("") {
+                        Text(
+                            "Transcript text is sent directly to OpenAI. API usage is billed " +
+                                "separately from ChatGPT. In/Out stores your key only in macOS Keychain."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -532,6 +641,12 @@ struct PreferencesView: View {
                 .tag(PreferencesPane.tools)
                 .tabItem {
                     Label(PreferencesPane.tools.rawValue, systemImage: PreferencesPane.tools.symbol)
+                }
+
+            aiPane
+                .tag(PreferencesPane.ai)
+                .tabItem {
+                    Label(PreferencesPane.ai.rawValue, systemImage: PreferencesPane.ai.symbol)
                 }
 
             analyzePane

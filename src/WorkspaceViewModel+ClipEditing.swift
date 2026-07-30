@@ -165,6 +165,19 @@ extension WorkspaceViewModel {
         )
     }
 
+    func setClipRange(
+        start: Double,
+        end: Double,
+        undoManager: UndoManager? = nil
+    ) {
+        setClipRangeWithUndo(
+            start: start,
+            end: end,
+            undoManager: undoManager,
+            actionName: "Set Clip In/Out"
+        )
+    }
+
     func handleDrop(providers: [NSItemProvider]) -> Bool {
         let accepted = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard let provider = accepted.first else { return false }

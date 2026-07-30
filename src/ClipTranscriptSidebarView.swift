@@ -58,11 +58,24 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
+    let smartMarkerTabs: [SmartMarkerAnalysisTab]
+    let activeSmartMarkerTabID: UUID?
+    let showsSmartMarkerSuggestions: Bool
+    let smartMarkerRevision: Int
     let generateTranscript: () -> Void
     let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
     let exportTranscript: (TranscriptExportFormat?) -> Void
     let seekToTranscriptTime: (Double) -> Void
     let playTranscriptFromTime: (Double) -> Void
+    let setShowsSmartMarkerSuggestions: (Bool) -> Void
+    let selectSmartMarkerTab: (UUID) -> Void
+    let closeSmartMarkerTab: (UUID) -> Void
+    let startNewSmartMarkerAnalysis: () -> Void
+    let highlightSmartMarker: (SmartMarkerSuggestion) -> Void
+    let playSmartMarker: (SmartMarkerSuggestion) -> Void
+    let deleteSmartMarkerSuggestion: (UUID) -> Void
+    let setSmartMarkerScrollPosition: (UUID?, UUID) -> Void
+    let cancelSmartMarkerAnalysis: (UUID) -> Void
     let onCloseTranscript: () -> Void
 
     @State private var searchText = ""
@@ -89,7 +102,9 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
-        lhs.reduceTransparency == rhs.reduceTransparency
+        lhs.reduceTransparency == rhs.reduceTransparency &&
+        lhs.smartMarkerRevision == rhs.smartMarkerRevision &&
+        lhs.showsSmartMarkerSuggestions == rhs.showsSmartMarkerSuggestions
     }
 
     private func makeTranscriptRows() -> [TranscriptDisplayRow] {
@@ -145,6 +160,16 @@ struct ClipTranscriptSidebarView: View, Equatable {
 
     private var hasTranscript: Bool {
         !transcriptSegments.isEmpty
+    }
+
+    private var hasSmartMarkerActivity: Bool {
+        !smartMarkerTabs.isEmpty
+    }
+
+    private var activeSmartMarkerSuggestionCount: Int {
+        guard let activeSmartMarkerTabID else { return 0 }
+        return smartMarkerTabs.first(where: { $0.id == activeSmartMarkerTabID })?
+            .suggestions.count ?? 0
     }
 
     private var showsPlaybackIndicator: Bool {
@@ -263,10 +288,27 @@ struct ClipTranscriptSidebarView: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Transcript")
-                    .font(.headline)
+                if hasSmartMarkerActivity {
+                    Picker(
+                        "Sidebar",
+                        selection: Binding(
+                            get: { showsSmartMarkerSuggestions },
+                            set: { setShowsSmartMarkerSuggestions($0) }
+                        )
+                    ) {
+                        Text("Transcript").tag(false)
+                        Text("Suggestions (\(activeSmartMarkerSuggestionCount))").tag(true)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .frame(maxWidth: 250)
+                } else {
+                    Text("Transcript")
+                        .font(.headline)
+                }
                 Spacer()
-                if hasTranscript {
+                if hasTranscript && !showsSmartMarkerSuggestions {
                     Text(normalizedSearchText.isEmpty ? "\(resolvedTranscriptRows.count)" : "\(matchingTranscriptRowCount) matches")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -281,7 +323,21 @@ struct ClipTranscriptSidebarView: View, Equatable {
                 .accessibilityLabel("Hide Transcript")
             }
 
-            if hasTranscript {
+            if showsSmartMarkerSuggestions && hasSmartMarkerActivity {
+                SmartMarkerReviewView(
+                    tabs: smartMarkerTabs,
+                    activeTabID: activeSmartMarkerTabID,
+                    onSelectTab: selectSmartMarkerTab,
+                    onCloseTab: closeSmartMarkerTab,
+                    onNewAnalysis: startNewSmartMarkerAnalysis,
+                    onHighlight: highlightSmartMarker,
+                    onPlay: playSmartMarker,
+                    onDeleteSuggestion: deleteSmartMarkerSuggestion,
+                    onSetScrollPosition: setSmartMarkerScrollPosition,
+                    onCancelAnalysis: cancelSmartMarkerAnalysis
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if hasTranscript {
                 VStack(alignment: .leading, spacing: 6) {
                     transcriptControls(
                         availableWidth: transcriptControlsAvailableWidth > 0 ? transcriptControlsAvailableWidth : 600

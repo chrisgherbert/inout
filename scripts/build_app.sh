@@ -367,6 +367,9 @@ swiftc \
   -framework CoreVideo \
   -framework CoreMedia \
   -framework Foundation \
+  -framework Security \
+  -Xlinker -weak_framework \
+  -Xlinker FoundationModels \
   "${CORE_LINK_INPUTS[@]}" \
   "${SWIFT_SOURCES[@]}" \
   -o "$BIN"

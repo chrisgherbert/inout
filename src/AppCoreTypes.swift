@@ -10,6 +10,7 @@ extension Notification.Name {
     static let clipSetEndAtPlayhead = Notification.Name("clipSetEndAtPlayhead")
     static let clipClearRange = Notification.Name("clipClearRange")
     static let clipAddMarkerAtPlayhead = Notification.Name("clipAddMarkerAtPlayhead")
+    static let clipSuggestMarkers = Notification.Name("clipSuggestMarkers")
     static let clipJumpToStart = Notification.Name("clipJumpToStart")
     static let clipJumpToEnd = Notification.Name("clipJumpToEnd")
     static let clipCaptureFrame = Notification.Name("clipCaptureFrame")
@@ -585,8 +586,13 @@ enum URLDownloadBrowserCookiesSource: String, CaseIterable, Identifiable {
 typealias Segment = InOutCore.Segment
 
 struct CaptureTimelineMarker: Identifiable, Equatable {
-    let id = UUID()
+    let id: UUID
     let seconds: Double
+
+    init(id: UUID = UUID(), seconds: Double) {
+        self.id = id
+        self.seconds = seconds
+    }
 }
 
 enum ClipBoundaryHighlight: Equatable {

@@ -40,12 +40,16 @@ struct ClipSelectionPanel: View, Equatable {
     let playheadSeconds: Double
     let playheadCopyFlash: Bool
     let captureMarkers: [CaptureTimelineMarker]
+    let suggestedMarkers: [SmartMarkerSuggestion]
     let highlightedMarkerID: UUID?
+    let highlightedSuggestionID: UUID?
     let highlightedClipBoundary: ClipBoundaryHighlight?
     let captureFrameFlashToken: Int
     let quickExportFlashToken: Int
     let onTimelineWidthChanged: (CGFloat) -> Void
     let onSeek: (Double, Bool) -> Void
+    let onSuggestionSeek: (SmartMarkerSuggestion) -> Void
+    let onSuggestionDoubleClick: (SmartMarkerSuggestion) -> Void
     let onPlayheadDragEdgePan: (CGFloat, CGFloat) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
     let onClipBoundaryDragStateChanged: (Bool) -> Void
@@ -90,7 +94,9 @@ struct ClipSelectionPanel: View, Equatable {
         abs(lhs.playheadSeconds - rhs.playheadSeconds) < 0.0001 &&
         lhs.playheadCopyFlash == rhs.playheadCopyFlash &&
         lhs.captureMarkers == rhs.captureMarkers &&
+        lhs.suggestedMarkers == rhs.suggestedMarkers &&
         lhs.highlightedMarkerID == rhs.highlightedMarkerID &&
+        lhs.highlightedSuggestionID == rhs.highlightedSuggestionID &&
         lhs.highlightedClipBoundary == rhs.highlightedClipBoundary &&
         lhs.captureFrameFlashToken == rhs.captureFrameFlashToken &&
         lhs.quickExportFlashToken == rhs.quickExportFlashToken
@@ -116,7 +122,9 @@ struct ClipSelectionPanel: View, Equatable {
                         visibleStartSeconds: visibleStartSeconds,
                         visibleEndSeconds: visibleEndSeconds,
                         captureMarkers: captureMarkers,
+                        suggestedMarkers: suggestedMarkers,
                         highlightedMarkerID: highlightedMarkerID,
+                        highlightedSuggestionID: highlightedSuggestionID,
                         highlightedClipBoundary: highlightedClipBoundary,
                         captureFrameFlashToken: captureFrameFlashToken,
                         quickExportFlashToken: quickExportFlashToken,
@@ -132,6 +140,8 @@ struct ClipSelectionPanel: View, Equatable {
                         thumbnailStripSourceEndSeconds: thumbnailStripSourceEndSeconds,
                         thumbnailStripSourceVisibleDurationSeconds: thumbnailStripSourceVisibleDurationSeconds,
                         onSeek: onSeek,
+                        onSuggestionSeek: onSuggestionSeek,
+                        onSuggestionDoubleClick: onSuggestionDoubleClick,
                         onPlayheadDragEdgePan: onPlayheadDragEdgePan,
                         onPlayheadDragStateChanged: onPlayheadDragStateChanged,
                         onClipBoundaryDragStateChanged: onClipBoundaryDragStateChanged,

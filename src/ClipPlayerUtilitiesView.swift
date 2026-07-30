@@ -8,10 +8,14 @@ struct ClipPlayerUtilityRow: View {
     let playheadCopyFlash: Bool
     let compactZoomDisplayText: String
     let timelineZoomLevelCount: Int
+    let canSuggestMarkers: Bool
+    let isSuggestingMarkers: Bool
+    let isTranscribingForMarkers: Bool
     let onCopyPlayheadTimecode: () -> Void
     let onJumpToStart: () -> Void
     let onJumpToEnd: () -> Void
     let onCaptureFrame: () -> Void
+    let onSuggestMarkers: () -> Void
     let onZoomOut: () -> Void
     let onZoomIn: () -> Void
     let onFit: () -> Void
@@ -64,6 +68,24 @@ struct ClipPlayerUtilityRow: View {
                 .help("Save a PNG frame at the current playhead")
                 .accessibilityLabel("Capture Frame")
             }
+
+            Button(action: onSuggestMarkers) {
+                Label(
+                    isTranscribingForMarkers
+                        ? "Transcribing…"
+                        : (isSuggestingMarkers ? "Analyzing…" : "AI Suggestions…"),
+                    systemImage: "sparkles"
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!canSuggestMarkers || isSuggestingMarkers || isTranscribingForMarkers)
+            .help(
+                canSuggestMarkers
+                    ? "Generate editorial suggestions, creating a transcript first if needed"
+                    : "AI Suggestions requires an audio transcript"
+            )
+            .accessibilityLabel("AI Suggestions")
         }
     }
 
@@ -200,7 +222,10 @@ extension ClipPlayerUtilityRow: Equatable {
         lhs.playheadSeconds == rhs.playheadSeconds &&
         lhs.totalDurationSeconds == rhs.totalDurationSeconds &&
         lhs.playheadCopyFlash == rhs.playheadCopyFlash &&
-        lhs.compactZoomDisplayText == rhs.compactZoomDisplayText &&
-        lhs.timelineZoomLevelCount == rhs.timelineZoomLevelCount
+            lhs.compactZoomDisplayText == rhs.compactZoomDisplayText &&
+            lhs.timelineZoomLevelCount == rhs.timelineZoomLevelCount &&
+            lhs.canSuggestMarkers == rhs.canSuggestMarkers &&
+            lhs.isSuggestingMarkers == rhs.isSuggestingMarkers &&
+            lhs.isTranscribingForMarkers == rhs.isTranscribingForMarkers
     }
 }

@@ -242,6 +242,20 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(appearance.rawValue, forKey: DefaultsKey.appearance)
         }
     }
+    @Published var smartMarkerProvider: SmartMarkerProviderID = SmartMarkerPreferences.providerID {
+        didSet {
+            SmartMarkerPreferences.providerID = smartMarkerProvider
+        }
+    }
+    @Published var openAISmartMarkerModel: String = SmartMarkerPreferences.openAIModel {
+        didSet {
+            SmartMarkerPreferences.openAIModel = openAISmartMarkerModel
+        }
+    }
+    @Published var openAIAPIKeyConfigured = SmartMarkerPreferences.hasOpenAIKey
+    @Published var isTestingOpenAIConnection = false
+    @Published var openAIConnectionStatusText = ""
+    @Published var openAIConnectionSucceeded = false
     @Published var analyzeBlackFrames = true
     @Published var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds {
         didSet {

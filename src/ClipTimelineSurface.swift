@@ -9,6 +9,25 @@ final class WaveformRasterHostView: NSView {
         let id: UUID
         let seconds: Double
         let x: CGFloat
+        let isSuggestion: Bool
+        let toolTip: String?
+        let hitRect: CGRect?
+
+        init(
+            id: UUID,
+            seconds: Double,
+            x: CGFloat,
+            isSuggestion: Bool,
+            toolTip: String?,
+            hitRect: CGRect? = nil
+        ) {
+            self.id = id
+            self.seconds = seconds
+            self.x = x
+            self.isSuggestion = isSuggestion
+            self.toolTip = toolTip
+            self.hitRect = hitRect
+        }
     }
 
     let surfaceLayer = CALayer()
@@ -32,6 +51,7 @@ final class WaveformRasterHostView: NSView {
     let waveformClipLayer = CALayer()
     let waveformLayer = CALayer()
     let markerContainerLayer = CALayer()
+    let suggestionContainerLayer = CALayer()
     let playheadLayer = CALayer()
     weak var player: AVPlayer?
     var clipStartSeconds: Double = 0
@@ -41,6 +61,7 @@ final class WaveformRasterHostView: NSView {
     var visibleEndSeconds: Double = 1
     var showsThumbnailStrip = false
     var thumbnailStripHeight: CGFloat = 0
+    var suggestionLaneCount = 0
     var modelPlayheadSeconds: Double = 0
     var playheadDisplayWidth: CGFloat = 2
     var isDarkAppearance = false
@@ -53,6 +74,8 @@ final class WaveformRasterHostView: NSView {
     private var hasPlaybackAnchor = false
     private var lastDragSampleHostTime: CFTimeInterval = 0
     var onMarkerSeek: ((Double) -> Void)?
+    var onSuggestionSeek: ((UUID, Double) -> Void)?
+    var onSuggestionDoubleClick: ((UUID, Double) -> Void)?
     var onInteractiveSeek: ((Double, Bool) -> Void)?
     var onPlayheadDragStateChanged: ((Bool) -> Void)?
     var onClipBoundaryDragStateChanged: ((Bool) -> Void)?
@@ -239,6 +262,12 @@ final class WaveformRasterHostView: NSView {
         ]
         markerContainerLayer.masksToBounds = false
         markerContainerLayer.isGeometryFlipped = true
+        suggestionContainerLayer.actions = [
+            "sublayers": NSNull(),
+            "bounds": NSNull(),
+            "position": NSNull()
+        ]
+        suggestionContainerLayer.masksToBounds = false
         playheadLayer.backgroundColor = NSColor.systemRed.cgColor
         playheadLayer.actions = [
             "bounds": NSNull(),
@@ -258,6 +287,8 @@ final class WaveformRasterHostView: NSView {
         surfaceLayer.addSublayer(waveformClipLayer)
         markerContainerLayer.zPosition = 40
         surfaceLayer.addSublayer(markerContainerLayer)
+        suggestionContainerLayer.zPosition = 41
+        surfaceLayer.addSublayer(suggestionContainerLayer)
         playheadLayer.zPosition = 50
         surfaceLayer.addSublayer(playheadLayer)
     }
@@ -288,22 +319,20 @@ final class WaveformRasterHostView: NSView {
 
     private func markerNear(point: NSPoint) -> MarkerHotspot? {
         // Shared hover/click hit test so both behaviors match exactly.
-        markerHotspots.first(where: { abs($0.x - point.x) <= markerHitTolerance })
+        markerHotspots.first {
+            if let hitRect = $0.hitRect {
+                return hitRect.contains(point)
+            }
+            return abs($0.x - point.x) <= markerHitTolerance
+        }
     }
 
     private var visibleDuration: Double {
         max(0.0001, visibleEndSeconds - visibleStartSeconds)
     }
 
-    private var rulerHeight: CGFloat { 16 }
-    private var rulerGap: CGFloat { 2 }
-    private var markerTopGutter: CGFloat { 8 }
-    private var markerBottomGutter: CGFloat { 8 }
+    private var rulerHeight: CGFloat { TimelineSuggestionLayout.rulerHeight }
     private var thumbnailGap: CGFloat { showsThumbnailStrip ? 4 : 0 }
-    private var timelineVerticalOffset: CGFloat { rulerHeight + rulerGap + markerTopGutter }
-    private var timelineHeight: CGFloat {
-        max(1, bounds.height - rulerHeight - rulerGap - markerTopGutter - markerBottomGutter)
-    }
     private var edgeHoverProximity: CGFloat { 22 }
     private var edgeGlowWidth: CGFloat {
         let selectionWidth = abs(xPosition(for: clipEndSeconds) - xPosition(for: clipStartSeconds))
@@ -343,7 +372,10 @@ final class WaveformRasterHostView: NSView {
     }
 
     func timelineRect() -> CGRect {
-        CGRect(x: 0, y: timelineVerticalOffset, width: bounds.width, height: timelineHeight)
+        TimelineSuggestionLayout.timelineRect(
+            in: bounds,
+            laneCount: suggestionLaneCount
+        )
     }
 
     func thumbnailStripRect() -> CGRect {
@@ -393,6 +425,7 @@ final class WaveformRasterHostView: NSView {
         onPointerTimeChanged?(timeValue(forX: point.x))
         if let marker = markerNear(point: point) {
             hoveredMarkerID = marker.id
+            toolTip = marker.toolTip
             isStartEdgeHovered = false
             isEndEdgeHovered = false
             updateTimelineDecorationLayers()
@@ -400,6 +433,7 @@ final class WaveformRasterHostView: NSView {
             return
         }
         hoveredMarkerID = nil
+        toolTip = nil
         let startDistance = abs(point.x - xPosition(for: clipStartSeconds))
         let endDistance = abs(point.x - xPosition(for: clipEndSeconds))
         let nearStart = startDistance <= edgeHoverProximity
@@ -773,7 +807,22 @@ final class WaveformRasterHostView: NSView {
         CATransaction.setDisableActions(!animated)
         for (id, layer) in markerLayersByID {
             let isHighlighted = (layer.value(forKey: "isHighlighted") as? Bool) ?? false
+            let isRangeSuggestion =
+                (layer.value(forKey: "isRangeSuggestion") as? Bool) ?? false
             let isHovered = id == hoveredMarkerID
+
+            if isRangeSuggestion {
+                layer.removeAnimation(forKey: "hoverShadowOpacity")
+                layer.removeAnimation(forKey: "hoverShadowRadius")
+                layer.removeAnimation(forKey: "hoverScaleX")
+                layer.removeAnimation(forKey: "hoverScaleY")
+                layer.removeAnimation(forKey: "hoverScale")
+                layer.shadowOpacity = isHighlighted ? 0.35 : 0
+                layer.shadowRadius = isHighlighted ? 7 : 0
+                layer.transform = CATransform3DIdentity
+                continue
+            }
+
             let targetShadowOpacity: Float = {
                 if isHighlighted && isHovered { return 0.86 }
                 if isHighlighted { return 0.6 }
@@ -811,7 +860,8 @@ final class WaveformRasterHostView: NSView {
                 layer.add(radiusAnim, forKey: "hoverShadowRadius")
 
                 let scaleAnim = CABasicAnimation(keyPath: "transform.scale")
-                scaleAnim.fromValue = (layer.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat) ?? 1.0
+                scaleAnim.fromValue =
+                    (layer.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat) ?? 1.0
                 scaleAnim.toValue = targetScale
                 scaleAnim.duration = 0.12
                 scaleAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -842,6 +892,7 @@ final class WaveformRasterHostView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         hoveredMarkerID = nil
+        toolTip = nil
         isPointerInside = false
         isStartEdgeHovered = false
         isEndEdgeHovered = false
@@ -855,14 +906,16 @@ final class WaveformRasterHostView: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if let marker = markerNear(point: point) {
-            isDraggingPlayhead = true
-            lastDragCommitTimestamp = 0
-            lastDragSampleHostTime = 0
-            onPlayheadDragStateChanged?(true)
-            dragPlayheadSeconds = marker.seconds
             applyDisplayedPlayhead(marker.seconds)
-            onInteractiveSeek?(marker.seconds, true)
-            updateLivePlaybackTimerState()
+            if marker.isSuggestion {
+                if event.clickCount >= 2 {
+                    onSuggestionDoubleClick?(marker.id, marker.seconds)
+                } else {
+                    onSuggestionSeek?(marker.id, marker.seconds)
+                }
+            } else {
+                onMarkerSeek?(marker.seconds)
+            }
             return
         }
 
@@ -1002,6 +1055,7 @@ final class WaveformRasterHostView: NSView {
         waveformClipLayer.frame = waveformRect()
         waveformLayer.frame = waveformClipLayer.bounds
         markerContainerLayer.frame = timelineRect()
+        suggestionContainerLayer.frame = surfaceLayer.bounds
         updateTimelineDecorationLayers()
         PlayheadDiagnostics.shared.noteLayoutPass(source: "waveform_host_layout")
     }
@@ -1060,7 +1114,8 @@ final class WaveformRasterHostView: NSView {
 
     private func benchmarkPlayheadPoint(forX x: CGFloat) -> NSPoint {
         let clampedX = min(max(0, x), bounds.width)
-        let y = timelineVerticalOffset + (timelineHeight * 0.5)
+        let timelineRect = timelineRect()
+        let y = timelineRect.minY + (timelineRect.height * 0.5)
         return NSPoint(x: clampedX, y: y)
     }
 
@@ -1110,6 +1165,7 @@ final class WaveformRasterCoordinator {
     var lastPlayheadJumpAnimationToken: Int = -1
     var lastPlayheadCaptureFlashing: Bool = false
     var lastHighlightedMarkerID: UUID?
+    var lastHighlightedSuggestionID: UUID?
     var lastMarkerLayoutSignature: Int?
     var lastQuickExportFlashToken: Int = 0
     var lastStaticTimelineSignature: Int?
@@ -1313,7 +1369,9 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let playheadJumpAnimationToken: Int
     let isPlayheadCaptureFlashing: Bool
     let captureMarkers: [CaptureTimelineMarker]
+    let suggestedMarkers: [SmartMarkerSuggestion]
     let highlightedMarkerID: UUID?
+    let highlightedSuggestionID: UUID?
     let highlightedClipBoundary: ClipBoundaryHighlight?
     let quickExportFlashToken: Int
     let showsThumbnailStrip: Bool
@@ -1328,6 +1386,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let thumbnailStripSourceEndSeconds: Double
     let thumbnailStripSourceVisibleDurationSeconds: Double
     let onMarkerSeek: (Double) -> Void
+    let onSuggestionSeek: (UUID, Double) -> Void
+    let onSuggestionDoubleClick: (UUID, Double) -> Void
     let onInteractiveSeek: (Double, Bool) -> Void
     let onPlayheadDragStateChanged: (Bool) -> Void
     let onClipBoundaryDragStateChanged: (Bool) -> Void
@@ -1355,7 +1415,9 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         lhs.playheadJumpAnimationToken == rhs.playheadJumpAnimationToken &&
         lhs.isPlayheadCaptureFlashing == rhs.isPlayheadCaptureFlashing &&
         lhs.captureMarkers == rhs.captureMarkers &&
+        lhs.suggestedMarkers == rhs.suggestedMarkers &&
         lhs.highlightedMarkerID == rhs.highlightedMarkerID &&
+        lhs.highlightedSuggestionID == rhs.highlightedSuggestionID &&
         lhs.highlightedClipBoundary == rhs.highlightedClipBoundary &&
         lhs.showsThumbnailStrip == rhs.showsThumbnailStrip &&
         abs(lhs.thumbnailStripHeight - rhs.thumbnailStripHeight) < 0.0001 &&
@@ -1376,6 +1438,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     func makeNSView(context: Context) -> WaveformRasterHostView {
         let view = WaveformRasterHostView()
         view.onMarkerSeek = onMarkerSeek
+        view.onSuggestionSeek = onSuggestionSeek
+        view.onSuggestionDoubleClick = onSuggestionDoubleClick
         view.onInteractiveSeek = onInteractiveSeek
         view.onPlayheadDragStateChanged = onPlayheadDragStateChanged
         view.onClipBoundaryDragStateChanged = onClipBoundaryDragStateChanged
@@ -1391,6 +1455,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     func updateNSView(_ nsView: WaveformRasterHostView, context: Context) {
         let diagnosticsStart = CACurrentMediaTime()
         nsView.onMarkerSeek = onMarkerSeek
+        nsView.onSuggestionSeek = onSuggestionSeek
+        nsView.onSuggestionDoubleClick = onSuggestionDoubleClick
         nsView.onInteractiveSeek = onInteractiveSeek
         nsView.onPlayheadDragStateChanged = onPlayheadDragStateChanged
         nsView.onClipBoundaryDragStateChanged = onClipBoundaryDragStateChanged
@@ -1409,9 +1475,31 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.modelPlayheadSeconds = playheadSeconds
         nsView.isDarkAppearance = isDarkAppearance
         nsView.highlightedClipBoundary = highlightedClipBoundary
+        let suggestionLaneByID = TimelineSuggestionLayout.laneAssignments(
+            for: suggestedMarkers.map {
+                TimelineSuggestionInterval(
+                    id: $0.id,
+                    startSeconds: $0.seconds,
+                    endSeconds: $0.endSeconds ?? $0.seconds
+                )
+            }
+        )
+        let visibleSuggestionLaneCount = suggestedMarkers.compactMap { suggestion -> Int? in
+            let endSeconds = suggestion.endSeconds ?? suggestion.seconds
+            guard endSeconds >= visibleStartSeconds,
+                  suggestion.seconds <= visibleEndSeconds,
+                  let lane = suggestionLaneByID[suggestion.id] else {
+                return nil
+            }
+            return lane + 1
+        }.max() ?? 0
+        let suggestionGeometryChanged =
+            nsView.suggestionLaneCount != visibleSuggestionLaneCount
+        nsView.suggestionLaneCount = visibleSuggestionLaneCount
         let thumbnailGeometryChanged =
             nsView.showsThumbnailStrip != showsThumbnailStrip ||
-            abs(nsView.thumbnailStripHeight - thumbnailStripHeight) > 0.0001
+            abs(nsView.thumbnailStripHeight - thumbnailStripHeight) > 0.0001 ||
+            suggestionGeometryChanged
         nsView.showsThumbnailStrip = showsThumbnailStrip
         nsView.thumbnailStripHeight = thumbnailStripHeight
         context.coordinator.setZoomRenderBuckets(renderBuckets)
@@ -1441,6 +1529,15 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             staticTimelineHasher.combine(marker.id)
             staticTimelineHasher.combine(Int((marker.seconds * 1000).rounded()))
         }
+        staticTimelineHasher.combine(suggestedMarkers.count)
+        staticTimelineHasher.combine(highlightedSuggestionID)
+        for marker in suggestedMarkers {
+            staticTimelineHasher.combine(marker.id)
+            staticTimelineHasher.combine(Int((marker.seconds * 1000).rounded()))
+            staticTimelineHasher.combine(
+                marker.endSeconds.map { Int(($0 * 1000).rounded()) }
+            )
+        }
         let staticTimelineSignature = staticTimelineHasher.finalize()
         let needsFullTimelineUpdate = context.coordinator.lastStaticTimelineSignature != staticTimelineSignature
         var image: CGImage?
@@ -1467,6 +1564,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             nsView.waveformClipLayer.frame = waveformRect
             nsView.waveformLayer.frame = nsView.waveformClipLayer.bounds
             nsView.markerContainerLayer.frame = timelineRect
+            nsView.suggestionContainerLayer.frame = nsView.surfaceLayer.bounds
             context.coordinator.lastAppliedBounds = nsView.bounds
         }
 
@@ -1721,14 +1819,30 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
             let visibleMarkers = captureMarkers.enumerated().filter { _, marker in
                 marker.seconds >= visibleStartSeconds && marker.seconds <= visibleEndSeconds
             }
+            let visibleSuggestions = suggestedMarkers.filter {
+                let suggestionEnd = $0.endSeconds ?? $0.seconds
+                return suggestionEnd >= visibleStartSeconds && $0.seconds <= visibleEndSeconds
+            }
             var markerLayoutHasher = Hasher()
             markerLayoutHasher.combine(visibleMarkers.count)
+            markerLayoutHasher.combine(visibleSuggestions.count)
             markerLayoutHasher.combine(highlightedMarkerID)
+            markerLayoutHasher.combine(highlightedSuggestionID)
             markerLayoutHasher.combine(Int((nsView.bounds.width * backingScale).rounded()))
             markerLayoutHasher.combine(Int((nsView.bounds.height * backingScale).rounded()))
             for (_, marker) in visibleMarkers {
                 markerLayoutHasher.combine(marker.id)
                 markerLayoutHasher.combine(Int((snapToPixel(xPosition(for: marker.seconds)) * backingScale).rounded()))
+            }
+            for marker in visibleSuggestions {
+                markerLayoutHasher.combine(marker.id)
+                markerLayoutHasher.combine(suggestionLaneByID[marker.id])
+                markerLayoutHasher.combine(Int((snapToPixel(xPosition(for: marker.seconds)) * backingScale).rounded()))
+                markerLayoutHasher.combine(
+                    marker.endSeconds.map {
+                        Int((snapToPixel(xPosition(for: $0)) * backingScale).rounded())
+                    }
+                )
             }
             let markerLayoutSignature = markerLayoutHasher.finalize()
 
@@ -1736,9 +1850,17 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                 let markerLayoutStart = CACurrentMediaTime()
                 var markerHotspots: [WaveformRasterHostView.MarkerHotspot] = []
                 var markerLayersByID: [UUID: CALayer] = [:]
-                markerContainer.sublayers = visibleMarkers.map { _, marker in
+                let permanentLayers = visibleMarkers.map { _, marker in
                     let markerX = snapToPixel(xPosition(for: marker.seconds))
-                    markerHotspots.append(.init(id: marker.id, seconds: marker.seconds, x: markerX))
+                    markerHotspots.append(
+                        .init(
+                            id: marker.id,
+                            seconds: marker.seconds,
+                            x: markerX,
+                            isSuggestion: false,
+                            toolTip: nil
+                        )
+                    )
                     let isHighlighted = marker.id == highlightedMarkerID
                     let pinColor = NSColor.systemOrange.withAlphaComponent(isHighlighted ? 1.0 : 0.9)
 
@@ -1770,6 +1892,176 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                     markerLayersByID[marker.id] = pin
                     return pin
                 }
+                let suggestionLayers = visibleSuggestions.map { marker in
+                    let suggestionLane = suggestionLaneByID[marker.id] ?? 0
+                    let rawMarkerX = snapToPixel(xPosition(for: marker.seconds))
+                    let markerX = max(0, min(timelineRect.width, rawMarkerX))
+                    let rangeEndX = marker.endSeconds.map {
+                        max(0, min(timelineRect.width, snapToPixel(xPosition(for: $0))))
+                    }
+                    let rangeDescription = marker.endSeconds.map {
+                        "\(formatSeconds(marker.seconds)) → \(formatSeconds($0))"
+                    }
+                    let toolTip = [
+                        rangeDescription,
+                        marker.label,
+                        marker.explanation
+                    ].compactMap { $0 }.joined(separator: "\n")
+                    let isHighlighted = marker.id == highlightedSuggestionID
+                    let suggestionColor = NSColor.systemTeal
+                    if let rangeEndX {
+                        let startX = min(markerX, rangeEndX)
+                        let width = max(4, abs(rangeEndX - markerX))
+                        let rangeColor = suggestionColor
+                        let container = CALayer()
+                        container.frame = TimelineSuggestionLayout.annotationFrame(
+                            timelineRect: timelineRect,
+                            lane: suggestionLane,
+                            startX: startX,
+                            endX: startX + width
+                        )
+                        container.setValue(isHighlighted, forKey: "isHighlighted")
+                        container.setValue(true, forKey: "isRangeSuggestion")
+
+                        let line = CALayer()
+                        line.frame = CGRect(x: 5, y: 5.5, width: width, height: 5)
+                        line.backgroundColor = rangeColor.withAlphaComponent(
+                            isHighlighted ? 0.95 : 0.72
+                        ).cgColor
+                        line.cornerRadius = 2.5
+                        line.shadowColor = rangeColor.cgColor
+                        line.shadowOpacity = isHighlighted ? 0.9 : 0.55
+                        line.shadowRadius = isHighlighted ? 6 : 4
+                        line.shadowOffset = .zero
+                        container.addSublayer(line)
+
+                        let endpointXs: [CGFloat] = [5, width + 5]
+                        for endpointX in endpointXs {
+                            let pin = CALayer()
+                            pin.frame = CGRect(
+                                x: endpointX - 4,
+                                y: 3.5,
+                                width: 8,
+                                height: 8
+                            )
+                            pin.backgroundColor = rangeColor.withAlphaComponent(
+                                isHighlighted ? 1.0 : 0.9
+                            ).cgColor
+                            pin.borderColor = NSColor.white.withAlphaComponent(
+                                isHighlighted ? 0.8 : 0.48
+                            ).cgColor
+                            pin.borderWidth = 1
+                            pin.cornerRadius = 4
+                            pin.shadowColor = rangeColor.cgColor
+                            pin.shadowOpacity = isHighlighted ? 0.9 : 0.6
+                            pin.shadowRadius = isHighlighted ? 5 : 3
+                            pin.shadowOffset = .zero
+                            container.addSublayer(pin)
+
+                            let stem = CALayer()
+                            stem.frame = CGRect(
+                                x: endpointX - 1,
+                                y: 10.5,
+                                width: 2,
+                                height: 4
+                            )
+                            stem.backgroundColor = rangeColor.withAlphaComponent(
+                                isHighlighted ? 1.0 : 0.78
+                            ).cgColor
+                            stem.cornerRadius = 1
+                            container.addSublayer(stem)
+                        }
+
+                        container.shadowColor = rangeColor.cgColor
+                        container.shadowOpacity = isHighlighted ? 0.35 : 0
+                        container.shadowRadius = isHighlighted ? 7 : 0
+                        let renderedHitRect = nsView.suggestionContainerLayer.convert(
+                            TimelineSuggestionLayout.hitRect(for: container.frame),
+                            to: nsView.layer ?? nsView.surfaceLayer
+                        )
+                        markerHotspots.append(
+                            .init(
+                                id: marker.id,
+                                seconds: marker.seconds,
+                                x: markerX,
+                                isSuggestion: true,
+                                toolTip: toolTip,
+                                hitRect: renderedHitRect
+                            )
+                        )
+                        markerLayersByID[marker.id] = container
+                        return container
+                    }
+
+                    let annotationFrame = TimelineSuggestionLayout.annotationFrame(
+                        timelineRect: timelineRect,
+                        lane: suggestionLane,
+                        startX: markerX
+                    )
+                    let headSize: CGFloat = isHighlighted ? 9 : 8
+                    let headOriginY =
+                        annotationFrame.minY +
+                        ((TimelineSuggestionLayout.annotationHeight - headSize) / 2)
+                    let pinTopY = timelineRect.minY - 2
+                    let headLocalY = headOriginY - pinTopY
+
+                    let pin = CALayer()
+                    pin.frame = CGRect(
+                        x: markerX - (headSize / 2),
+                        y: pinTopY,
+                        width: headSize,
+                        height: headLocalY + headSize
+                    )
+                    pin.setValue(isHighlighted, forKey: "isHighlighted")
+
+                    let stem = CALayer()
+                    let stemWidth: CGFloat = isHighlighted ? 2.6 : 2.0
+                    stem.frame = CGRect(
+                        x: (headSize - stemWidth) / 2,
+                        y: 0,
+                        width: stemWidth,
+                        height: headLocalY
+                    )
+                    stem.backgroundColor = suggestionColor.withAlphaComponent(
+                        isHighlighted ? 0.96 : 0.8
+                    ).cgColor
+                    pin.addSublayer(stem)
+
+                    let head = CALayer()
+                    head.frame = CGRect(
+                        x: 0,
+                        y: headLocalY,
+                        width: headSize,
+                        height: headSize
+                    )
+                    head.backgroundColor = suggestionColor.withAlphaComponent(
+                        isHighlighted ? 1.0 : 0.9
+                    ).cgColor
+                    head.cornerRadius = headSize / 2
+                    pin.addSublayer(head)
+
+                    pin.shadowColor = suggestionColor.cgColor
+                    pin.shadowOpacity = isHighlighted ? 0.6 : 0
+                    pin.shadowRadius = isHighlighted ? 4 : 0
+                    let renderedHitRect = nsView.suggestionContainerLayer.convert(
+                        TimelineSuggestionLayout.hitRect(for: annotationFrame),
+                        to: nsView.layer ?? nsView.surfaceLayer
+                    )
+                    markerHotspots.append(
+                        .init(
+                            id: marker.id,
+                            seconds: marker.seconds,
+                            x: markerX,
+                            isSuggestion: true,
+                            toolTip: toolTip,
+                            hitRect: renderedHitRect
+                        )
+                    )
+                    markerLayersByID[marker.id] = pin
+                    return pin
+                }
+                markerContainer.sublayers = permanentLayers
+                nsView.suggestionContainerLayer.sublayers = suggestionLayers
                 nsView.markerHotspots = markerHotspots
                 nsView.markerLayersByID = markerLayersByID
                 context.coordinator.lastMarkerLayoutSignature = markerLayoutSignature
@@ -1801,6 +2093,29 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                 pinLayer.add(pulse, forKey: "markerPulse")
             }
             context.coordinator.lastHighlightedMarkerID = highlightedMarkerID
+
+            if highlightedSuggestionID != context.coordinator.lastHighlightedSuggestionID,
+               let highlightedSuggestionID,
+               let pinLayer = nsView.markerLayersByID[highlightedSuggestionID],
+               (pinLayer.value(forKey: "isRangeSuggestion") as? Bool) != true {
+                let glow = CABasicAnimation(keyPath: "shadowOpacity")
+                glow.fromValue = 0.0
+                glow.toValue = 0.6
+                glow.duration = 0.16
+                glow.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                glow.isRemovedOnCompletion = true
+                pinLayer.add(glow, forKey: "markerGlow")
+
+                let pulse = CABasicAnimation(keyPath: "transform.scale")
+                pulse.fromValue = 1.0
+                pulse.toValue = 1.09
+                pulse.duration = 0.10
+                pulse.autoreverses = true
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                pulse.isRemovedOnCompletion = true
+                pinLayer.add(pulse, forKey: "markerPulse")
+            }
+            context.coordinator.lastHighlightedSuggestionID = highlightedSuggestionID
         }
 
         CATransaction.commit()

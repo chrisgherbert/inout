@@ -222,13 +222,14 @@ extension WorkspaceViewModel {
         highlightedClipBoundary = nil
     }
 
-    private func addCaptureTimelineMarker(at seconds: Double) {
+    @discardableResult
+    private func addCaptureTimelineMarker(at seconds: Double) -> Bool {
         let clamped = max(0, min(seconds, max(sourceDurationSeconds, seconds)))
 
         if let existing = captureTimelineMarkers.first(where: { abs($0.seconds - clamped) < 0.001 }) {
             highlightedCaptureTimelineMarkerID = existing.id
             scheduleCaptureMarkerHighlightClear(markerID: existing.id)
-            return
+            return false
         }
 
         let marker = CaptureTimelineMarker(seconds: clamped)
@@ -239,6 +240,7 @@ extension WorkspaceViewModel {
         }
         highlightedCaptureTimelineMarkerID = marker.id
         scheduleCaptureMarkerHighlightClear(markerID: marker.id)
+        return true
     }
 
     private func scheduleCaptureMarkerHighlightClear(markerID: UUID) {

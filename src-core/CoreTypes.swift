@@ -46,17 +46,37 @@ public struct ProfanityHit: Identifiable {
     }
 }
 
+public struct TranscriptWordTiming: Sendable {
+    public let word: String
+    public let start: Double
+    public let end: Double
+
+    public init(word: String, start: Double, end: Double) {
+        self.word = word
+        self.start = start
+        self.end = end
+    }
+}
+
 public struct TranscriptSegment: Identifiable {
     public let id: UUID
     public let start: Double
     public let end: Double
     public let text: String
+    public let timedWords: [TranscriptWordTiming]
 
-    public init(id: UUID = UUID(), start: Double, end: Double, text: String) {
+    public init(
+        id: UUID = UUID(),
+        start: Double,
+        end: Double,
+        text: String,
+        timedWords: [TranscriptWordTiming] = []
+    ) {
         self.id = id
         self.start = start
         self.end = end
         self.text = text
+        self.timedWords = timedWords
     }
 
     public var duration: Double {

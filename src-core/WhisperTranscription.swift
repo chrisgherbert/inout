@@ -542,6 +542,7 @@ private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackTe
 
     var segments: [TranscriptSegment] = []
     var currentText = ""
+    var currentWords: [ParakeetWordTiming] = []
     var currentStart = max(0, words[0].startTime)
     var currentEnd = max(currentStart + 0.05, words[0].endTime)
     var previousEnd = currentEnd
@@ -552,16 +553,25 @@ private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackTe
         let text = normalizedParakeetTranscriptText(currentText)
         guard !text.isEmpty else {
             currentText = ""
+            currentWords.removeAll(keepingCapacity: true)
             return
         }
         segments.append(
             TranscriptSegment(
                 start: max(0, currentStart),
                 end: max(currentStart + 0.05, currentEnd),
-                text: text
+                text: text,
+                timedWords: currentWords.map {
+                    TranscriptWordTiming(
+                        word: $0.word,
+                        start: max(0, $0.startTime),
+                        end: max($0.startTime + 0.05, $0.endTime)
+                    )
+                }
             )
         )
         currentText = ""
+        currentWords.removeAll(keepingCapacity: true)
     }
 
     for word in words {
@@ -589,6 +599,7 @@ private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackTe
         } else {
             currentText += " " + word.word
         }
+        currentWords.append(word)
         currentEnd = max(currentEnd, wordEnd)
         previousEnd = wordEnd
     }
@@ -612,7 +623,8 @@ private func makeParakeetSegments(from tokens: [ParakeetTokenTiming], fallbackTe
                 id: segment.id,
                 start: segment.start,
                 end: max(segment.start + 0.05, adjustedEnd),
-                text: segment.text
+                text: segment.text,
+                timedWords: segment.timedWords
             )
         )
     }
