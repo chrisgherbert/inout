@@ -44,6 +44,13 @@ struct ClipPlayerUtilityRow: View {
 
     private var navigationControls: some View {
         HStack(spacing: 6) {
+            clipNavigationControls
+            aiSuggestionsButton
+        }
+    }
+
+    private var clipNavigationControls: some View {
+        HStack(spacing: 6) {
             ControlGroup {
                 Button(action: onJumpToStart) {
                     Image(systemName: "backward.end.fill")
@@ -68,24 +75,38 @@ struct ClipPlayerUtilityRow: View {
                 .help("Save a PNG frame at the current playhead")
                 .accessibilityLabel("Capture Frame")
             }
+        }
+    }
 
-            Button(action: onSuggestMarkers) {
-                Label(
-                    isTranscribingForMarkers
-                        ? "Transcribing…"
-                        : (isSuggestingMarkers ? "Analyzing…" : "AI Suggestions…"),
-                    systemImage: "sparkles"
-                )
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(!canSuggestMarkers || isSuggestingMarkers || isTranscribingForMarkers)
-            .help(
-                canSuggestMarkers
-                    ? "Generate editorial suggestions, creating a transcript first if needed"
-                    : "AI Suggestions requires an audio transcript"
+    private var aiSuggestionsButton: some View {
+        Button(action: onSuggestMarkers) {
+            Label(
+                isTranscribingForMarkers
+                    ? "Transcribing…"
+                    : (isSuggestingMarkers ? "Analyzing…" : "AI Suggestions…"),
+                systemImage: "sparkles"
             )
-            .accessibilityLabel("AI Suggestions")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(!canSuggestMarkers || isSuggestingMarkers || isTranscribingForMarkers)
+        .help(
+            canSuggestMarkers
+                ? "Generate editorial suggestions, creating a transcript first if needed"
+                : "AI Suggestions requires an audio transcript"
+        )
+        .accessibilityLabel("AI Suggestions")
+    }
+
+    private var compactNavigationControls: some View {
+        ViewThatFits(in: .horizontal) {
+            navigationControls
+                .fixedSize(horizontal: true, vertical: false)
+
+            VStack(alignment: .leading, spacing: 6) {
+                clipNavigationControls
+                aiSuggestionsButton
+            }
         }
     }
 
@@ -204,7 +225,7 @@ struct ClipPlayerUtilityRow: View {
 
     private var compactLayout: some View {
         VStack(alignment: .leading, spacing: 8) {
-            navigationControls
+            compactNavigationControls
 
             timecodeReadout
 
