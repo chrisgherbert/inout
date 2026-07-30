@@ -1,9 +1,11 @@
 import Foundation
 
-enum SmartMarkerOutputKind: String, Sendable {
+enum SmartMarkerOutputKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case markers
     case ranges
     case text
+
+    var id: String { rawValue }
 
     var title: String {
         switch self {
@@ -78,6 +80,185 @@ enum SmartMarkerRecipe: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum SmartMarkerSelectionStrategy: String, Codable, CaseIterable, Identifiable, Sendable {
+    case bestResults
+    case timelineCoverage
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .bestResults: return "Best Results"
+        case .timelineCoverage: return "Timeline Coverage"
+        }
+    }
+}
+
+enum SmartMarkerTextMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case timestampedList
+    case document
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .timestampedList: return "Timestamped List"
+        case .document: return "Document"
+        }
+    }
+}
+
+struct SmartMarkerCustomRecipe: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID
+    var name: String
+    var summary: String
+    var instructions: String
+    var outputKind: SmartMarkerOutputKind
+    var defaultScope: SmartMarkerScope
+    var defaultDensity: SmartMarkerDensity
+    var selectionStrategy: SmartMarkerSelectionStrategy
+    var maximumResults: Int
+    var prefersNearbyPauses: Bool
+    var textMode: SmartMarkerTextMode? = nil
+
+    static func newRecipe() -> SmartMarkerCustomRecipe {
+        SmartMarkerCustomRecipe(
+            id: UUID(),
+            name: "",
+            summary: "",
+            instructions: "",
+            outputKind: .markers,
+            defaultScope: .entireVideo,
+            defaultDensity: .standard,
+            selectionStrategy: .bestResults,
+            maximumResults: 10,
+            prefersNearbyPauses: false,
+            textMode: nil
+        )
+    }
+
+    var normalized: SmartMarkerCustomRecipe {
+        var result = self
+        result.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        result.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        result.instructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        result.maximumResults = min(60, max(1, maximumResults))
+        if result.outputKind != .markers {
+            result.prefersNearbyPauses = false
+        }
+        if result.outputKind == .text {
+            result.textMode = result.textMode ?? .document
+        } else {
+            result.textMode = nil
+        }
+        return result
+    }
+}
+
+enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
+    case builtIn(SmartMarkerRecipe)
+    case custom(SmartMarkerCustomRecipe)
+
+    static let topicChanges = SmartMarkerAnalysisRecipe.builtIn(.topicChanges)
+    static let highlights = SmartMarkerAnalysisRecipe.builtIn(.highlights)
+    static let adBreaks = SmartMarkerAnalysisRecipe.builtIn(.adBreaks)
+    static let notableExcerpts = SmartMarkerAnalysisRecipe.builtIn(.notableExcerpts)
+    static let youtubeChapters = SmartMarkerAnalysisRecipe.builtIn(.youtubeChapters)
+
+    var id: String {
+        switch self {
+        case .builtIn(let recipe): return "built-in:\(recipe.rawValue)"
+        case .custom(let recipe): return "custom:\(recipe.id.uuidString)"
+        }
+    }
+
+    var builtInRecipe: SmartMarkerRecipe? {
+        guard case .builtIn(let recipe) = self else { return nil }
+        return recipe
+    }
+
+    var title: String {
+        switch self {
+        case .builtIn(let recipe): return recipe.title
+        case .custom(let recipe): return recipe.name
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .builtIn(let recipe): return recipe.description
+        case .custom(let recipe): return recipe.summary
+        }
+    }
+
+    var outputKind: SmartMarkerOutputKind {
+        switch self {
+        case .builtIn(let recipe): return recipe.outputKind
+        case .custom(let recipe): return recipe.outputKind
+        }
+    }
+
+    var markerCategory: String {
+        switch self {
+        case .builtIn(let recipe): return recipe.markerCategory
+        case .custom(let recipe): return recipe.name
+        }
+    }
+
+    var resultTypeTitle: String { outputKind.title }
+    var producesRanges: Bool { outputKind == .ranges }
+    var isAdBreaks: Bool { builtInRecipe == .adBreaks }
+    var isYouTubeChapters: Bool { builtInRecipe == .youtubeChapters }
+
+    var textMode: SmartMarkerTextMode? {
+        switch self {
+        case .builtIn(.youtubeChapters): return .timestampedList
+        case .builtIn: return nil
+        case .custom(let recipe):
+            guard recipe.outputKind == .text else { return nil }
+            return recipe.textMode ?? .document
+        }
+    }
+
+    var isDocumentText: Bool { textMode == .document }
+
+    var defaultScope: SmartMarkerScope {
+        switch self {
+        case .builtIn(.youtubeChapters): return .entireVideo
+        case .builtIn: return .selectedClip
+        case .custom(let recipe): return recipe.defaultScope
+        }
+    }
+
+    var defaultDensity: SmartMarkerDensity {
+        switch self {
+        case .builtIn: return .standard
+        case .custom(let recipe): return recipe.defaultDensity
+        }
+    }
+
+    var selectionStrategy: SmartMarkerSelectionStrategy {
+        switch self {
+        case .builtIn(.youtubeChapters): return .timelineCoverage
+        case .builtIn: return .bestResults
+        case .custom(let recipe): return recipe.selectionStrategy
+        }
+    }
+
+    var maximumResults: Int? {
+        guard case .custom(let recipe) = self else { return nil }
+        return recipe.maximumResults
+    }
+
+    var prefersNearbyPauses: Bool {
+        switch self {
+        case .builtIn(.adBreaks): return true
+        case .builtIn: return false
+        case .custom(let recipe): return recipe.prefersNearbyPauses
+        }
+    }
+}
+
 func formatSmartMarkerChapterTimestamp(_ seconds: Double) -> String {
     let totalSeconds = max(0, Int(seconds.rounded()))
     let hours = totalSeconds / 3_600
@@ -90,7 +271,7 @@ func smartMarkerTextLine(for suggestion: SmartMarkerSuggestion) -> String {
     "\(formatSmartMarkerChapterTimestamp(suggestion.seconds)) \(suggestion.label)"
 }
 
-enum SmartMarkerScope: String, CaseIterable, Identifiable, Sendable {
+enum SmartMarkerScope: String, Codable, CaseIterable, Identifiable, Sendable {
     case selectedClip
     case entireVideo
 
@@ -104,7 +285,7 @@ enum SmartMarkerScope: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum SmartMarkerDensity: String, CaseIterable, Identifiable, Sendable {
+enum SmartMarkerDensity: String, Codable, CaseIterable, Identifiable, Sendable {
     case fewer
     case standard
     case more
@@ -179,10 +360,43 @@ struct SmartMarkerSuggestion: Identifiable, Equatable, Hashable, Sendable {
     }
 }
 
+enum SmartMarkerRefinementRole: String, Hashable, Sendable {
+    case user
+    case assistant
+}
+
+struct SmartMarkerRefinementMessage: Identifiable, Hashable, Sendable {
+    let id: UUID
+    let role: SmartMarkerRefinementRole
+    let text: String
+
+    init(
+        id: UUID = UUID(),
+        role: SmartMarkerRefinementRole,
+        text: String
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+    }
+}
+
+struct SmartMarkerRefinementContext: Equatable, Sendable {
+    let entries: [SmartMarkerTranscriptEntry]
+    let scopeStart: Double
+    let scopeEnd: Double
+    let totalDuration: Double
+}
+
+struct SmartMarkerResultSnapshot: Equatable, Sendable {
+    let suggestions: [SmartMarkerSuggestion]
+    let documentText: String
+}
+
 struct SmartMarkerAnalysisConfiguration: Equatable, Sendable {
     let providerID: SmartMarkerProviderID
     let modelIdentifier: String?
-    let recipe: SmartMarkerRecipe
+    let recipe: SmartMarkerAnalysisRecipe
     let scope: SmartMarkerScope
     let density: SmartMarkerDensity
     let preferNearbyPauses: Bool
@@ -193,6 +407,12 @@ struct SmartMarkerAnalysisTab: Identifiable, Equatable, Sendable {
     let title: String
     let configuration: SmartMarkerAnalysisConfiguration
     var suggestions: [SmartMarkerSuggestion]
+    var documentText: String
+    var refinementContext: SmartMarkerRefinementContext?
+    var refinementMessages: [SmartMarkerRefinementMessage]
+    var refinementRevisions: [SmartMarkerResultSnapshot]
+    var isRefining: Bool
+    var refinementErrorText: String
     var deletedSuggestionIDs: Set<UUID>
     var highlightedSuggestionID: UUID?
     var scrollPositionSuggestionID: UUID?
@@ -218,7 +438,7 @@ struct SmartMarkerAnalysisTab: Identifiable, Equatable, Sendable {
 
 }
 
-struct SmartMarkerTranscriptEntry: Sendable {
+struct SmartMarkerTranscriptEntry: Equatable, Sendable {
     let ordinal: Int
     let segmentID: UUID
     let start: Double
@@ -244,7 +464,7 @@ enum SmartMarkerAnalysisError: LocalizedError {
         switch self {
         case .unavailable(let message): return message
         case .noTranscriptInScope: return "There is no transcript in the selected range."
-        case .noSuggestions: return "No suitable marker suggestions were found."
+        case .noSuggestions: return "No suitable results were generated."
         case .allSectionsBlocked:
             return "The selected AI provider couldn’t analyze any section of this transcript."
         }
@@ -253,6 +473,7 @@ enum SmartMarkerAnalysisError: LocalizedError {
 
 struct SmartMarkerAnalysisOutcome: Sendable {
     let suggestions: [SmartMarkerSuggestion]
+    let documentText: String
     let skippedSectionCount: Int
 }
 
@@ -398,6 +619,14 @@ struct SmartMarkerAnalyzer {
             from: input.entries,
             tokenLimit: provider.transcriptTokenLimit
         )
+        if configuration.recipe.isDocumentText {
+            return try await analyzeDocument(
+                provider: provider,
+                windows: windows,
+                configuration: configuration,
+                progress: progress
+            )
+        }
         let duration = max(1, input.scopeEnd - input.scopeStart)
         let targetCount = targetSuggestionCount(
             duration: duration,
@@ -421,7 +650,7 @@ struct SmartMarkerAnalyzer {
                     )
                 )
                 let windowLimit: Int
-                if configuration.recipe.outputKind == .text {
+                if configuration.recipe.selectionStrategy == .timelineCoverage {
                     let candidatePoolTarget = min(
                         provider.maximumCandidatesPerWindow,
                         targetCount * 2
@@ -482,7 +711,7 @@ struct SmartMarkerAnalyzer {
                     rangeEndSeconds = nil
                 }
                 let resolvedSeconds: Double
-                if configuration.recipe == .adBreaks, configuration.preferNearbyPauses {
+                if configuration.preferNearbyPauses {
                     resolvedSeconds = quietPoint(
                         near: rawSeconds,
                         samples: input.waveformSamples,
@@ -538,6 +767,54 @@ struct SmartMarkerAnalyzer {
         }
         return SmartMarkerAnalysisOutcome(
             suggestions: suggestions,
+            documentText: "",
+            skippedSectionCount: skippedSectionCount
+        )
+    }
+
+    private static func analyzeDocument(
+        provider: any SmartMarkerCandidateProvider,
+        windows: [[SmartMarkerTranscriptEntry]],
+        configuration: SmartMarkerAnalysisConfiguration,
+        progress: @escaping @MainActor (
+            _ completed: Int,
+            _ total: Int,
+            _ suggestions: [SmartMarkerSuggestion],
+            _ skippedSections: Int
+        ) -> Void
+    ) async throws -> SmartMarkerAnalysisOutcome {
+        var sections: [String] = []
+        var skippedSectionCount = 0
+        for (index, window) in windows.enumerated() {
+            try Task.checkCancellation()
+            do {
+                let text = try await provider.generateDocument(
+                    entries: window,
+                    recipe: configuration.recipe
+                ).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    sections.append(text)
+                }
+            } catch let error as SmartMarkerProviderError {
+                if case .sectionBlocked = error {
+                    skippedSectionCount += 1
+                } else {
+                    throw error
+                }
+            }
+            await progress(index + 1, windows.count, [], skippedSectionCount)
+        }
+
+        let documentText = sections.joined(separator: "\n\n")
+        guard !documentText.isEmpty else {
+            if skippedSectionCount == windows.count {
+                throw SmartMarkerAnalysisError.allSectionsBlocked
+            }
+            throw SmartMarkerAnalysisError.noSuggestions
+        }
+        return SmartMarkerAnalysisOutcome(
+            suggestions: [],
+            documentText: documentText,
             skippedSectionCount: skippedSectionCount
         )
     }
@@ -602,11 +879,14 @@ struct SmartMarkerAnalyzer {
             1,
             min(60, Int(ceil(duration / configuration.density.targetIntervalSeconds)))
         )
-        guard configuration.recipe == .youtubeChapters else {
-            return calculated
+        if configuration.recipe.isYouTubeChapters {
+            let chapterLimit = duration > 30 * 60 ? 12 : 6
+            return min(calculated, chapterLimit)
         }
-        let chapterLimit = duration > 30 * 60 ? 12 : 6
-        return min(calculated, chapterLimit)
+        if let maximumResults = configuration.recipe.maximumResults {
+            return min(calculated, maximumResults)
+        }
+        return calculated
     }
 
     static func parseMarkerResponse(
@@ -615,6 +895,70 @@ struct SmartMarkerAnalyzer {
         SmartMarkerProviderPrompt.parseAppleResponse(response).map {
             ($0.segmentID, $0.label, $0.explanation)
         }
+    }
+
+    static func resolveRefinementSuggestions(
+        _ generated: [SmartMarkerGeneratedCandidate],
+        context: SmartMarkerRefinementContext,
+        configuration: SmartMarkerAnalysisConfiguration
+    ) throws -> [SmartMarkerSuggestion] {
+        let entriesByOrdinal = Dictionary(
+            uniqueKeysWithValues: context.entries.map { ($0.ordinal, $0) }
+        )
+        var candidates: [SmartMarkerSuggestion] = []
+        for result in generated {
+            guard let entry = entriesByOrdinal[result.segmentID] else { continue }
+            let seconds = max(context.scopeStart, min(entry.start, context.scopeEnd))
+            let endSeconds: Double?
+            if configuration.recipe.producesRanges {
+                guard let endSegmentID = result.endSegmentID,
+                      let endEntry = entriesByOrdinal[endSegmentID] else {
+                    continue
+                }
+                let resolvedEnd = max(
+                    context.scopeStart,
+                    min(endEntry.end, context.scopeEnd)
+                )
+                guard resolvedEnd > seconds + 0.25 else { continue }
+                endSeconds = resolvedEnd
+            } else {
+                endSeconds = nil
+            }
+            candidates.append(
+                SmartMarkerSuggestion(
+                    sourceSegmentID: entry.segmentID,
+                    seconds: seconds,
+                    endSeconds: endSeconds,
+                    category: configuration.recipe.markerCategory,
+                    label: concise(
+                        result.label,
+                        fallback: configuration.recipe.markerCategory
+                    ),
+                    explanation: concise(
+                        result.explanation,
+                        fallback: "Revised from the current analysis.",
+                        maximumLength: 180
+                    ),
+                    relevanceScore: result.relevanceScore
+                )
+            )
+        }
+        let duration = max(1, context.scopeEnd - context.scopeStart)
+        let limit = targetSuggestionCount(
+            duration: duration,
+            configuration: configuration
+        )
+        let suggestions = preparedSuggestions(
+            candidates,
+            limit: limit,
+            configuration: configuration,
+            scopeStart: context.scopeStart,
+            scopeEnd: context.scopeEnd
+        )
+        guard !suggestions.isEmpty else {
+            throw SmartMarkerAnalysisError.noSuggestions
+        }
+        return suggestions
     }
 
     private static func concise(
@@ -664,7 +1008,7 @@ struct SmartMarkerAnalyzer {
         scopeStart: Double,
         scopeEnd: Double
     ) -> [SmartMarkerSuggestion] {
-        guard configuration.recipe.outputKind == .text else {
+        guard configuration.recipe.selectionStrategy == .timelineCoverage else {
             return deduplicated(candidates, limit: limit)
         }
 
@@ -674,7 +1018,10 @@ struct SmartMarkerAnalyzer {
             scopeStart: scopeStart,
             scopeEnd: scopeEnd
         )
-        guard let opening = suggestions.first else { return [] }
+        guard configuration.recipe.isYouTubeChapters,
+              let opening = suggestions.first else {
+            return suggestions
+        }
         suggestions[0] = SmartMarkerSuggestion(
             id: opening.id,
             sourceSegmentID: opening.sourceSegmentID,
@@ -781,6 +1128,8 @@ final class SmartMarkerPresentationModel: ObservableObject {
 
     private var analysisTask: Task<Void, Never>?
     private var analyzingTabID: UUID?
+    private var refinementTask: Task<Void, Never>?
+    private var refiningTabID: UUID?
 
     var activeTab: SmartMarkerAnalysisTab? {
         guard let activeTabID else { return nil }
@@ -809,7 +1158,7 @@ final class SmartMarkerPresentationModel: ObservableObject {
     }
 
     var isAnalyzing: Bool {
-        analyzingTabID != nil
+        analyzingTabID != nil || refiningTabID != nil
     }
 
     var progressText: String {
@@ -831,6 +1180,11 @@ final class SmartMarkerPresentationModel: ObservableObject {
             hasher.combine(tab.id)
             hasher.combine(tab.title)
             hasher.combine(tab.suggestions)
+            hasher.combine(tab.documentText)
+            hasher.combine(tab.refinementMessages)
+            hasher.combine(tab.refinementRevisions.count)
+            hasher.combine(tab.isRefining)
+            hasher.combine(tab.refinementErrorText)
             hasher.combine(tab.highlightedSuggestionID)
             hasher.combine(tab.isAnalyzing)
             hasher.combine(tab.completedWindows)
@@ -859,6 +1213,12 @@ final class SmartMarkerPresentationModel: ObservableObject {
             title: title,
             configuration: configuration,
             suggestions: [],
+            documentText: "",
+            refinementContext: nil,
+            refinementMessages: [],
+            refinementRevisions: [],
+            isRefining: false,
+            refinementErrorText: "",
             deletedSuggestionIDs: [],
             highlightedSuggestionID: nil,
             scrollPositionSuggestionID: nil,
@@ -882,6 +1242,14 @@ final class SmartMarkerPresentationModel: ObservableObject {
                 totalDuration: totalDuration,
                 waveformSamples: waveformSamples
             )
+            updateTab(tabID) {
+                $0.refinementContext = SmartMarkerRefinementContext(
+                    entries: input.entries,
+                    scopeStart: input.scopeStart,
+                    scopeEnd: input.scopeEnd,
+                    totalDuration: input.totalDuration
+                )
+            }
             newTab.totalWindows = SmartMarkerAnalyzer.makeWindows(
                 from: input.entries,
                 tokenLimit: SmartMarkerProviderFactory.transcriptTokenLimit(
@@ -918,6 +1286,7 @@ final class SmartMarkerPresentationModel: ObservableObject {
                             !tab.deletedSuggestionIDs.contains($0.id)
                         }
                         tab.suggestions = visibleSuggestions
+                        tab.documentText = outcome.documentText
                         tab.skippedWindowCount = outcome.skippedSectionCount
                         let resultIDs = Set(visibleSuggestions.map(\.id))
                         if tab.highlightedSuggestionID.map({ !resultIDs.contains($0) }) ?? true {
@@ -958,6 +1327,9 @@ final class SmartMarkerPresentationModel: ObservableObject {
         if analyzingTabID == id {
             cancelAnalysis(tabID: id)
         }
+        if refiningTabID == id {
+            cancelRefinement(tabID: id)
+        }
         let wasActive = activeTabID == id
         tabs.remove(at: index)
         if wasActive {
@@ -983,6 +1355,151 @@ final class SmartMarkerPresentationModel: ObservableObject {
         updateTab(tabID) {
             $0.isAnalyzing = false
         }
+    }
+
+    func refine(tabID: UUID, instruction: String) {
+        let normalizedInstruction = instruction
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedInstruction.isEmpty,
+              analyzingTabID == nil,
+              refiningTabID == nil,
+              let tab = tabs.first(where: { $0.id == tabID }),
+              let context = tab.refinementContext else {
+            return
+        }
+
+        let priorConversation = tab.refinementMessages
+        updateTab(tabID) {
+            $0.refinementMessages.append(
+                SmartMarkerRefinementMessage(
+                    role: .user,
+                    text: normalizedInstruction
+                )
+            )
+            $0.refinementErrorText = ""
+            $0.isRefining = true
+        }
+        refiningTabID = tabID
+
+        let duration = max(1, context.scopeEnd - context.scopeStart)
+        let maximumResults = tab.configuration.recipe.isDocumentText
+            ? 1
+            : SmartMarkerAnalyzer.targetSuggestionCount(
+                duration: duration,
+                configuration: tab.configuration
+            )
+        let request = SmartMarkerRefinementRequest(
+            entries: context.entries,
+            recipe: tab.configuration.recipe,
+            currentSuggestions: tab.suggestions,
+            currentDocumentText: tab.documentText,
+            conversation: priorConversation,
+            instruction: normalizedInstruction,
+            maximumResults: maximumResults
+        )
+
+        refinementTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let provider = try SmartMarkerProviderFactory.makeProvider(
+                    id: tab.configuration.providerID,
+                    modelIdentifier: tab.configuration.modelIdentifier
+                )
+                let response = try await provider.refine(request: request)
+                try Task.checkCancellation()
+
+                let replacementSuggestions: [SmartMarkerSuggestion]?
+                let replacementDocument: String?
+                if response.action == .replace {
+                    if tab.configuration.recipe.isDocumentText {
+                        let document = response.documentText?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        guard !document.isEmpty else {
+                            throw SmartMarkerProviderError.invalidResponse(
+                                "The AI did not return revised text."
+                            )
+                        }
+                        replacementSuggestions = []
+                        replacementDocument = document
+                    } else {
+                        replacementSuggestions = try SmartMarkerAnalyzer
+                            .resolveRefinementSuggestions(
+                                response.suggestions,
+                                context: context,
+                                configuration: tab.configuration
+                            )
+                        replacementDocument = ""
+                    }
+                } else {
+                    replacementSuggestions = nil
+                    replacementDocument = nil
+                }
+
+                let responseMessage = response.message
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let assistantMessage: String
+                if !responseMessage.isEmpty {
+                    assistantMessage = responseMessage
+                } else if response.action == .replace {
+                    assistantMessage = "Updated the results."
+                } else {
+                    throw SmartMarkerProviderError.invalidResponse(
+                        "The AI returned an empty response."
+                    )
+                }
+                self.updateTab(tabID) { currentTab in
+                    if let replacementSuggestions, let replacementDocument {
+                        currentTab.refinementRevisions.append(
+                            SmartMarkerResultSnapshot(
+                                suggestions: currentTab.suggestions,
+                                documentText: currentTab.documentText
+                            )
+                        )
+                        currentTab.suggestions = replacementSuggestions
+                        currentTab.documentText = replacementDocument
+                        currentTab.deletedSuggestionIDs = []
+                        currentTab.highlightedSuggestionID = replacementSuggestions.first?.id
+                    }
+                    currentTab.refinementMessages.append(
+                        SmartMarkerRefinementMessage(
+                            role: .assistant,
+                            text: assistantMessage
+                        )
+                    )
+                    currentTab.refinementErrorText = ""
+                    currentTab.isRefining = false
+                }
+                self.finishRefinement(tabID: tabID)
+            } catch is CancellationError {
+                self.updateTab(tabID) { $0.isRefining = false }
+                self.finishRefinement(tabID: tabID)
+            } catch {
+                self.updateTab(tabID) {
+                    $0.refinementErrorText = error.localizedDescription
+                    $0.isRefining = false
+                }
+                self.finishRefinement(tabID: tabID)
+            }
+        }
+    }
+
+    func undoLastRefinement(tabID: UUID) {
+        updateTab(tabID) { tab in
+            guard let previous = tab.refinementRevisions.popLast() else { return }
+            tab.suggestions = previous.suggestions
+            tab.documentText = previous.documentText
+            tab.deletedSuggestionIDs = []
+            tab.highlightedSuggestionID = previous.suggestions.first?.id
+            tab.refinementErrorText = ""
+        }
+    }
+
+    func cancelRefinement(tabID: UUID) {
+        guard refiningTabID == tabID else { return }
+        refinementTask?.cancel()
+        refinementTask = nil
+        refiningTabID = nil
+        updateTab(tabID) { $0.isRefining = false }
     }
 
     private func deleteSuggestion(
@@ -1020,12 +1537,15 @@ final class SmartMarkerPresentationModel: ObservableObject {
 
     func reset() {
         cancelActiveAnalysis()
+        if let refiningTabID {
+            cancelRefinement(tabID: refiningTabID)
+        }
         tabs = []
         activeTabID = nil
         showsSuggestions = false
     }
 
-    private func uniqueTitle(for recipe: SmartMarkerRecipe) -> String {
+    private func uniqueTitle(for recipe: SmartMarkerAnalysisRecipe) -> String {
         let base = recipe.title
         let existing = Set(tabs.map(\.title))
         guard existing.contains(base) else { return base }
@@ -1047,6 +1567,13 @@ final class SmartMarkerPresentationModel: ObservableObject {
         if analyzingTabID == tabID {
             analyzingTabID = nil
             analysisTask = nil
+        }
+    }
+
+    private func finishRefinement(tabID: UUID) {
+        if refiningTabID == tabID {
+            refiningTabID = nil
+            refinementTask = nil
         }
     }
 

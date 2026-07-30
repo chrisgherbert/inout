@@ -113,6 +113,8 @@ private struct ClipPlayerStageSection: View {
     let onDeleteSmartMarkerSuggestion: (_ id: UUID) -> Void
     let onSetSmartMarkerScrollPosition: (_ suggestionID: UUID?, _ tabID: UUID) -> Void
     let onCancelSmartMarkerAnalysis: (_ tabID: UUID) -> Void
+    let onRefineSmartMarkerAnalysis: (_ tabID: UUID, _ instruction: String) -> Void
+    let onUndoSmartMarkerRefinement: (_ tabID: UUID) -> Void
     let onCloseTranscript: () -> Void
     let onShowTranscript: () -> Void
 
@@ -210,6 +212,8 @@ private struct ClipPlayerStageSection: View {
                             deleteSmartMarkerSuggestion: onDeleteSmartMarkerSuggestion,
                             setSmartMarkerScrollPosition: onSetSmartMarkerScrollPosition,
                             cancelSmartMarkerAnalysis: onCancelSmartMarkerAnalysis,
+                            refineSmartMarkerAnalysis: onRefineSmartMarkerAnalysis,
+                            undoSmartMarkerRefinement: onUndoSmartMarkerRefinement,
                             onCloseTranscript: onCloseTranscript
                         )
                     )
@@ -2354,6 +2358,12 @@ struct ClipToolView: View {
                 },
                 onCancelSmartMarkerAnalysis: { tabID in
                     smartMarkers.cancelAnalysis(tabID: tabID)
+                },
+                onRefineSmartMarkerAnalysis: { tabID, instruction in
+                    smartMarkers.refine(tabID: tabID, instruction: instruction)
+                },
+                onUndoSmartMarkerRefinement: { tabID in
+                    smartMarkers.undoLastRefinement(tabID: tabID)
                 },
                 onCloseTranscript: {
                     storedTranscriptSidebarVisible = false

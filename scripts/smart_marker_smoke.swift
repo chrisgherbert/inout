@@ -82,6 +82,53 @@ struct SmartMarkerSmokeTest {
         precondition(formatSmartMarkerChapterTimestamp(0) == "00:00:00")
         precondition(formatSmartMarkerChapterTimestamp(134) == "00:02:14")
         precondition(formatSmartMarkerChapterTimestamp(3_661) == "01:01:01")
+        let customRecipe = SmartMarkerCustomRecipe(
+            id: UUID(),
+            name: "Fact-Check Candidates",
+            summary: "Find claims that should be verified.",
+            instructions: "Find consequential factual claims involving numbers, dates, or laws.",
+            outputKind: .markers,
+            defaultScope: .entireVideo,
+            defaultDensity: .more,
+            selectionStrategy: .timelineCoverage,
+            maximumResults: 9,
+            prefersNearbyPauses: false
+        )
+        let customAnalysisRecipe = SmartMarkerAnalysisRecipe.custom(customRecipe)
+        precondition(customAnalysisRecipe.title == "Fact-Check Candidates")
+        precondition(customAnalysisRecipe.outputKind == .markers)
+        precondition(customAnalysisRecipe.selectionStrategy == .timelineCoverage)
+        precondition(
+            SmartMarkerProviderPrompt.task(for: customAnalysisRecipe) ==
+                customRecipe.instructions
+        )
+        var descriptionRecipe = SmartMarkerCustomRecipe.newRecipe()
+        precondition(descriptionRecipe.name.isEmpty)
+        precondition(descriptionRecipe.summary.isEmpty)
+        descriptionRecipe.name = "YouTube Description"
+        descriptionRecipe.summary = "Write a concise video description."
+        descriptionRecipe.instructions = "Write a concise YouTube description of the video."
+        descriptionRecipe.outputKind = .text
+        descriptionRecipe.textMode = .document
+        let descriptionAnalysisRecipe = SmartMarkerAnalysisRecipe.custom(
+            descriptionRecipe.normalized
+        )
+        precondition(descriptionAnalysisRecipe.isDocumentText)
+        precondition(descriptionAnalysisRecipe.textMode == .document)
+        precondition(
+            SmartMarkerProviderPrompt.documentPrompt(
+                transcript: "[0] Transcript text.",
+                recipe: descriptionAnalysisRecipe
+            ).contains("Create the requested final text")
+        )
+        let encodedDescriptionRecipe = try JSONEncoder().encode(descriptionRecipe.normalized)
+        let decodedDescriptionRecipe = try JSONDecoder().decode(
+            SmartMarkerCustomRecipe.self,
+            from: encodedDescriptionRecipe
+        )
+        precondition(
+            decodedDescriptionRecipe.textMode == .document
+        )
         let input = try SmartMarkerAnalyzer.makeInput(
             segments: segments,
             configuration: configuration,
@@ -199,7 +246,7 @@ struct SmartMarkerSmokeTest {
         )
         precondition(chapterPrompt.contains("chronological order"))
         precondition(chapterPrompt.contains("end_segment_id to null"))
-        precondition(chapterPrompt.contains("chapter title in label"))
+        precondition(chapterPrompt.contains("display text in label"))
         precondition(chapterPrompt.contains("ad break clearly identifies its sponsor"))
         precondition(chapterPrompt.contains("Avoid guessing the spelling"))
         precondition(chapterPrompt.contains("cover the entire transcript"))
@@ -260,10 +307,263 @@ struct SmartMarkerSmokeTest {
         precondition(openAIMarkers[0].relevanceScore == 94)
         precondition(openAIMarkers[1].segmentID == 20)
         precondition(openAIMarkers[1].endSegmentID == 24)
+        let documentPayload = """
+        {
+          "text": "A concise description of the video.\\n\\nThe discussion covers housing policy."
+        }
+        """
+        let documentEnvelope = try JSONSerialization.data(
+            withJSONObject: [
+                "output": [
+                    [
+                        "content": [
+                            [
+                                "type": "output_text",
+                                "text": documentPayload
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        )
+        let parsedDocument = try OpenAIResponsesClient.parseDocumentResponse(documentEnvelope)
+        precondition(
+            parsedDocument ==
+                "A concise description of the video.\n\nThe discussion covers housing policy."
+        )
+        let documentRequestBody = try OpenAIResponsesClient.documentRequestBody(
+            model: "chat-latest",
+            transcript: "[0] Transcript text.",
+            recipe: descriptionAnalysisRecipe
+        )
+        let documentRequestJSON = try JSONSerialization.jsonObject(
+            with: documentRequestBody
+        ) as? [String: Any]
+        let documentTextConfig = documentRequestJSON?["text"] as? [String: Any]
+        let documentFormat = documentTextConfig?["format"] as? [String: Any]
+        let documentSchema = documentFormat?["schema"] as? [String: Any]
+        let documentProperties = documentSchema?["properties"] as? [String: Any]
+        precondition(documentProperties?["text"] != nil)
+        precondition(documentRequestJSON?["store"] as? Bool == false)
+
+        let refinementContext = SmartMarkerRefinementContext(
+            entries: input.entries,
+            scopeStart: input.scopeStart,
+            scopeEnd: input.scopeEnd,
+            totalDuration: input.totalDuration
+        )
+        let currentSuggestion = SmartMarkerSuggestion(
+            sourceSegmentID: input.entries[1].segmentID,
+            seconds: input.entries[1].start,
+            category: configuration.recipe.markerCategory,
+            label: "Current result",
+            explanation: "The existing suggestion."
+        )
+        let refinementRequest = SmartMarkerRefinementRequest(
+            entries: input.entries,
+            recipe: configuration.recipe,
+            currentSuggestions: [currentSuggestion],
+            currentDocumentText: "",
+            conversation: [
+                SmartMarkerRefinementMessage(
+                    role: .assistant,
+                    text: "I found one useful transition."
+                )
+            ],
+            instruction: "Move it to the later transition.",
+            maximumResults: 4
+        )
+        let refinementPrompt = SmartMarkerProviderPrompt.refinementPrompt(
+            for: refinementRequest
+        )
+        precondition(refinementPrompt.contains("Current result"))
+        precondition(refinementPrompt.contains("I found one useful transition."))
+        precondition(refinementPrompt.contains("Move it to the later transition."))
+        precondition(refinementPrompt.contains(input.entries.last!.text))
+
+        let granularRefinementRequest = SmartMarkerRefinementRequest(
+            entries: granularEntries,
+            recipe: configuration.recipe,
+            currentSuggestions: [
+                SmartMarkerSuggestion(
+                    sourceSegmentID: timedSegmentID,
+                    seconds: granularEntries.last!.start,
+                    category: configuration.recipe.markerCategory,
+                    label: "Granular result",
+                    explanation: "Uses a word-level transcript anchor."
+                )
+            ],
+            currentDocumentText: "",
+            conversation: [],
+            instruction: "Explain this result.",
+            maximumResults: 4
+        )
+        let granularRefinementPrompt = SmartMarkerProviderPrompt.refinementPrompt(
+            for: granularRefinementRequest
+        )
+        precondition(
+            granularRefinementPrompt.contains(
+                "segment_id=\(granularEntries.last!.ordinal) | Granular result"
+            ),
+            "Refinement must safely resolve duplicate source segment IDs to the nearest granular anchor."
+        )
+
+        let conversationalRefinement = try SmartMarkerProviderPrompt.parseRefinementJSON(
+            """
+            ```json
+            {
+              "action": "message",
+              "message": "The current marker is near the strongest transition.",
+              "document_text": null,
+              "suggestions": []
+            }
+            ```
+            """
+        )
+        precondition(conversationalRefinement.action == .message)
+        precondition(conversationalRefinement.suggestions.isEmpty)
+        precondition(
+            conversationalRefinement.message ==
+                "The current marker is near the strongest transition."
+        )
+
+        let replacementJSON = """
+        {
+          "action": "replace",
+          "message": "I moved the marker later.",
+          "document_text": null,
+          "suggestions": [
+            {
+              "segment_id": \(input.entries[3].ordinal),
+              "end_segment_id": null,
+              "label": "Later transition",
+              "explanation": "The subject changes here.",
+              "relevance_score": 96
+            }
+          ]
+        }
+        """
+        let replacementRefinement = try SmartMarkerProviderPrompt.parseRefinementJSON(
+            replacementJSON
+        )
+        let resolvedReplacement = try SmartMarkerAnalyzer.resolveRefinementSuggestions(
+            replacementRefinement.suggestions,
+            context: refinementContext,
+            configuration: configuration
+        )
+        precondition(resolvedReplacement.count == 1)
+        precondition(resolvedReplacement[0].seconds == input.entries[3].start)
+        precondition(
+            resolvedReplacement[0].sourceSegmentID == input.entries[3].segmentID
+        )
+        do {
+            _ = try SmartMarkerAnalyzer.resolveRefinementSuggestions(
+                [
+                    SmartMarkerGeneratedCandidate(
+                        segmentID: Int.max,
+                        label: "Invalid",
+                        explanation: "This anchor is not in the transcript.",
+                        relevanceScore: 100
+                    )
+                ],
+                context: refinementContext,
+                configuration: configuration
+            )
+            preconditionFailure("Unknown transcript anchors must not replace current results.")
+        } catch SmartMarkerAnalysisError.noSuggestions {
+            // Expected.
+        }
+
+        let refinementRequestBody = try OpenAIResponsesClient.refinementRequestBody(
+            model: "chat-latest",
+            request: refinementRequest
+        )
+        let refinementRequestJSON = try JSONSerialization.jsonObject(
+            with: refinementRequestBody
+        ) as? [String: Any]
+        precondition(refinementRequestJSON?["store"] as? Bool == false)
+        let refinementText = refinementRequestJSON?["text"] as? [String: Any]
+        let refinementFormat = refinementText?["format"] as? [String: Any]
+        let refinementSchema = refinementFormat?["schema"] as? [String: Any]
+        let refinementProperties = refinementSchema?["properties"] as? [String: Any]
+        let actionSchema = refinementProperties?["action"] as? [String: Any]
+        precondition(actionSchema?["enum"] as? [String] == ["message", "replace"])
+        let suggestionsSchema = refinementProperties?["suggestions"] as? [String: Any]
+        precondition(suggestionsSchema?["maxItems"] as? Int == 4)
+
+        let refinementEnvelope = try JSONSerialization.data(
+            withJSONObject: [
+                "output": [
+                    [
+                        "content": [
+                            [
+                                "type": "output_text",
+                                "text": replacementJSON
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        )
+        let parsedOpenAIRefinement = try OpenAIResponsesClient.parseRefinementResponse(
+            refinementEnvelope
+        )
+        precondition(parsedOpenAIRefinement == replacementRefinement)
 
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [SmartMarkerMockURLProtocol.self]
         let mockSession = URLSession(configuration: sessionConfiguration)
+        let modelListData = try JSONSerialization.data(
+            withJSONObject: [
+                "object": "list",
+                "data": [
+                    ["id": "gpt-5.6-terra", "object": "model"],
+                    ["id": "chat-latest", "object": "model"],
+                    ["id": "gpt-4.1-mini", "object": "model"],
+                    ["id": "gpt-5.6-terra-2026-07-15", "object": "model"],
+                    ["id": "gpt-4o-realtime-preview", "object": "model"],
+                    ["id": "text-embedding-3-large", "object": "model"]
+                ]
+            ]
+        )
+        let listedModelIDs = try OpenAIResponsesClient.parseModelList(modelListData)
+        let modelOptions = SmartMarkerOpenAIModelCatalog.options(from: listedModelIDs)
+        precondition(
+            modelOptions.map(\.id) == [
+                "gpt-5.6-terra",
+                "chat-latest",
+                "gpt-4.1-mini"
+            ],
+            "The model picker must prioritize recommended models and omit incompatible models."
+        )
+        precondition(modelOptions[0].isRecommended)
+        precondition(!modelOptions[2].isRecommended)
+        precondition(
+            !SmartMarkerOpenAIModelCatalog.isCompatibleAlias(
+                "gpt-5.6-terra-2026-07-15"
+            ),
+            "Dated snapshots should remain available through Custom Model ID, not clutter the picker."
+        )
+        SmartMarkerMockURLProtocol.handler = { request in
+            precondition(request.url?.absoluteString == "https://api.openai.com/v1/models")
+            precondition(request.httpMethod == "GET")
+            precondition(request.httpBody == nil)
+            precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, modelListData)
+        }
+        let fetchedModelIDs = try await OpenAIResponsesClient(
+            apiKey: "test-key",
+            model: "chat-latest",
+            session: mockSession
+        ).listModels()
+        precondition(fetchedModelIDs == listedModelIDs)
+
         let requestBody = try OpenAIResponsesClient.markerRequestBody(
             model: "chat-latest",
             transcript: "[12] The discussion moves to campaign strategy.",
@@ -321,6 +621,21 @@ struct SmartMarkerSmokeTest {
             density: .standard,
             preferNearbyPauses: false
         )
+        let customConfiguration = SmartMarkerAnalysisConfiguration(
+            providerID: .openAI,
+            modelIdentifier: nil,
+            recipe: customAnalysisRecipe,
+            scope: .entireVideo,
+            density: .more,
+            preferNearbyPauses: false
+        )
+        precondition(
+            SmartMarkerAnalyzer.targetSuggestionCount(
+                duration: 3_600,
+                configuration: customConfiguration
+            ) == 9,
+            "A custom maximum must cap the density-derived result count."
+        )
         let chapterSuggestions = SmartMarkerAnalyzer.preparedSuggestions(
             [
                 SmartMarkerSuggestion(
@@ -373,7 +688,7 @@ struct SmartMarkerSmokeTest {
         let distributedCandidates = (0..<12).map { index in
             SmartMarkerSuggestion(
                 sourceSegmentID: UUID(),
-                seconds: Double(index * 300),
+                seconds: Double(index * 300 + 30),
                 category: "Chapter",
                 label: "Section \(index)",
                 explanation: "Section \(index).",
@@ -397,6 +712,22 @@ struct SmartMarkerSmokeTest {
         precondition(
             distributedChapters.filter { $0.seconds >= 2_400 }.count == 2,
             "Chapter selection must reserve capacity for the final third."
+        )
+        let distributedCustomMarkers = SmartMarkerAnalyzer.preparedSuggestions(
+            distributedCandidates,
+            limit: 6,
+            configuration: customConfiguration,
+            scopeStart: 0,
+            scopeEnd: 3_600
+        )
+        precondition(distributedCustomMarkers.count == 6)
+        precondition(
+            distributedCustomMarkers.filter { $0.seconds >= 2_400 }.count == 2,
+            "Custom timeline-coverage recipes must reserve capacity for the final third."
+        )
+        precondition(
+            distributedCustomMarkers.first?.seconds == distributedCandidates.first?.seconds,
+            "Only YouTube Chapters may rewrite the opening timestamp."
         )
 
         SmartMarkerMockURLProtocol.handler = { request in
@@ -425,6 +756,29 @@ struct SmartMarkerSmokeTest {
         mockSession.invalidateAndCancel()
 
         await MainActor.run {
+            let storeDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("in-out-recipe-store-\(UUID().uuidString)")
+            let storeURL = storeDirectory.appendingPathComponent("recipes.json")
+            let recipeStore = SmartMarkerRecipeStore(fileURL: storeURL)
+            recipeStore.save(customRecipe)
+            precondition(recipeStore.customRecipes == [customRecipe])
+            recipeStore.duplicate(customRecipe)
+            precondition(recipeStore.customRecipes.count == 2)
+            precondition(
+                recipeStore.customRecipes.contains { $0.name == "Fact-Check Candidates Copy" }
+            )
+            recipeStore.setHidden(true, for: .highlights)
+            precondition(recipeStore.isHidden(.highlights))
+            precondition(!recipeStore.isHidden(.topicChanges))
+            let reloadedStore = SmartMarkerRecipeStore(fileURL: storeURL)
+            precondition(reloadedStore.customRecipes.count == 2)
+            precondition(reloadedStore.isHidden(.highlights))
+            reloadedStore.setHidden(false, for: .highlights)
+            precondition(!reloadedStore.isHidden(.highlights))
+            reloadedStore.delete(customRecipe.id)
+            precondition(reloadedStore.customRecipes.count == 1)
+            try? FileManager.default.removeItem(at: storeDirectory)
+
             let tabModel = SmartMarkerPresentationModel()
             tabModel.start(
                 segments: [],

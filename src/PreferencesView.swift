@@ -5,7 +5,9 @@ struct PreferencesView: View {
     @ObservedObject var model: WorkspaceViewModel
     @State private var profanityEntry = ""
     @State private var openAIAPIKeyEntry = ""
+    @State private var showsCustomOpenAIModelField = false
     @State private var selectedPane: PreferencesPane = .general
+    @StateObject private var smartMarkerRecipeStore = SmartMarkerRecipeStore.shared
 
     private enum PreferencesPane: String, CaseIterable, Identifiable {
         case general = "General"
@@ -287,12 +289,93 @@ struct PreferencesView: View {
 
                 if model.smartMarkerProvider == .openAI {
                     settingsRow("Model") {
-                        TextField(
-                            SmartMarkerPreferences.defaultOpenAIModel,
-                            text: $model.openAISmartMarkerModel
+                        let recommendedModels = model.openAIAvailableModels.filter(
+                            \.isRecommended
                         )
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 300)
+                        let otherModels = model.openAIAvailableModels.filter {
+                            !$0.isRecommended
+                        }
+                        let selectedOption = model.openAIAvailableModels.first {
+                            $0.id == model.openAISmartMarkerModel
+                        }
+                        let selectedIsAvailable = selectedOption != nil
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            valueMenuPicker(
+                                "OpenAI Model",
+                                selection: $model.openAISmartMarkerModel
+                            ) {
+                                if !recommendedModels.isEmpty {
+                                    Section("Recommended") {
+                                        ForEach(recommendedModels) { option in
+                                            Text(option.title).tag(option.id)
+                                        }
+                                    }
+                                }
+                                if !otherModels.isEmpty {
+                                    Section("Available") {
+                                        ForEach(otherModels) { option in
+                                            Text(option.title).tag(option.id)
+                                        }
+                                    }
+                                }
+                                if !selectedIsAvailable {
+                                    Section("Current Selection") {
+                                        Text("\(model.openAISmartMarkerModel) (Unavailable)")
+                                            .tag(model.openAISmartMarkerModel)
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: 300)
+
+                            Text(
+                                selectedOption?.detail ??
+                                    "This model has not been confirmed for the saved API key."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                            if showsCustomOpenAIModelField || !selectedIsAvailable {
+                                TextField(
+                                    "Custom model ID",
+                                    text: $model.openAISmartMarkerModel
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 300)
+                            } else {
+                                Button("Use Custom Model ID…") {
+                                    showsCustomOpenAIModelField = true
+                                }
+                                .buttonStyle(.link)
+                                .controlSize(.small)
+                            }
+
+                            HStack(spacing: 8) {
+                                Button("Refresh Models") {
+                                    model.refreshOpenAIModels()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(
+                                    !model.openAIAPIKeyConfigured ||
+                                        model.isLoadingOpenAIModels
+                                )
+
+                                if model.isLoadingOpenAIModels {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+
+                                if !model.openAIModelCatalogStatusText.isEmpty {
+                                    Text(model.openAIModelCatalogStatusText)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .task {
+                            model.loadOpenAIModelsIfNeeded()
+                        }
                     }
 
                     settingsRow("API key") {
@@ -368,6 +451,11 @@ struct PreferencesView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+            }
+            Divider()
+
+            settingsSection("Analysis Options") {
+                SmartMarkerRecipeManagementView(store: smartMarkerRecipeStore)
             }
         }
     }

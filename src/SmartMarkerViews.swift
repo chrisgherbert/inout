@@ -6,7 +6,8 @@ struct SmartMarkerSetupSheet: View {
     let onCancel: () -> Void
     let onStart: (SmartMarkerAnalysisConfiguration) -> Void
 
-    @State private var recipe: SmartMarkerRecipe = .topicChanges
+    @StateObject private var recipeStore = SmartMarkerRecipeStore.shared
+    @State private var recipe: SmartMarkerAnalysisRecipe = .topicChanges
     @State private var providerID = SmartMarkerPreferences.providerID
     @State private var scope: SmartMarkerScope = .selectedClip
     @State private var density: SmartMarkerDensity = .standard
@@ -16,53 +17,67 @@ struct SmartMarkerSetupSheet: View {
         SmartMarkerAnalyzer.availabilityMessage(for: providerID)
     }
 
+    private var allowsNearbyPauses: Bool {
+        recipe.isAdBreaks ||
+            (recipe.builtInRecipe == nil && recipe.outputKind == .markers)
+    }
+
+    private var visibleBuiltInRecipes: [SmartMarkerRecipe] {
+        SmartMarkerRecipe.allCases.filter { !recipeStore.isHidden($0) }
+    }
+
+    private var availableRecipes: [SmartMarkerAnalysisRecipe] {
+        visibleBuiltInRecipes.map(SmartMarkerAnalysisRecipe.builtIn) +
+            recipeStore.customRecipes.map(SmartMarkerAnalysisRecipe.custom)
+    }
+
+    private var isSelectedRecipeAvailable: Bool {
+        availableRecipes.contains { $0.id == recipe.id }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("AI Suggestions")
                     .font(.title2.weight(.semibold))
-                Text("Use \(providerID.title) to find useful points in the transcript.")
+                Text("Use \(providerID.title) to analyze the transcript.")
                     .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 9) {
                 Text("What should In/Out find?")
                     .font(.headline)
-                ForEach(SmartMarkerRecipe.allCases) { option in
-                    Button {
-                        recipe = option
-                        if option == .youtubeChapters {
-                            scope = .entireVideo
-                        }
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: recipe == option ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(recipe == option ? Color.accentColor : Color.secondary)
-                                .padding(.top, 2)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.title)
-                                    .foregroundStyle(.primary)
-                                Text(option.description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer(minLength: 0)
-                            Text(option.resultTypeTitle)
-                                .font(.caption2.weight(.medium))
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        if !visibleBuiltInRecipes.isEmpty {
+                            Text("Built In")
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.secondary.opacity(0.10))
-                                )
-                                .padding(.top, 1)
+                            ForEach(visibleBuiltInRecipes) {
+                                recipeOption(.builtIn($0))
+                            }
                         }
-                        .contentShape(Rectangle())
+                        if !recipeStore.customRecipes.isEmpty {
+                            Text("Custom")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 4)
+                            ForEach(recipeStore.customRecipes) {
+                                recipeOption(.custom($0))
+                            }
+                        }
+                        if availableRecipes.isEmpty {
+                            Label(
+                                "No analysis options are visible. Show a built-in option or add a custom analysis in Settings.",
+                                systemImage: "eye.slash"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
+                .frame(maxHeight: 300)
             }
 
             Divider()
@@ -88,21 +103,23 @@ struct SmartMarkerSetupSheet: View {
                     .labelsHidden()
                     .pickerStyle(.segmented)
                     .frame(width: 240)
-                    .disabled(recipe == .youtubeChapters)
+                    .disabled(recipe.isYouTubeChapters)
                 }
 
-                LabeledContent("Suggestions") {
-                    Picker("Suggestions", selection: $density) {
-                        ForEach(SmartMarkerDensity.allCases) { option in
-                            Text(option.title).tag(option)
+                if !recipe.isDocumentText {
+                    LabeledContent("Suggestions") {
+                        Picker("Suggestions", selection: $density) {
+                            ForEach(SmartMarkerDensity.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
                         }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 240)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 240)
                 }
 
-                if recipe == .adBreaks {
+                if allowsNearbyPauses {
                     Toggle("Prefer nearby audio pauses", isOn: $preferNearbyPauses)
                 }
             }
@@ -127,7 +144,11 @@ struct SmartMarkerSetupSheet: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button(recipe == .youtubeChapters ? "Create Chapters" : "Generate Suggestions") {
+                Button(
+                    recipe.isYouTubeChapters
+                        ? "Create Chapters"
+                        : (recipe.isDocumentText ? "Generate Text" : "Generate Suggestions")
+                ) {
                     SmartMarkerPreferences.providerID = providerID
                     onStart(
                         SmartMarkerAnalysisConfiguration(
@@ -144,7 +165,11 @@ struct SmartMarkerSetupSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(availabilityMessage != nil || (scope == .selectedClip && !canUseSelectedClip))
+                .disabled(
+                    !isSelectedRecipeAvailable ||
+                        availabilityMessage != nil ||
+                        (scope == .selectedClip && !canUseSelectedClip)
+                )
             }
         }
         .padding(22)
@@ -153,6 +178,61 @@ struct SmartMarkerSetupSheet: View {
             if !canUseSelectedClip {
                 scope = .entireVideo
             }
+            ensureRecipeSelection()
+        }
+        .onChange(of: recipeStore.hiddenBuiltInRecipes) { _, _ in
+            ensureRecipeSelection()
+        }
+        .onChange(of: recipeStore.customRecipes) { _, _ in
+            ensureRecipeSelection()
+        }
+    }
+
+    private func recipeOption(_ option: SmartMarkerAnalysisRecipe) -> some View {
+        Button {
+            selectRecipe(option)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: recipe == option ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(recipe == option ? Color.accentColor : Color.secondary)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.title)
+                        .foregroundStyle(.primary)
+                    Text(option.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Text(option.resultTypeTitle)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.10))
+                    )
+                    .padding(.top, 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func ensureRecipeSelection() {
+        guard !isSelectedRecipeAvailable, let first = availableRecipes.first else { return }
+        selectRecipe(first)
+    }
+
+    private func selectRecipe(_ option: SmartMarkerAnalysisRecipe) {
+        recipe = option
+        scope = option.defaultScope
+        density = option.defaultDensity
+        preferNearbyPauses = option.prefersNearbyPauses
+        if !canUseSelectedClip, scope == .selectedClip {
+            scope = .entireVideo
         }
     }
 }
@@ -168,9 +248,12 @@ struct SmartMarkerReviewView: View {
     let onDeleteSuggestion: (UUID) -> Void
     let onSetScrollPosition: (UUID?, UUID) -> Void
     let onCancelAnalysis: (UUID) -> Void
+    let onRefine: (UUID, String) -> Void
+    let onUndoRefinement: (UUID) -> Void
 
     @State private var copiedSuggestionID: UUID?
     @State private var copiedAllTabID: UUID?
+    @State private var refinementDraft = ""
 
     private var activeTab: SmartMarkerAnalysisTab? {
         guard let activeTabID else { return nil }
@@ -216,6 +299,9 @@ struct SmartMarkerReviewView: View {
                     } description: {
                         Text(activeTab.errorText)
                     }
+                } else if activeTab.configuration.recipe.isDocumentText,
+                          !activeTab.documentText.isEmpty {
+                    documentResult(for: activeTab)
                 } else if activeTab.suggestions.isEmpty {
                     if !activeTab.isAnalyzing {
                         ContentUnavailableView(
@@ -230,7 +316,7 @@ struct SmartMarkerReviewView: View {
                         List(activeTab.suggestions) { suggestion in
                             SmartMarkerSuggestionRow(
                                 suggestion: suggestion,
-                                outputKind: activeTab.configuration.recipe.outputKind,
+                                recipe: activeTab.configuration.recipe,
                                 isHighlighted: activeTab.highlightedSuggestionID == suggestion.id,
                                 didCopy: copiedSuggestionID == suggestion.id,
                                 onCopy: {
@@ -291,14 +377,22 @@ struct SmartMarkerReviewView: View {
                         .controlSize(.small)
                     }
                 }
+
+                if !activeTab.isAnalyzing,
+                   (!activeTab.suggestions.isEmpty || !activeTab.documentText.isEmpty) {
+                    refinementPanel(for: activeTab)
+                }
             }
+        }
+        .onChange(of: activeTabID) { _, _ in
+            refinementDraft = ""
         }
     }
 
     private func resultsHeader(for tab: SmartMarkerAnalysisTab) -> some View {
         let resultCount = countText(
             tab.suggestions.count,
-            outputKind: tab.configuration.recipe.outputKind
+            recipe: tab.configuration.recipe
         )
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
@@ -331,9 +425,139 @@ struct SmartMarkerReviewView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(tabs.contains(where: \.isAnalyzing))
+            .disabled(tabs.contains { $0.isAnalyzing || $0.isRefining })
         }
         .padding(.horizontal, 4)
+    }
+
+    private func refinementPanel(for tab: SmartMarkerAnalysisTab) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            if !tab.refinementMessages.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(tab.refinementMessages) { message in
+                            HStack {
+                                if message.role == .user {
+                                    Spacer(minLength: 28)
+                                }
+                                Text(message.text)
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        message.role == .user
+                                            ? Color.accentColor.opacity(0.14)
+                                            : Color.secondary.opacity(0.09),
+                                        in: RoundedRectangle(cornerRadius: 8)
+                                    )
+                                if message.role == .assistant {
+                                    Spacer(minLength: 28)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 130)
+            }
+
+            if !tab.refinementErrorText.isEmpty {
+                Label(tab.refinementErrorText, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(
+                    "Ask AI about these results or request changes…",
+                    text: $refinementDraft,
+                    axis: .vertical
+                )
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...4)
+                .onSubmit {
+                    submitRefinement(for: tab)
+                }
+
+                Button {
+                    submitRefinement(for: tab)
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .frame(width: 14, height: 14)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    tab.isRefining ||
+                        refinementDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+                .help("Send to AI")
+            }
+
+            HStack {
+                if tab.isRefining {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Thinking…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !tab.refinementRevisions.isEmpty {
+                    Button("Undo Refinement") {
+                        onUndoRefinement(tab.id)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .disabled(tab.isRefining)
+                }
+            }
+        }
+    }
+
+    private func submitRefinement(for tab: SmartMarkerAnalysisTab) {
+        let message = refinementDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty, !tab.isRefining else { return }
+        refinementDraft = ""
+        onRefine(tab.id, message)
+    }
+
+    private func documentResult(for tab: SmartMarkerAnalysisTab) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ScrollView {
+                Text(tab.documentText)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .textSelection(.enabled)
+                    .padding(12)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.secondary.opacity(0.06))
+            )
+
+            HStack {
+                Spacer()
+                Button {
+                    copyToPasteboard(tab.documentText)
+                    copiedAllTabID = tab.id
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.2))
+                        guard !Task.isCancelled, copiedAllTabID == tab.id else { return }
+                        copiedAllTabID = nil
+                    }
+                } label: {
+                    let didCopy = copiedAllTabID == tab.id
+                    Label(
+                        didCopy ? "Copied" : "Copy Text",
+                        systemImage: didCopy ? "checkmark" : "doc.on.doc"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
     }
 
     private var tabStrip: some View {
@@ -341,7 +565,7 @@ struct SmartMarkerReviewView: View {
             HStack(spacing: 4) {
                 ForEach(tabs) { tab in
                     HStack(spacing: 5) {
-                        if tab.isAnalyzing {
+                        if tab.isAnalyzing || tab.isRefining {
                             ProgressView()
                                 .controlSize(.mini)
                         }
@@ -439,9 +663,15 @@ struct SmartMarkerReviewView: View {
         return timecodeText(for: suggestion)
     }
 
-    private func countText(_ count: Int, outputKind: SmartMarkerOutputKind) -> String {
-        if outputKind == .text {
+    private func countText(_ count: Int, recipe: SmartMarkerAnalysisRecipe) -> String {
+        if recipe.isDocumentText {
+            return "Document"
+        }
+        if recipe.isYouTubeChapters {
             return "\(count) \(count == 1 ? "Chapter" : "Chapters")"
+        }
+        if recipe.outputKind == .text {
+            return "\(count) \(count == 1 ? "Text Item" : "Text Items")"
         }
         return "\(count) \(count == 1 ? "Suggestion" : "Suggestions")"
     }
@@ -449,13 +679,17 @@ struct SmartMarkerReviewView: View {
 
 private struct SmartMarkerSuggestionRow: View {
     let suggestion: SmartMarkerSuggestion
-    let outputKind: SmartMarkerOutputKind
+    let recipe: SmartMarkerAnalysisRecipe
     let isHighlighted: Bool
     let didCopy: Bool
     let onCopy: () -> Void
     let onDelete: () -> Void
     let onActivate: () -> Void
     let onPlay: () -> Void
+
+    private var outputKind: SmartMarkerOutputKind {
+        recipe.outputKind
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
@@ -555,7 +789,7 @@ private struct SmartMarkerSuggestionRow: View {
 
     private var copyButtonLabel: String {
         switch outputKind {
-        case .text: return "Copy Chapter"
+        case .text: return recipe.isYouTubeChapters ? "Copy Chapter" : "Copy Text"
         case .ranges: return "Copy Range"
         case .markers: return "Copy Timecode"
         }

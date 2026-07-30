@@ -27,6 +27,8 @@ enum SmartMarkerProviderID: String, CaseIterable, Identifiable, Sendable {
 enum SmartMarkerPreferences {
     static let providerKey = "prefs.smartMarkerProvider"
     static let openAIModelKey = "prefs.smartMarkerOpenAIModel"
+    static let openAIModelCatalogKey = "prefs.smartMarkerOpenAIModelCatalog"
+    static let openAIModelCatalogDateKey = "prefs.smartMarkerOpenAIModelCatalogDate"
     static let openAIKeychainAccount = "openai-api-key"
     static let defaultOpenAIModel = "chat-latest"
 
@@ -61,6 +63,99 @@ enum SmartMarkerPreferences {
     static var hasOpenAIKey: Bool {
         SecureCredentialStore.value(for: openAIKeychainAccount) != nil
     }
+
+    static var cachedOpenAIModelIDs: [String] {
+        UserDefaults.standard.stringArray(forKey: openAIModelCatalogKey) ?? []
+    }
+
+    static var openAIModelCatalogNeedsRefresh: Bool {
+        guard let date = UserDefaults.standard.object(
+            forKey: openAIModelCatalogDateKey
+        ) as? Date else {
+            return true
+        }
+        return Date().timeIntervalSince(date) > 24 * 60 * 60
+    }
+
+    static func cacheOpenAIModelIDs(_ ids: [String]) {
+        UserDefaults.standard.set(ids, forKey: openAIModelCatalogKey)
+        UserDefaults.standard.set(Date(), forKey: openAIModelCatalogDateKey)
+    }
+
+    static func clearOpenAIModelCatalog() {
+        UserDefaults.standard.removeObject(forKey: openAIModelCatalogKey)
+        UserDefaults.standard.removeObject(forKey: openAIModelCatalogDateKey)
+    }
+}
+
+struct SmartMarkerOpenAIModelOption: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let detail: String
+    let isRecommended: Bool
+}
+
+enum SmartMarkerOpenAIModelCatalog {
+    private static let recommended: [(id: String, title: String, detail: String)] = [
+        ("gpt-5.6-sol", "GPT-5.6 Sol", "Highest quality for complex analysis."),
+        ("gpt-5.6-terra", "GPT-5.6 Terra", "Balances quality, speed, and cost."),
+        ("gpt-5.6-luna", "GPT-5.6 Luna", "Fastest and lowest-cost current option."),
+        ("chat-latest", "Chat Latest", "Tracks OpenAI's latest ChatGPT-style API model.")
+    ]
+
+    static func options(from modelIDs: [String]) -> [SmartMarkerOpenAIModelOption] {
+        let available = Set(modelIDs.filter(isCompatibleAlias))
+        let recommendedIDs = Set(recommended.map(\.id))
+        let recommendedOptions: [SmartMarkerOpenAIModelOption] = recommended.compactMap { model in
+            guard available.contains(model.id) else { return nil }
+            return SmartMarkerOpenAIModelOption(
+                id: model.id,
+                title: model.title,
+                detail: model.detail,
+                isRecommended: true
+            )
+        }
+        let otherOptions = available
+            .subtracting(recommendedIDs)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            .map {
+                SmartMarkerOpenAIModelOption(
+                    id: $0,
+                    title: $0,
+                    detail: "Available to this API key.",
+                    isRecommended: false
+                )
+            }
+        return recommendedOptions + otherOptions
+    }
+
+    static func isCompatibleAlias(_ id: String) -> Bool {
+        let normalized = id.lowercased()
+        guard normalized == "chat-latest" ||
+                normalized.hasPrefix("gpt-5") ||
+                normalized.hasPrefix("gpt-4.1") ||
+                normalized.hasPrefix("gpt-4o") else {
+            return false
+        }
+        let unsupportedKinds = [
+            "audio",
+            "codex",
+            "image",
+            "instruct",
+            "moderation",
+            "realtime",
+            "search",
+            "transcribe",
+            "tts"
+        ]
+        guard !unsupportedKinds.contains(where: normalized.contains) else {
+            return false
+        }
+        return normalized.range(
+            of: #"-\d{4}-\d{2}-\d{2}$"#,
+            options: .regularExpression
+        ) == nil
+    }
 }
 
 struct SmartMarkerGeneratedCandidate: Equatable, Sendable {
@@ -83,6 +178,28 @@ struct SmartMarkerGeneratedCandidate: Equatable, Sendable {
         self.explanation = explanation
         self.relevanceScore = relevanceScore
     }
+}
+
+enum SmartMarkerRefinementAction: String, Codable, Sendable {
+    case message
+    case replace
+}
+
+struct SmartMarkerRefinementRequest: Sendable {
+    let entries: [SmartMarkerTranscriptEntry]
+    let recipe: SmartMarkerAnalysisRecipe
+    let currentSuggestions: [SmartMarkerSuggestion]
+    let currentDocumentText: String
+    let conversation: [SmartMarkerRefinementMessage]
+    let instruction: String
+    let maximumResults: Int
+}
+
+struct SmartMarkerRefinementResponse: Equatable, Sendable {
+    let action: SmartMarkerRefinementAction
+    let message: String
+    let suggestions: [SmartMarkerGeneratedCandidate]
+    let documentText: String?
 }
 
 enum SmartMarkerProviderError: LocalizedError {
@@ -109,9 +226,18 @@ protocol SmartMarkerCandidateProvider: Sendable {
 
     func generateCandidates(
         entries: [SmartMarkerTranscriptEntry],
-        recipe: SmartMarkerRecipe,
+        recipe: SmartMarkerAnalysisRecipe,
         limit: Int
     ) async throws -> [SmartMarkerGeneratedCandidate]
+
+    func generateDocument(
+        entries: [SmartMarkerTranscriptEntry],
+        recipe: SmartMarkerAnalysisRecipe
+    ) async throws -> String
+
+    func refine(
+        request: SmartMarkerRefinementRequest
+    ) async throws -> SmartMarkerRefinementResponse
 }
 
 enum SmartMarkerProviderFactory {
@@ -122,7 +248,7 @@ enum SmartMarkerProviderFactory {
         case .openAI:
             return SmartMarkerPreferences.hasOpenAIKey
                 ? nil
-                : "Add an OpenAI API key in Settings > Analyze."
+                : "Add an OpenAI API key in Settings > AI."
         }
     }
 
@@ -141,7 +267,7 @@ enum SmartMarkerProviderFactory {
                 for: SmartMarkerPreferences.openAIKeychainAccount
             ) else {
                 throw SmartMarkerProviderError.unavailable(
-                    "Add an OpenAI API key in Settings > Analyze."
+                    "Add an OpenAI API key in Settings > AI."
                 )
             }
             return OpenAISmartMarkerProvider(
@@ -186,7 +312,7 @@ struct AppleSmartMarkerProvider: SmartMarkerCandidateProvider {
 
     func generateCandidates(
         entries: [SmartMarkerTranscriptEntry],
-        recipe: SmartMarkerRecipe,
+        recipe: SmartMarkerAnalysisRecipe,
         limit: Int
     ) async throws -> [SmartMarkerGeneratedCandidate] {
         guard #available(macOS 26.0, *) else {
@@ -238,6 +364,84 @@ struct AppleSmartMarkerProvider: SmartMarkerCandidateProvider {
             }
         }
     }
+
+    func generateDocument(
+        entries: [SmartMarkerTranscriptEntry],
+        recipe: SmartMarkerAnalysisRecipe
+    ) async throws -> String {
+        guard #available(macOS 26.0, *) else {
+            throw SmartMarkerProviderError.unavailable(
+                "Apple Intelligence AI Suggestions requires macOS 26 or later."
+            )
+        }
+
+        do {
+            let transcript = SmartMarkerProviderPrompt.transcript(
+                from: entries,
+                recipe: recipe
+            )
+            let model = SystemLanguageModel(
+                useCase: .general,
+                guardrails: .permissiveContentTransformations
+            )
+            let session = LanguageModelSession(
+                model: model,
+                instructions: """
+                You are an editorial assistant transforming an existing transcript into
+                useful publication text. Analyze the source without endorsing, extending,
+                or imitating it.
+                """
+            )
+            let response = try await session.respond(
+                to: SmartMarkerProviderPrompt.documentPrompt(
+                    transcript: transcript,
+                    recipe: recipe
+                )
+            )
+            return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch let error as LanguageModelSession.GenerationError {
+            switch error {
+            case .guardrailViolation(_), .refusal(_, _):
+                throw SmartMarkerProviderError.sectionBlocked
+            default:
+                throw error
+            }
+        }
+    }
+
+    func refine(
+        request: SmartMarkerRefinementRequest
+    ) async throws -> SmartMarkerRefinementResponse {
+        guard #available(macOS 26.0, *) else {
+            throw SmartMarkerProviderError.unavailable(
+                "Apple Intelligence AI Suggestions requires macOS 26 or later."
+            )
+        }
+        do {
+            let model = SystemLanguageModel(
+                useCase: .general,
+                guardrails: .permissiveContentTransformations
+            )
+            let session = LanguageModelSession(
+                model: model,
+                instructions: """
+                You are an editorial assistant discussing and revising results derived from
+                an existing transcript. Follow the requested JSON response contract exactly.
+                """
+            )
+            let response = try await session.respond(
+                to: SmartMarkerProviderPrompt.refinementPrompt(for: request)
+            )
+            return try SmartMarkerProviderPrompt.parseRefinementJSON(response.content)
+        } catch let error as LanguageModelSession.GenerationError {
+            switch error {
+            case .guardrailViolation(_), .refusal(_, _):
+                throw SmartMarkerProviderError.sectionBlocked
+            default:
+                throw error
+            }
+        }
+    }
 }
 
 struct OpenAISmartMarkerProvider: SmartMarkerCandidateProvider {
@@ -254,7 +458,7 @@ struct OpenAISmartMarkerProvider: SmartMarkerCandidateProvider {
 
     func generateCandidates(
         entries: [SmartMarkerTranscriptEntry],
-        recipe: SmartMarkerRecipe,
+        recipe: SmartMarkerAnalysisRecipe,
         limit: Int
     ) async throws -> [SmartMarkerGeneratedCandidate] {
         let transcript = SmartMarkerProviderPrompt.transcript(
@@ -267,40 +471,63 @@ struct OpenAISmartMarkerProvider: SmartMarkerCandidateProvider {
             limit: limit
         )
     }
+
+    func generateDocument(
+        entries: [SmartMarkerTranscriptEntry],
+        recipe: SmartMarkerAnalysisRecipe
+    ) async throws -> String {
+        let transcript = SmartMarkerProviderPrompt.transcript(
+            from: entries,
+            recipe: recipe
+        )
+        return try await client.generateDocument(
+            transcript: transcript,
+            recipe: recipe
+        )
+    }
+
+    func refine(
+        request: SmartMarkerRefinementRequest
+    ) async throws -> SmartMarkerRefinementResponse {
+        try await client.refine(request: request)
+    }
 }
 
 enum SmartMarkerProviderPrompt {
     static func transcript(
         from entries: [SmartMarkerTranscriptEntry],
-        recipe: SmartMarkerRecipe
+        recipe: SmartMarkerAnalysisRecipe
     ) -> String {
         entries.map { entry in
-            if recipe == .youtubeChapters {
+            if recipe.textMode == .timestampedList {
                 return "[\(entry.ordinal)] [\(formatSmartMarkerChapterTimestamp(entry.start))] \(entry.text)"
             }
             return "[\(entry.ordinal)] \(entry.text)"
         }.joined(separator: "\n")
     }
 
-    static func task(for recipe: SmartMarkerRecipe) -> String {
-        switch recipe {
-        case .topicChanges:
+    static func task(for recipe: SmartMarkerAnalysisRecipe) -> String {
+        if case .custom(let customRecipe) = recipe {
+            return customRecipe.instructions
+        }
+        switch recipe.builtInRecipe {
+        case .topicChanges?:
             return "Find genuine changes in subject or conversational direction. Do not mark routine sentence boundaries."
-        case .highlights:
+        case .highlights?:
             return "Find strong standalone quotes, important announcements, clear explanations, or especially consequential moments."
-        case .adBreaks:
+        case .adBreaks?:
             return """
             Find places to insert dynamic ad markers. Prefer points after a completed thought,
             answer, or subject where an ad would not interrupt a sentence, argument, or
             emotionally sensitive moment. Favor clear transitions and completed exchanges.
             """
-        case .notableExcerpts:
+        case .notableExcerpts?:
             return """
             Find self-contained passages that would work as clips or quoted excerpts.
             Each passage must begin at a natural entry point, end after the complete thought,
             and remain understandable without unnecessary surrounding conversation.
             """
-        case .youtubeChapters:
+        case .youtubeChapters?:
             return """
             Create a concise chapter list that covers the transcript in chronological order.
             Each chapter must begin where a meaningful subject or section starts. Do not
@@ -314,29 +541,33 @@ enum SmartMarkerProviderPrompt {
             of names or proper nouns; use accurate generic wording when uncertain. Write
             short, single-line titles suitable for a YouTube description.
             """
+        case nil:
+            return ""
         }
     }
 
     static func applePrompt(
         transcript: String,
         validIDs: String,
-        recipe: SmartMarkerRecipe,
+        recipe: SmartMarkerAnalysisRecipe,
         limit: Int
     ) -> String {
         if recipe.outputKind == .text {
+            let itemName = recipe.isYouTubeChapters ? "chapter" : "text item"
+            let itemNamePlural = recipe.isYouTubeChapters ? "chapters" : "text items"
             return """
             Analyze the transcript excerpt below. \(task(for: recipe))
-            Select no more than \(limit) chapters.
+            Select no more than \(limit) \(itemNamePlural).
 
             The only valid segment IDs are: \(validIDs)
 
-            Your entire response must contain either NONE or one record per chapter.
+            Your entire response must contain either NONE or one record per \(itemName).
             Each record must have four fields separated by vertical bars:
-            MARKER | numeric segment ID | short chapter title | brief internal reason
+            MARKER | numeric segment ID | short title | brief internal reason
 
             Do not repeat that format as a heading or template. Replace every field with a
             concrete value from the transcript. Use only a valid segment ID listed above.
-            Return chapters in chronological order. Keep titles to six words or fewer.
+            Return records in chronological order. Keep titles to six words or fewer.
 
             Transcript:
             \(transcript)
@@ -381,7 +612,7 @@ enum SmartMarkerProviderPrompt {
 
     static func openAIPrompt(
         transcript: String,
-        recipe: SmartMarkerRecipe,
+        recipe: SmartMarkerAnalysisRecipe,
         limit: Int
     ) -> String {
         let rangeInstruction = recipe.producesRanges
@@ -392,8 +623,9 @@ enum SmartMarkerProviderPrompt {
             : "For each option, return segment_id and set end_segment_id to null."
         let rankingInstruction = recipe.outputKind == .text
             ? """
-            Return chapters in chronological order with a concise chapter title in label.
-            The explanation is internal app metadata and must briefly identify the section.
+            Return records in chronological order with concise display text in label.
+            The explanation is internal app metadata and must briefly identify why the
+            record matches the requested analysis.
             """
             : """
             Rank quality rather than trying to distribute markers evenly. Give each option a
@@ -413,9 +645,143 @@ enum SmartMarkerProviderPrompt {
         """
     }
 
+    static func documentPrompt(
+        transcript: String,
+        recipe: SmartMarkerAnalysisRecipe
+    ) -> String {
+        """
+        \(task(for: recipe))
+
+        Create the requested final text from the transcript below. Return only the finished
+        text a user could copy and use directly. Do not include analysis, preambles, labels,
+        timecodes, JSON, or commentary about your process unless the custom instructions
+        explicitly request them.
+
+        Transcript:
+        \(transcript)
+        """
+    }
+
+    static func refinementPrompt(
+        for request: SmartMarkerRefinementRequest
+    ) -> String {
+        let entriesBySegmentID = Dictionary(
+            grouping: request.entries,
+            by: \.segmentID
+        )
+        let currentResults: String
+        if request.recipe.isDocumentText {
+            currentResults = request.currentDocumentText
+        } else {
+            currentResults = request.currentSuggestions.map { suggestion in
+                let startEntry = entriesBySegmentID[suggestion.sourceSegmentID]?.min(by: {
+                    abs($0.start - suggestion.seconds) < abs($1.start - suggestion.seconds)
+                }) ?? request.entries.min(by: {
+                        abs($0.start - suggestion.seconds) < abs($1.start - suggestion.seconds)
+                    })
+                let endEntry = suggestion.endSeconds.flatMap { endSeconds in
+                    request.entries.min(by: {
+                        abs($0.end - endSeconds) < abs($1.end - endSeconds)
+                    })
+                }
+                let endText = endEntry.map { " end_segment_id=\($0.ordinal)" } ?? ""
+                return """
+                segment_id=\(startEntry?.ordinal ?? 0)\(endText) | \(suggestion.label) | \(suggestion.explanation)
+                """
+            }.joined(separator: "\n")
+        }
+        let conversation = request.conversation.suffix(12).map {
+            "\($0.role == .user ? "USER" : "ASSISTANT"): \($0.text)"
+        }.joined(separator: "\n")
+        let transcript = transcript(from: request.entries, recipe: request.recipe)
+        let replacementRules: String
+        if request.recipe.isDocumentText {
+            replacementRules = """
+            For a replacement, put the complete revised document in document_text and return
+            an empty suggestions array.
+            """
+        } else {
+            replacementRules = """
+            For a replacement, return the complete revised result set in suggestions, not a
+            diff. Use only segment IDs from the transcript. Set document_text to null.
+            Marker and timestamped-text results require end_segment_id to be null. Range
+            results require a later valid end_segment_id.
+            """
+        }
+        return """
+        The user is discussing or refining the current results of this analysis:
+        \(task(for: request.recipe))
+
+        Respond naturally to the user's request. If the user is asking a question or discussing
+        the results without requesting a change, use action "message" and leave the results
+        unchanged. If the user requests a change, use action "replace" and provide the complete
+        revised results. Do not force a revision when a conversational answer is more appropriate.
+
+        \(replacementRules)
+        Return no more than \(request.maximumResults) suggestions. Include a concise conversational
+        message explaining what you did or answering the question.
+
+        CURRENT RESULTS:
+        \(currentResults)
+
+        PRIOR CONVERSATION:
+        \(conversation.isEmpty ? "(none)" : conversation)
+
+        NEW USER MESSAGE:
+        \(request.instruction)
+
+        TRANSCRIPT:
+        \(transcript)
+
+        Return only JSON with these fields:
+        action: "message" or "replace"
+        message: string
+        document_text: string or null
+        suggestions: array of objects containing segment_id, end_segment_id, label,
+        explanation, and relevance_score
+        """
+    }
+
+    static func parseRefinementJSON(_ response: String) throws -> SmartMarkerRefinementResponse {
+        var normalized = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.hasPrefix("```") {
+            normalized = normalized
+                .replacingOccurrences(
+                    of: #"^```(?:json)?\s*"#,
+                    with: "",
+                    options: .regularExpression
+                )
+                .replacingOccurrences(
+                    of: #"\s*```$"#,
+                    with: "",
+                    options: .regularExpression
+                )
+        }
+        if let firstBrace = normalized.firstIndex(of: "{"),
+           let lastBrace = normalized.lastIndex(of: "}") {
+            normalized = String(normalized[firstBrace...lastBrace])
+        }
+        guard let data = normalized.data(using: .utf8) else {
+            throw SmartMarkerProviderError.invalidResponse(
+                "The AI returned refinement data In/Out could not read."
+            )
+        }
+        do {
+            let payload = try JSONDecoder().decode(
+                SmartMarkerRefinementPayload.self,
+                from: data
+            )
+            return payload.response
+        } catch {
+            throw SmartMarkerProviderError.invalidResponse(
+                "The AI returned refinement data In/Out could not read."
+            )
+        }
+    }
+
     static func parseAppleResponse(
         _ response: String,
-        recipe: SmartMarkerRecipe = .topicChanges
+        recipe: SmartMarkerAnalysisRecipe = .topicChanges
     ) -> [SmartMarkerGeneratedCandidate] {
         response
             .components(separatedBy: .newlines)
@@ -486,6 +852,53 @@ enum SmartMarkerProviderPrompt {
     }
 }
 
+private struct SmartMarkerRefinementPayload: Decodable {
+    let action: SmartMarkerRefinementAction
+    let message: String
+    let documentText: String?
+    let suggestions: [Suggestion]
+
+    var response: SmartMarkerRefinementResponse {
+        SmartMarkerRefinementResponse(
+            action: action,
+            message: message,
+            suggestions: suggestions.map {
+                SmartMarkerGeneratedCandidate(
+                    segmentID: $0.segmentID,
+                    endSegmentID: $0.endSegmentID,
+                    label: $0.label,
+                    explanation: $0.explanation,
+                    relevanceScore: $0.relevanceScore
+                )
+            },
+            documentText: documentText
+        )
+    }
+
+    struct Suggestion: Decodable {
+        let segmentID: Int
+        let endSegmentID: Int?
+        let label: String
+        let explanation: String
+        let relevanceScore: Double
+
+        enum CodingKeys: String, CodingKey {
+            case segmentID = "segment_id"
+            case endSegmentID = "end_segment_id"
+            case label
+            case explanation
+            case relevanceScore = "relevance_score"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case message
+        case documentText = "document_text"
+        case suggestions
+    }
+}
+
 struct OpenAIResponsesClient: Sendable {
     private let apiKey: String
     private let model: String
@@ -501,7 +914,7 @@ struct OpenAIResponsesClient: Sendable {
 
     func generateMarkers(
         transcript: String,
-        recipe: SmartMarkerRecipe,
+        recipe: SmartMarkerAnalysisRecipe,
         limit: Int
     ) async throws -> [SmartMarkerGeneratedCandidate] {
         let data = try Self.markerRequestBody(
@@ -518,10 +931,42 @@ struct OpenAIResponsesClient: Sendable {
         return try Self.parseMarkerResponse(responseData)
     }
 
+    func generateDocument(
+        transcript: String,
+        recipe: SmartMarkerAnalysisRecipe
+    ) async throws -> String {
+        let data = try Self.documentRequestBody(
+            model: model,
+            transcript: transcript,
+            recipe: recipe
+        )
+        let responseData = try await performRequest(
+            path: "/v1/responses",
+            method: "POST",
+            body: data
+        )
+        return try Self.parseDocumentResponse(responseData)
+    }
+
+    func refine(
+        request: SmartMarkerRefinementRequest
+    ) async throws -> SmartMarkerRefinementResponse {
+        let data = try Self.refinementRequestBody(
+            model: model,
+            request: request
+        )
+        let responseData = try await performRequest(
+            path: "/v1/responses",
+            method: "POST",
+            body: data
+        )
+        return try Self.parseRefinementResponse(responseData)
+    }
+
     static func markerRequestBody(
         model: String,
         transcript: String,
-        recipe: SmartMarkerRecipe,
+        recipe: SmartMarkerAnalysisRecipe,
         limit: Int
     ) throws -> Data {
         let schema: [String: Any] = [
@@ -585,6 +1030,113 @@ struct OpenAIResponsesClient: Sendable {
         return try JSONSerialization.data(withJSONObject: body)
     }
 
+    static func documentRequestBody(
+        model: String,
+        transcript: String,
+        recipe: SmartMarkerAnalysisRecipe
+    ) throws -> Data {
+        let schema: [String: Any] = [
+            "type": "object",
+            "additionalProperties": false,
+            "properties": [
+                "text": ["type": "string"]
+            ],
+            "required": ["text"]
+        ]
+        let body: [String: Any] = [
+            "model": model,
+            "store": false,
+            "instructions": """
+                You are an experienced editorial assistant creating publication-ready text
+                from transcripts of news, interviews, and political commentary.
+                """,
+            "input": SmartMarkerProviderPrompt.documentPrompt(
+                transcript: transcript,
+                recipe: recipe
+            ),
+            "max_output_tokens": 8_000,
+            "text": [
+                "format": [
+                    "type": "json_schema",
+                    "name": "analysis_document",
+                    "strict": true,
+                    "schema": schema
+                ]
+            ]
+        ]
+        return try JSONSerialization.data(withJSONObject: body)
+    }
+
+    static func refinementRequestBody(
+        model: String,
+        request: SmartMarkerRefinementRequest
+    ) throws -> Data {
+        let suggestionSchema: [String: Any] = [
+            "type": "object",
+            "additionalProperties": false,
+            "properties": [
+                "segment_id": ["type": "integer"],
+                "end_segment_id": ["type": ["integer", "null"]],
+                "label": ["type": "string"],
+                "explanation": ["type": "string"],
+                "relevance_score": [
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                ]
+            ],
+            "required": [
+                "segment_id",
+                "end_segment_id",
+                "label",
+                "explanation",
+                "relevance_score"
+            ]
+        ]
+        let schema: [String: Any] = [
+            "type": "object",
+            "additionalProperties": false,
+            "properties": [
+                "action": [
+                    "type": "string",
+                    "enum": ["message", "replace"]
+                ],
+                "message": ["type": "string"],
+                "document_text": ["type": ["string", "null"]],
+                "suggestions": [
+                    "type": "array",
+                    "maxItems": request.maximumResults,
+                    "items": suggestionSchema
+                ]
+            ],
+            "required": [
+                "action",
+                "message",
+                "document_text",
+                "suggestions"
+            ]
+        ]
+        let body: [String: Any] = [
+            "model": model,
+            "store": false,
+            "instructions": """
+                You are an experienced editorial assistant discussing and revising analysis
+                results derived from a supplied transcript.
+                """,
+            "input": SmartMarkerProviderPrompt.refinementPrompt(for: request),
+            "max_output_tokens": 8_000,
+            "text": [
+                "format": [
+                    "type": "json_schema",
+                    "name": "analysis_refinement",
+                    "strict": true,
+                    "schema": schema
+                ]
+            ]
+        ]
+        return try JSONSerialization.data(withJSONObject: body)
+    }
+
     func testConnection() async throws {
         let body: [String: Any] = [
             "model": model,
@@ -597,6 +1149,26 @@ struct OpenAIResponsesClient: Sendable {
             method: "POST",
             body: try JSONSerialization.data(withJSONObject: body)
         )
+    }
+
+    func listModels() async throws -> [String] {
+        let data = try await performRequest(
+            path: "/v1/models",
+            method: "GET",
+            body: nil
+        )
+        return try Self.parseModelList(data)
+    }
+
+    static func parseModelList(_ data: Data) throws -> [String] {
+        do {
+            let payload = try JSONDecoder().decode(ModelListPayload.self, from: data)
+            return payload.data.map(\.id)
+        } catch {
+            throw SmartMarkerProviderError.invalidResponse(
+                "OpenAI returned a model list In/Out could not read."
+            )
+        }
     }
 
     static func parseMarkerResponse(_ data: Data) throws -> [SmartMarkerGeneratedCandidate] {
@@ -634,6 +1206,68 @@ struct OpenAIResponsesClient: Sendable {
                 "OpenAI returned marker data In/Out could not read."
             )
         }
+    }
+
+    static func parseDocumentResponse(_ data: Data) throws -> String {
+        let envelope: ResponseEnvelope
+        do {
+            envelope = try JSONDecoder().decode(ResponseEnvelope.self, from: data)
+        } catch {
+            throw SmartMarkerProviderError.invalidResponse(
+                "OpenAI returned a response In/Out could not read."
+            )
+        }
+        guard let outputText = envelope.output
+            .compactMap(\.content)
+            .flatMap({ $0 })
+            .first(where: { $0.type == "output_text" })?
+            .text,
+              let jsonData = outputText.data(using: String.Encoding.utf8) else {
+            throw SmartMarkerProviderError.invalidResponse(
+                "OpenAI did not return the requested text."
+            )
+        }
+        do {
+            let payload = try JSONDecoder().decode(DocumentPayload.self, from: jsonData)
+            let text = payload.text.trimmingCharacters(
+                in: CharacterSet.whitespacesAndNewlines
+            )
+            guard !text.isEmpty else {
+                throw SmartMarkerProviderError.invalidResponse(
+                    "OpenAI returned empty text."
+                )
+            }
+            return text
+        } catch let error as SmartMarkerProviderError {
+            throw error
+        } catch {
+            throw SmartMarkerProviderError.invalidResponse(
+                "OpenAI returned text data In/Out could not read."
+            )
+        }
+    }
+
+    static func parseRefinementResponse(
+        _ data: Data
+    ) throws -> SmartMarkerRefinementResponse {
+        let envelope: ResponseEnvelope
+        do {
+            envelope = try JSONDecoder().decode(ResponseEnvelope.self, from: data)
+        } catch {
+            throw SmartMarkerProviderError.invalidResponse(
+                "OpenAI returned a response In/Out could not read."
+            )
+        }
+        guard let outputText = envelope.output
+            .compactMap(\.content)
+            .flatMap({ $0 })
+            .first(where: { $0.type == "output_text" })?
+            .text else {
+            throw SmartMarkerProviderError.invalidResponse(
+                "OpenAI did not return a refinement response."
+            )
+        }
+        return try SmartMarkerProviderPrompt.parseRefinementJSON(outputText)
     }
 
     private func performRequest(
@@ -700,6 +1334,18 @@ struct OpenAIResponsesClient: Sendable {
 
     private struct MarkerPayload: Decodable {
         let markers: [Marker]
+    }
+
+    private struct DocumentPayload: Decodable {
+        let text: String
+    }
+
+    private struct ModelListPayload: Decodable {
+        let data: [Model]
+
+        struct Model: Decodable {
+            let id: String
+        }
     }
 
     private struct Marker: Decodable {

@@ -252,6 +252,11 @@ final class WorkspaceViewModel: ObservableObject {
             SmartMarkerPreferences.openAIModel = openAISmartMarkerModel
         }
     }
+    @Published var openAIAvailableModels = SmartMarkerOpenAIModelCatalog.options(
+        from: SmartMarkerPreferences.cachedOpenAIModelIDs
+    )
+    @Published var isLoadingOpenAIModels = false
+    @Published var openAIModelCatalogStatusText = ""
     @Published var openAIAPIKeyConfigured = SmartMarkerPreferences.hasOpenAIKey
     @Published var isTestingOpenAIConnection = false
     @Published var openAIConnectionStatusText = ""

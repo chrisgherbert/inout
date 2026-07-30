@@ -10,6 +10,7 @@ extension WorkspaceViewModel {
             openAIAPIKeyConfigured = true
             openAIConnectionSucceeded = true
             openAIConnectionStatusText = "API key saved securely in Keychain."
+            refreshOpenAIModels()
             return true
         } catch {
             openAIConnectionSucceeded = false
@@ -24,11 +25,56 @@ extension WorkspaceViewModel {
                 for: SmartMarkerPreferences.openAIKeychainAccount
             )
             openAIAPIKeyConfigured = false
+            openAIAvailableModels = []
+            openAIModelCatalogStatusText = ""
+            SmartMarkerPreferences.clearOpenAIModelCatalog()
             openAIConnectionSucceeded = false
             openAIConnectionStatusText = "API key removed."
         } catch {
             openAIConnectionSucceeded = false
             openAIConnectionStatusText = error.localizedDescription
+        }
+    }
+
+    func loadOpenAIModelsIfNeeded() {
+        guard openAIAPIKeyConfigured else { return }
+        if openAIAvailableModels.isEmpty ||
+            SmartMarkerPreferences.openAIModelCatalogNeedsRefresh {
+            refreshOpenAIModels()
+        }
+    }
+
+    func refreshOpenAIModels() {
+        guard !isLoadingOpenAIModels else { return }
+        guard let key = SecureCredentialStore.value(
+            for: SmartMarkerPreferences.openAIKeychainAccount
+        ) else {
+            openAIModelCatalogStatusText = "Save an API key to load models."
+            return
+        }
+
+        isLoadingOpenAIModels = true
+        openAIModelCatalogStatusText = "Loading models..."
+        let selectedModel = openAISmartMarkerModel
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let ids = try await OpenAIResponsesClient(
+                    apiKey: key,
+                    model: selectedModel
+                ).listModels()
+                guard !Task.isCancelled else { return }
+                let options = SmartMarkerOpenAIModelCatalog.options(from: ids)
+                self.openAIAvailableModels = options
+                SmartMarkerPreferences.cacheOpenAIModelIDs(options.map(\.id))
+                self.openAIModelCatalogStatusText = options.isEmpty
+                    ? "No compatible text models were found."
+                    : "Available models updated."
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.openAIModelCatalogStatusText = error.localizedDescription
+            }
+            self.isLoadingOpenAIModels = false
         }
     }
 

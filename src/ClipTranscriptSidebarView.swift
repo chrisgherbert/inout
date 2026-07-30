@@ -76,6 +76,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let deleteSmartMarkerSuggestion: (UUID) -> Void
     let setSmartMarkerScrollPosition: (UUID?, UUID) -> Void
     let cancelSmartMarkerAnalysis: (UUID) -> Void
+    let refineSmartMarkerAnalysis: (UUID, String) -> Void
+    let undoSmartMarkerRefinement: (UUID) -> Void
     let onCloseTranscript: () -> Void
 
     @State private var searchText = ""
@@ -334,7 +336,9 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     onPlay: playSmartMarker,
                     onDeleteSuggestion: deleteSmartMarkerSuggestion,
                     onSetScrollPosition: setSmartMarkerScrollPosition,
-                    onCancelAnalysis: cancelSmartMarkerAnalysis
+                    onCancelAnalysis: cancelSmartMarkerAnalysis,
+                    onRefine: refineSmartMarkerAnalysis,
+                    onUndoRefinement: undoSmartMarkerRefinement
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if hasTranscript {
