@@ -4,6 +4,8 @@ import FoundationModels
 enum SmartMarkerProviderID: String, CaseIterable, Identifiable, Sendable {
     case appleIntelligence
     case openAI
+    case claude
+    case gemini
 
     var id: String { rawValue }
 
@@ -11,6 +13,8 @@ enum SmartMarkerProviderID: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .appleIntelligence: return "Apple Intelligence"
         case .openAI: return "OpenAI"
+        case .claude: return "Claude"
+        case .gemini: return "Gemini"
         }
     }
 
@@ -20,6 +24,10 @@ enum SmartMarkerProviderID: String, CaseIterable, Identifiable, Sendable {
             return "Runs privately on this Mac."
         case .openAI:
             return "Sends transcript text to OpenAI using your API key."
+        case .claude:
+            return "Sends transcript text to Anthropic using your API key."
+        case .gemini:
+            return "Sends transcript text to Google using your Gemini API key."
         }
     }
 }
@@ -31,6 +39,16 @@ enum SmartMarkerPreferences {
     static let openAIModelCatalogDateKey = "prefs.smartMarkerOpenAIModelCatalogDate"
     static let openAIKeychainAccount = "openai-api-key"
     static let defaultOpenAIModel = "chat-latest"
+    static let claudeModelKey = "prefs.smartMarkerClaudeModel"
+    static let claudeModelCatalogKey = "prefs.smartMarkerClaudeModelCatalog"
+    static let claudeModelCatalogDateKey = "prefs.smartMarkerClaudeModelCatalogDate"
+    static let claudeKeychainAccount = "anthropic-api-key"
+    static let defaultClaudeModel = "claude-sonnet-5"
+    static let geminiModelKey = "prefs.smartMarkerGeminiModel"
+    static let geminiModelCatalogKey = "prefs.smartMarkerGeminiModelCatalog"
+    static let geminiModelCatalogDateKey = "prefs.smartMarkerGeminiModelCatalogDate"
+    static let geminiKeychainAccount = "gemini-api-key"
+    static let defaultGeminiModel = "gemini-3.6-flash"
 
     static var providerID: SmartMarkerProviderID {
         get {
@@ -64,6 +82,24 @@ enum SmartMarkerPreferences {
         SecureCredentialStore.value(for: openAIKeychainAccount) != nil
     }
 
+    static var claudeModel: String {
+        get { storedModel(forKey: claudeModelKey, defaultValue: defaultClaudeModel) }
+        set { storeModel(newValue, forKey: claudeModelKey, defaultValue: defaultClaudeModel) }
+    }
+
+    static var hasClaudeKey: Bool {
+        SecureCredentialStore.value(for: claudeKeychainAccount) != nil
+    }
+
+    static var geminiModel: String {
+        get { storedModel(forKey: geminiModelKey, defaultValue: defaultGeminiModel) }
+        set { storeModel(newValue, forKey: geminiModelKey, defaultValue: defaultGeminiModel) }
+    }
+
+    static var hasGeminiKey: Bool {
+        SecureCredentialStore.value(for: geminiKeychainAccount) != nil
+    }
+
     static var cachedOpenAIModelIDs: [String] {
         UserDefaults.standard.stringArray(forKey: openAIModelCatalogKey) ?? []
     }
@@ -86,9 +122,78 @@ enum SmartMarkerPreferences {
         UserDefaults.standard.removeObject(forKey: openAIModelCatalogKey)
         UserDefaults.standard.removeObject(forKey: openAIModelCatalogDateKey)
     }
+
+    static var cachedClaudeModelIDs: [String] {
+        UserDefaults.standard.stringArray(forKey: claudeModelCatalogKey) ?? []
+    }
+
+    static var claudeModelCatalogNeedsRefresh: Bool {
+        modelCatalogNeedsRefresh(dateKey: claudeModelCatalogDateKey)
+    }
+
+    static func cacheClaudeModelIDs(_ ids: [String]) {
+        cacheModelIDs(ids, catalogKey: claudeModelCatalogKey, dateKey: claudeModelCatalogDateKey)
+    }
+
+    static func clearClaudeModelCatalog() {
+        clearModelCatalog(catalogKey: claudeModelCatalogKey, dateKey: claudeModelCatalogDateKey)
+    }
+
+    static var cachedGeminiModelIDs: [String] {
+        UserDefaults.standard.stringArray(forKey: geminiModelCatalogKey) ?? []
+    }
+
+    static var geminiModelCatalogNeedsRefresh: Bool {
+        modelCatalogNeedsRefresh(dateKey: geminiModelCatalogDateKey)
+    }
+
+    static func cacheGeminiModelIDs(_ ids: [String]) {
+        cacheModelIDs(ids, catalogKey: geminiModelCatalogKey, dateKey: geminiModelCatalogDateKey)
+    }
+
+    static func clearGeminiModelCatalog() {
+        clearModelCatalog(catalogKey: geminiModelCatalogKey, dateKey: geminiModelCatalogDateKey)
+    }
+
+    static func model(for provider: SmartMarkerProviderID) -> String? {
+        switch provider {
+        case .appleIntelligence: return nil
+        case .openAI: return openAIModel
+        case .claude: return claudeModel
+        case .gemini: return geminiModel
+        }
+    }
+
+    private static func storedModel(forKey key: String, defaultValue: String) -> String {
+        let stored = UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? defaultValue : stored
+    }
+
+    private static func storeModel(_ value: String, forKey key: String, defaultValue: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(trimmed.isEmpty ? defaultValue : trimmed, forKey: key)
+    }
+
+    private static func modelCatalogNeedsRefresh(dateKey: String) -> Bool {
+        guard let date = UserDefaults.standard.object(forKey: dateKey) as? Date else {
+            return true
+        }
+        return Date().timeIntervalSince(date) > 24 * 60 * 60
+    }
+
+    private static func cacheModelIDs(_ ids: [String], catalogKey: String, dateKey: String) {
+        UserDefaults.standard.set(ids, forKey: catalogKey)
+        UserDefaults.standard.set(Date(), forKey: dateKey)
+    }
+
+    private static func clearModelCatalog(catalogKey: String, dateKey: String) {
+        UserDefaults.standard.removeObject(forKey: catalogKey)
+        UserDefaults.standard.removeObject(forKey: dateKey)
+    }
 }
 
-struct SmartMarkerOpenAIModelOption: Identifiable, Equatable, Sendable {
+struct SmartMarkerModelOption: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
     let detail: String
@@ -103,12 +208,12 @@ enum SmartMarkerOpenAIModelCatalog {
         ("chat-latest", "Chat Latest", "Tracks OpenAI's latest ChatGPT-style API model.")
     ]
 
-    static func options(from modelIDs: [String]) -> [SmartMarkerOpenAIModelOption] {
+    static func options(from modelIDs: [String]) -> [SmartMarkerModelOption] {
         let available = Set(modelIDs.filter(isCompatibleAlias))
         let recommendedIDs = Set(recommended.map(\.id))
-        let recommendedOptions: [SmartMarkerOpenAIModelOption] = recommended.compactMap { model in
+        let recommendedOptions: [SmartMarkerModelOption] = recommended.compactMap { model in
             guard available.contains(model.id) else { return nil }
-            return SmartMarkerOpenAIModelOption(
+            return SmartMarkerModelOption(
                 id: model.id,
                 title: model.title,
                 detail: model.detail,
@@ -119,7 +224,7 @@ enum SmartMarkerOpenAIModelCatalog {
             .subtracting(recommendedIDs)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             .map {
-                SmartMarkerOpenAIModelOption(
+                SmartMarkerModelOption(
                     id: $0,
                     title: $0,
                     detail: "Available to this API key.",
@@ -249,6 +354,14 @@ enum SmartMarkerProviderFactory {
             return SmartMarkerPreferences.hasOpenAIKey
                 ? nil
                 : "Add an OpenAI API key in Settings > AI."
+        case .claude:
+            return SmartMarkerPreferences.hasClaudeKey
+                ? nil
+                : "Add an Anthropic API key in Settings > AI."
+        case .gemini:
+            return SmartMarkerPreferences.hasGeminiKey
+                ? nil
+                : "Add a Gemini API key in Settings > AI."
         }
     }
 
@@ -274,6 +387,30 @@ enum SmartMarkerProviderFactory {
                 apiKey: key,
                 model: modelIdentifier ?? SmartMarkerPreferences.openAIModel
             )
+        case .claude:
+            guard let key = SecureCredentialStore.value(
+                for: SmartMarkerPreferences.claudeKeychainAccount
+            ) else {
+                throw SmartMarkerProviderError.unavailable(
+                    "Add an Anthropic API key in Settings > AI."
+                )
+            }
+            return ClaudeSmartMarkerProvider(
+                apiKey: key,
+                model: modelIdentifier ?? SmartMarkerPreferences.claudeModel
+            )
+        case .gemini:
+            guard let key = SecureCredentialStore.value(
+                for: SmartMarkerPreferences.geminiKeychainAccount
+            ) else {
+                throw SmartMarkerProviderError.unavailable(
+                    "Add a Gemini API key in Settings > AI."
+                )
+            }
+            return GeminiSmartMarkerProvider(
+                apiKey: key,
+                model: modelIdentifier ?? SmartMarkerPreferences.geminiModel
+            )
         }
     }
 
@@ -281,6 +418,8 @@ enum SmartMarkerProviderFactory {
         switch id {
         case .appleIntelligence: return 2_800
         case .openAI: return 120_000
+        case .claude: return 180_000
+        case .gemini: return 120_000
         }
     }
 }
@@ -610,7 +749,7 @@ enum SmartMarkerProviderPrompt {
         """
     }
 
-    static func openAIPrompt(
+    static func cloudPrompt(
         transcript: String,
         recipe: SmartMarkerAnalysisRecipe,
         limit: Int
@@ -1012,7 +1151,7 @@ struct OpenAIResponsesClient: Sendable {
                 interviews, and political commentary. Analyze the supplied transcript;
                 do not rewrite it.
                 """,
-            "input": SmartMarkerProviderPrompt.openAIPrompt(
+            "input": SmartMarkerProviderPrompt.cloudPrompt(
                 transcript: transcript,
                 recipe: recipe,
                 limit: limit

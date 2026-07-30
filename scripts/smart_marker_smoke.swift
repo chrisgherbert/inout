@@ -239,7 +239,7 @@ struct SmartMarkerSmokeTest {
         precondition(parsedRanges.count == 1, "Range parsing must reject reversed and point rows.")
         precondition(parsedRanges[0].segmentID == 4)
         precondition(parsedRanges[0].endSegmentID == 8)
-        let chapterPrompt = SmartMarkerProviderPrompt.openAIPrompt(
+        let chapterPrompt = SmartMarkerProviderPrompt.cloudPrompt(
             transcript: "[0] Opening section.",
             recipe: .youtubeChapters,
             limit: 8
@@ -752,6 +752,186 @@ struct SmartMarkerSmokeTest {
             limit: 3
         )
         precondition(mockMarkers == openAIMarkers)
+
+        let claudeBody = try ClaudeMessagesClient.requestBody(
+            model: "claude-sonnet-4-6",
+            system: ClaudeMessagesClient.markerSystemPrompt,
+            prompt: "Analyze this transcript.",
+            schema: SmartMarkerStructuredOutput.markerSchema(limit: 3)
+        )
+        let claudeBodyJSON = try JSONSerialization.jsonObject(with: claudeBody)
+            as? [String: Any]
+        let claudeOutputConfig = claudeBodyJSON?["output_config"] as? [String: Any]
+        let claudeFormat = claudeOutputConfig?["format"] as? [String: Any]
+        precondition(claudeFormat?["type"] as? String == "json_schema")
+        precondition(claudeFormat?["schema"] != nil)
+        let claudeEnvelope = try JSONSerialization.data(withJSONObject: [
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "content": [["type": "text", "text": openAIPayload]],
+            "model": "claude-sonnet-4-6",
+            "stop_reason": "end_turn"
+        ])
+        SmartMarkerMockURLProtocol.handler = { request in
+            precondition(request.url?.absoluteString == "https://api.anthropic.com/v1/messages")
+            precondition(request.httpMethod == "POST")
+            precondition(request.value(forHTTPHeaderField: "x-api-key") == "claude-test-key")
+            precondition(
+                request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01"
+            )
+            precondition(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, claudeEnvelope)
+        }
+        let claudeMarkers = try await ClaudeMessagesClient(
+            apiKey: "claude-test-key",
+            model: "claude-sonnet-4-6",
+            session: mockSession
+        ).generateMarkers(
+            transcript: "[12] The discussion moves to campaign strategy.",
+            recipe: .adBreaks,
+            limit: 3
+        )
+        precondition(claudeMarkers == openAIMarkers)
+
+        let claudeModelsData = try JSONSerialization.data(withJSONObject: [
+            "data": [
+                ["type": "model", "id": "claude-haiku-4-5"],
+                ["type": "model", "id": "claude-sonnet-4-6"],
+                ["type": "model", "id": "unrelated-model"]
+            ],
+            "has_more": false
+        ])
+        let claudeModelIDs = try ClaudeMessagesClient.parseModelList(claudeModelsData)
+        precondition(claudeModelIDs.count == 3)
+        precondition(
+            SmartMarkerClaudeModelCatalog.options(from: claudeModelIDs).map(\.id) == [
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5"
+            ]
+        )
+        SmartMarkerMockURLProtocol.handler = { request in
+            precondition(
+                request.url?.absoluteString == "https://api.anthropic.com/v1/models?limit=1000"
+            )
+            precondition(request.httpMethod == "GET")
+            precondition(request.value(forHTTPHeaderField: "x-api-key") == "claude-test-key")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, claudeModelsData)
+        }
+        let fetchedClaudeModels = try await ClaudeMessagesClient(
+            apiKey: "claude-test-key",
+            model: "claude-sonnet-4-6",
+            session: mockSession
+        ).listModels()
+        precondition(fetchedClaudeModels == claudeModelIDs)
+
+        let geminiBody = try GeminiGenerateContentClient.requestBody(
+            system: ClaudeMessagesClient.markerSystemPrompt,
+            prompt: "Analyze this transcript.",
+            schema: SmartMarkerStructuredOutput.markerSchema(limit: 3)
+        )
+        let geminiBodyJSON = try JSONSerialization.jsonObject(with: geminiBody)
+            as? [String: Any]
+        let geminiGenerationConfig = geminiBodyJSON?["generationConfig"] as? [String: Any]
+        precondition(
+            geminiGenerationConfig?["responseMimeType"] as? String == "application/json"
+        )
+        precondition(geminiGenerationConfig?["responseJsonSchema"] != nil)
+        let geminiEnvelope = try JSONSerialization.data(withJSONObject: [
+            "candidates": [
+                [
+                    "content": [
+                        "role": "model",
+                        "parts": [["text": openAIPayload]]
+                    ],
+                    "finishReason": "STOP"
+                ]
+            ]
+        ])
+        SmartMarkerMockURLProtocol.handler = { request in
+            precondition(
+                request.url?.absoluteString ==
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
+            )
+            precondition(request.httpMethod == "POST")
+            precondition(request.value(forHTTPHeaderField: "x-goog-api-key") == "gemini-test-key")
+            precondition(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, geminiEnvelope)
+        }
+        let geminiMarkers = try await GeminiGenerateContentClient(
+            apiKey: "gemini-test-key",
+            model: "gemini-3.6-flash",
+            session: mockSession
+        ).generateMarkers(
+            transcript: "[12] The discussion moves to campaign strategy.",
+            recipe: .adBreaks,
+            limit: 3
+        )
+        precondition(geminiMarkers == openAIMarkers)
+
+        let geminiModelsData = try JSONSerialization.data(withJSONObject: [
+            "models": [
+                [
+                    "name": "models/gemini-2.5-flash",
+                    "supportedGenerationMethods": ["generateContent"]
+                ],
+                [
+                    "name": "models/gemini-3.6-flash",
+                    "supportedGenerationMethods": ["generateContent"]
+                ],
+                [
+                    "name": "models/text-embedding-004",
+                    "supportedGenerationMethods": ["embedContent"]
+                ]
+            ]
+        ])
+        let geminiModelIDs = try GeminiGenerateContentClient.parseModelList(geminiModelsData)
+        precondition(geminiModelIDs == ["gemini-2.5-flash", "gemini-3.6-flash"])
+        precondition(
+            SmartMarkerGeminiModelCatalog.options(from: geminiModelIDs).map(\.id) == [
+                "gemini-3.6-flash",
+                "gemini-2.5-flash"
+            ]
+        )
+        SmartMarkerMockURLProtocol.handler = { request in
+            precondition(
+                request.url?.absoluteString ==
+                    "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+            )
+            precondition(request.httpMethod == "GET")
+            precondition(request.value(forHTTPHeaderField: "x-goog-api-key") == "gemini-test-key")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, geminiModelsData)
+        }
+        let fetchedGeminiModels = try await GeminiGenerateContentClient(
+            apiKey: "gemini-test-key",
+            model: "gemini-3.6-flash",
+            session: mockSession
+        ).listModels()
+        precondition(fetchedGeminiModels == geminiModelIDs)
         SmartMarkerMockURLProtocol.handler = nil
         mockSession.invalidateAndCancel()
 

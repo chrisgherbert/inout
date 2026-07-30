@@ -133,7 +133,7 @@ struct SmartMarkerSetupSheet: View {
                 Label(
                     providerID == .appleIntelligence
                         ? "Analysis runs privately on this Mac."
-                        : "Transcript text will be sent to OpenAI.",
+                        : providerID.detail,
                     systemImage: providerID == .appleIntelligence ? "lock.fill" : "network"
                 )
                     .font(.caption)
@@ -153,9 +153,7 @@ struct SmartMarkerSetupSheet: View {
                     onStart(
                         SmartMarkerAnalysisConfiguration(
                             providerID: providerID,
-                            modelIdentifier: providerID == .openAI
-                                ? SmartMarkerPreferences.openAIModel
-                                : nil,
+                            modelIdentifier: SmartMarkerPreferences.model(for: providerID),
                             recipe: recipe,
                             scope: scope,
                             density: density,
@@ -299,6 +297,7 @@ struct SmartMarkerReviewView: View {
                     } description: {
                         Text(activeTab.errorText)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if activeTab.configuration.recipe.isDocumentText,
                           !activeTab.documentText.isEmpty {
                     documentResult(for: activeTab)

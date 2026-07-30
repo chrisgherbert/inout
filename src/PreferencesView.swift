@@ -5,7 +5,11 @@ struct PreferencesView: View {
     @ObservedObject var model: WorkspaceViewModel
     @State private var profanityEntry = ""
     @State private var openAIAPIKeyEntry = ""
+    @State private var claudeAPIKeyEntry = ""
+    @State private var geminiAPIKeyEntry = ""
     @State private var showsCustomOpenAIModelField = false
+    @State private var showsCustomClaudeModelField = false
+    @State private var showsCustomGeminiModelField = false
     @State private var selectedPane: PreferencesPane = .general
     @StateObject private var smartMarkerRecipeStore = SmartMarkerRecipeStore.shared
 
@@ -287,169 +291,72 @@ struct PreferencesView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if model.smartMarkerProvider == .openAI {
-                    settingsRow("Model") {
-                        let recommendedModels = model.openAIAvailableModels.filter(
-                            \.isRecommended
-                        )
-                        let otherModels = model.openAIAvailableModels.filter {
-                            !$0.isRecommended
-                        }
-                        let selectedOption = model.openAIAvailableModels.first {
-                            $0.id == model.openAISmartMarkerModel
-                        }
-                        let selectedIsAvailable = selectedOption != nil
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            valueMenuPicker(
-                                "OpenAI Model",
-                                selection: $model.openAISmartMarkerModel
-                            ) {
-                                if !recommendedModels.isEmpty {
-                                    Section("Recommended") {
-                                        ForEach(recommendedModels) { option in
-                                            Text(option.title).tag(option.id)
-                                        }
-                                    }
-                                }
-                                if !otherModels.isEmpty {
-                                    Section("Available") {
-                                        ForEach(otherModels) { option in
-                                            Text(option.title).tag(option.id)
-                                        }
-                                    }
-                                }
-                                if !selectedIsAvailable {
-                                    Section("Current Selection") {
-                                        Text("\(model.openAISmartMarkerModel) (Unavailable)")
-                                            .tag(model.openAISmartMarkerModel)
-                                    }
-                                }
-                            }
-                            .frame(maxWidth: 300)
-
-                            Text(
-                                selectedOption?.detail ??
-                                    "This model has not been confirmed for the saved API key."
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                            if showsCustomOpenAIModelField || !selectedIsAvailable {
-                                TextField(
-                                    "Custom model ID",
-                                    text: $model.openAISmartMarkerModel
-                                )
-                                .textFieldStyle(.roundedBorder)
-                                .frame(maxWidth: 300)
-                            } else {
-                                Button("Use Custom Model ID…") {
-                                    showsCustomOpenAIModelField = true
-                                }
-                                .buttonStyle(.link)
-                                .controlSize(.small)
-                            }
-
-                            HStack(spacing: 8) {
-                                Button("Refresh Models") {
-                                    model.refreshOpenAIModels()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(
-                                    !model.openAIAPIKeyConfigured ||
-                                        model.isLoadingOpenAIModels
-                                )
-
-                                if model.isLoadingOpenAIModels {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                }
-
-                                if !model.openAIModelCatalogStatusText.isEmpty {
-                                    Text(model.openAIModelCatalogStatusText)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        .task {
-                            model.loadOpenAIModelsIfNeeded()
-                        }
-                    }
-
-                    settingsRow("API key") {
-                        HStack(spacing: 8) {
-                            SecureField(
-                                model.openAIAPIKeyConfigured ? "Key stored in Keychain" : "sk-...",
-                                text: $openAIAPIKeyEntry
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 300)
-
-                            Button("Save") {
-                                if model.saveOpenAIAPIKey(openAIAPIKeyEntry) {
-                                    openAIAPIKeyEntry = ""
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(
-                                openAIAPIKeyEntry.trimmingCharacters(
-                                    in: .whitespacesAndNewlines
-                                ).isEmpty
-                            )
-
-                            if model.openAIAPIKeyConfigured {
-                                Button("Remove", role: .destructive) {
-                                    model.removeOpenAIAPIKey()
-                                    openAIAPIKeyEntry = ""
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                        }
-                    }
-
-                    settingsRow("") {
-                        HStack(spacing: 8) {
-                            Button(
-                                model.isTestingOpenAIConnection ? "Testing..." : "Test Connection"
-                            ) {
-                                model.testOpenAIConnection()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(
-                                !model.openAIAPIKeyConfigured ||
-                                    model.isTestingOpenAIConnection
-                            )
-
-                            if !model.openAIConnectionStatusText.isEmpty {
-                                Label(
-                                    model.openAIConnectionStatusText,
-                                    systemImage: model.openAIConnectionSucceeded
-                                        ? "checkmark.circle.fill"
-                                        : "info.circle"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(
-                                    model.openAIConnectionSucceeded ? Color.green : Color.secondary
-                                )
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-
-                    settingsRow("") {
-                        Text(
-                            "Transcript text is sent directly to OpenAI. API usage is billed " +
-                                "separately from ChatGPT. In/Out stores your key only in macOS Keychain."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
+                switch model.smartMarkerProvider {
+                case .appleIntelligence:
+                    EmptyView()
+                case .openAI:
+                    cloudProviderSettings(
+                        providerName: "OpenAI",
+                        modelSelection: $model.openAISmartMarkerModel,
+                        models: model.openAIAvailableModels,
+                        isLoadingModels: model.isLoadingOpenAIModels,
+                        modelStatus: model.openAIModelCatalogStatusText,
+                        keyEntry: $openAIAPIKeyEntry,
+                        keyPlaceholder: "sk-...",
+                        keyConfigured: model.openAIAPIKeyConfigured,
+                        isTesting: model.isTestingOpenAIConnection,
+                        connectionStatus: model.openAIConnectionStatusText,
+                        connectionSucceeded: model.openAIConnectionSucceeded,
+                        showsCustomModel: $showsCustomOpenAIModelField,
+                        loadModels: model.loadOpenAIModelsIfNeeded,
+                        refreshModels: model.refreshOpenAIModels,
+                        saveKey: model.saveOpenAIAPIKey,
+                        removeKey: model.removeOpenAIAPIKey,
+                        testConnection: model.testOpenAIConnection,
+                        privacyText: "Transcript text is sent directly to OpenAI. API usage is billed separately from ChatGPT."
+                    )
+                case .claude:
+                    cloudProviderSettings(
+                        providerName: "Claude",
+                        modelSelection: $model.claudeSmartMarkerModel,
+                        models: model.claudeAvailableModels,
+                        isLoadingModels: model.isLoadingClaudeModels,
+                        modelStatus: model.claudeModelCatalogStatusText,
+                        keyEntry: $claudeAPIKeyEntry,
+                        keyPlaceholder: "sk-ant-...",
+                        keyConfigured: model.claudeAPIKeyConfigured,
+                        isTesting: model.isTestingClaudeConnection,
+                        connectionStatus: model.claudeConnectionStatusText,
+                        connectionSucceeded: model.claudeConnectionSucceeded,
+                        showsCustomModel: $showsCustomClaudeModelField,
+                        loadModels: model.loadClaudeModelsIfNeeded,
+                        refreshModels: model.refreshClaudeModels,
+                        saveKey: model.saveClaudeAPIKey,
+                        removeKey: model.removeClaudeAPIKey,
+                        testConnection: model.testClaudeConnection,
+                        privacyText: "Transcript text is sent directly to Anthropic. API usage is billed separately from Claude subscriptions."
+                    )
+                case .gemini:
+                    cloudProviderSettings(
+                        providerName: "Gemini",
+                        modelSelection: $model.geminiSmartMarkerModel,
+                        models: model.geminiAvailableModels,
+                        isLoadingModels: model.isLoadingGeminiModels,
+                        modelStatus: model.geminiModelCatalogStatusText,
+                        keyEntry: $geminiAPIKeyEntry,
+                        keyPlaceholder: "Gemini API key",
+                        keyConfigured: model.geminiAPIKeyConfigured,
+                        isTesting: model.isTestingGeminiConnection,
+                        connectionStatus: model.geminiConnectionStatusText,
+                        connectionSucceeded: model.geminiConnectionSucceeded,
+                        showsCustomModel: $showsCustomGeminiModelField,
+                        loadModels: model.loadGeminiModelsIfNeeded,
+                        refreshModels: model.refreshGeminiModels,
+                        saveKey: model.saveGeminiAPIKey,
+                        removeKey: model.removeGeminiAPIKey,
+                        testConnection: model.testGeminiConnection,
+                        privacyText: "Transcript text is sent directly to Google's Gemini API. API usage may be billed separately from Gemini subscriptions."
+                    )
                 }
             }
             Divider()
@@ -457,6 +364,159 @@ struct PreferencesView: View {
             settingsSection("Analysis Options") {
                 SmartMarkerRecipeManagementView(store: smartMarkerRecipeStore)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func cloudProviderSettings(
+        providerName: String,
+        modelSelection: Binding<String>,
+        models: [SmartMarkerModelOption],
+        isLoadingModels: Bool,
+        modelStatus: String,
+        keyEntry: Binding<String>,
+        keyPlaceholder: String,
+        keyConfigured: Bool,
+        isTesting: Bool,
+        connectionStatus: String,
+        connectionSucceeded: Bool,
+        showsCustomModel: Binding<Bool>,
+        loadModels: @escaping () -> Void,
+        refreshModels: @escaping () -> Void,
+        saveKey: @escaping (String) -> Bool,
+        removeKey: @escaping () -> Void,
+        testConnection: @escaping () -> Void,
+        privacyText: String
+    ) -> some View {
+        settingsRow("Model") {
+            let recommendedModels = models.filter(\.isRecommended)
+            let otherModels = models.filter { !$0.isRecommended }
+            let selectedOption = models.first { $0.id == modelSelection.wrappedValue }
+            let selectedIsAvailable = selectedOption != nil
+
+            VStack(alignment: .leading, spacing: 8) {
+                valueMenuPicker("\(providerName) Model", selection: modelSelection) {
+                    if !recommendedModels.isEmpty {
+                        Section("Recommended") {
+                            ForEach(recommendedModels) { option in
+                                Text(option.title).tag(option.id)
+                            }
+                        }
+                    }
+                    if !otherModels.isEmpty {
+                        Section("Available") {
+                            ForEach(otherModels) { option in
+                                Text(option.title).tag(option.id)
+                            }
+                        }
+                    }
+                    if !selectedIsAvailable {
+                        Section("Current Selection") {
+                            Text("\(modelSelection.wrappedValue) (Unavailable)")
+                                .tag(modelSelection.wrappedValue)
+                        }
+                    }
+                }
+                .frame(maxWidth: 300)
+
+                Text(
+                    selectedOption?.detail ??
+                        "This model has not been confirmed for the saved API key."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if showsCustomModel.wrappedValue || !selectedIsAvailable {
+                    TextField("Custom model ID", text: modelSelection)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 300)
+                } else {
+                    Button("Use Custom Model ID…") {
+                        showsCustomModel.wrappedValue = true
+                    }
+                    .buttonStyle(.link)
+                    .controlSize(.small)
+                }
+
+                HStack(spacing: 8) {
+                    Button("Refresh Models", action: refreshModels)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(!keyConfigured || isLoadingModels)
+                    if isLoadingModels {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    if !modelStatus.isEmpty {
+                        Text(modelStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .task {
+                loadModels()
+            }
+        }
+
+        settingsRow("API key") {
+            HStack(spacing: 8) {
+                SecureField(
+                    keyConfigured ? "Key stored in Keychain" : keyPlaceholder,
+                    text: keyEntry
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 300)
+
+                Button("Save") {
+                    if saveKey(keyEntry.wrappedValue) {
+                        keyEntry.wrappedValue = ""
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(
+                    keyEntry.wrappedValue.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+                )
+
+                if keyConfigured {
+                    Button("Remove", role: .destructive) {
+                        removeKey()
+                        keyEntry.wrappedValue = ""
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+
+        settingsRow("") {
+            HStack(spacing: 8) {
+                Button(isTesting ? "Testing..." : "Test Connection", action: testConnection)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!keyConfigured || isTesting)
+                if !connectionStatus.isEmpty {
+                    Label(
+                        connectionStatus,
+                        systemImage: connectionSucceeded
+                            ? "checkmark.circle.fill"
+                            : "info.circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(connectionSucceeded ? Color.green : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+
+        settingsRow("") {
+            Text("\(privacyText) In/Out stores your key only in macOS Keychain.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

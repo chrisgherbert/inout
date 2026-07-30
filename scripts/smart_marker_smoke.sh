@@ -13,6 +13,7 @@ xcrun swiftc \
   -framework Security \
   "$ROOT_DIR/src/SecureCredentialStore.swift" \
   "$ROOT_DIR/src/SmartMarkerProviders.swift" \
+  "$ROOT_DIR/src/SmartMarkerCloudProviders.swift" \
   "$ROOT_DIR/src/SmartMarkerAnalysis.swift" \
   "$ROOT_DIR/src/SmartMarkerRecipeStore.swift" \
   "$ROOT_DIR/scripts/smart_marker_smoke.swift" \

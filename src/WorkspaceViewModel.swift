@@ -261,6 +261,34 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var isTestingOpenAIConnection = false
     @Published var openAIConnectionStatusText = ""
     @Published var openAIConnectionSucceeded = false
+    @Published var claudeSmartMarkerModel: String = SmartMarkerPreferences.claudeModel {
+        didSet {
+            SmartMarkerPreferences.claudeModel = claudeSmartMarkerModel
+        }
+    }
+    @Published var claudeAvailableModels = SmartMarkerClaudeModelCatalog.options(
+        from: SmartMarkerPreferences.cachedClaudeModelIDs
+    )
+    @Published var isLoadingClaudeModels = false
+    @Published var claudeModelCatalogStatusText = ""
+    @Published var claudeAPIKeyConfigured = SmartMarkerPreferences.hasClaudeKey
+    @Published var isTestingClaudeConnection = false
+    @Published var claudeConnectionStatusText = ""
+    @Published var claudeConnectionSucceeded = false
+    @Published var geminiSmartMarkerModel: String = SmartMarkerPreferences.geminiModel {
+        didSet {
+            SmartMarkerPreferences.geminiModel = geminiSmartMarkerModel
+        }
+    }
+    @Published var geminiAvailableModels = SmartMarkerGeminiModelCatalog.options(
+        from: SmartMarkerPreferences.cachedGeminiModelIDs
+    )
+    @Published var isLoadingGeminiModels = false
+    @Published var geminiModelCatalogStatusText = ""
+    @Published var geminiAPIKeyConfigured = SmartMarkerPreferences.hasGeminiKey
+    @Published var isTestingGeminiConnection = false
+    @Published var geminiConnectionStatusText = ""
+    @Published var geminiConnectionSucceeded = false
     @Published var analyzeBlackFrames = true
     @Published var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds {
         didSet {

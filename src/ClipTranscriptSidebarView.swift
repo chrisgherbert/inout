@@ -340,7 +340,11 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     onRefine: refineSmartMarkerAnalysis,
                     onUndoRefinement: undoSmartMarkerRefinement
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .topLeading
+                )
             } else if hasTranscript {
                 VStack(alignment: .leading, spacing: 6) {
                     transcriptControls(
