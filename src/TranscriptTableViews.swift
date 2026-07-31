@@ -12,27 +12,67 @@ let transcriptTextColumnTrailingInset: CGFloat = 3
 let transcriptTextMeasurementPadding: CGFloat = transcriptTextColumnLeadingInset + transcriptTextColumnTrailingInset + 16
 let transcriptTableWidthSlack: CGFloat = transcriptTimeColumnTrailingInset + transcriptTextColumnLeadingInset + 14
 
-struct TranscriptDisplayModePicker: View {
+struct TranscriptViewOptionsButton: View {
     let mode: TranscriptDisplayMode
+    let showsTimecodes: Bool
+    let textSize: TranscriptTextSize
     let setMode: (TranscriptDisplayMode) -> Void
+    let setShowsTimecodes: (Bool) -> Void
+    let setTextSize: (TranscriptTextSize) -> Void
+    @State private var showsPopover = false
 
     var body: some View {
-        Menu("View: \(mode.title)") {
-            ForEach(TranscriptDisplayMode.allCases) { option in
-                Button {
-                    setMode(option)
-                } label: {
-                    if option == mode {
-                        Label(option.title, systemImage: "checkmark")
-                    } else {
-                        Text(option.title)
+        Button {
+            showsPopover.toggle()
+        } label: {
+            Label("View", systemImage: "textformat")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize()
+        .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Transcript View")
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Layout")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Layout", selection: Binding(get: { mode }, set: setMode)) {
+                        ForEach(TranscriptDisplayMode.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.radioGroup)
+                }
+
+                Divider()
+
+                Toggle(
+                    "Show Timecodes",
+                    isOn: Binding(get: { showsTimecodes }, set: setShowsTimecodes)
+                )
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Text Size")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Text Size", selection: Binding(get: { textSize }, set: setTextSize)) {
+                        ForEach(TranscriptTextSize.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 210)
                 }
             }
+            .padding(16)
+            .frame(width: 250)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Choose how transcript rows are displayed")
+        .help("Change transcript layout and appearance")
     }
 }
 
@@ -594,6 +634,7 @@ struct TranscriptTableView: NSViewRepresentable {
     let rowsVersion: Int
     let fontSize: CGFloat
     var displayMode: TranscriptDisplayMode = .compact
+    var showsTimecodes = true
     var playbackPresentation: ClipTranscriptPlaybackPresentation? = nil
     var activeRowID: UUID? = nil
     var allowsPlaybackRow = true
@@ -614,6 +655,7 @@ struct TranscriptTableView: NSViewRepresentable {
         var rowsVersion: Int = 0
         var fontSize: CGFloat = 14
         var displayMode: TranscriptDisplayMode = .compact
+        var showsTimecodes = true
         var activeRowID: UUID?
         var allowsPlaybackRow = true
         var followsActiveRow = false
@@ -812,12 +854,14 @@ struct TranscriptTableView: NSViewRepresentable {
 
             let timeColumn = tableView.tableColumns[0]
             let textColumn = tableView.tableColumns[1]
+            timeColumn.isHidden = !showsTimecodes
+            let visibleTimeColumnWidth = showsTimecodes ? timeColumn.width : 0
 
             let visibleDocumentWidth = max(0, scrollView.documentVisibleRect.width)
             if displayMode == .paragraphs {
                 let targetWidth = max(
                     280,
-                    visibleDocumentWidth - timeColumn.width - transcriptTableWidthSlack
+                    visibleDocumentWidth - visibleTimeColumnWidth - transcriptTableWidthSlack
                 )
                 let widthChanged = abs(textColumn.width - targetWidth) > 0.5
                 if widthChanged {
@@ -834,14 +878,14 @@ struct TranscriptTableView: NSViewRepresentable {
 
             segmentHeightRefreshWorkItem?.cancel()
             segmentHeightRefreshWorkItem = nil
-            let exactDocumentWidth = timeColumn.width +
+            let exactDocumentWidth = visibleTimeColumnWidth +
                 preferredTranscriptTextColumnWidth() +
                 transcriptTableWidthSlack
             let shouldPreferIntrinsicTextWidth = exactDocumentWidth > (visibleDocumentWidth + 1)
 
             let availableTextWidth = max(
                 0,
-                visibleDocumentWidth - timeColumn.width - transcriptTableWidthSlack
+                visibleDocumentWidth - visibleTimeColumnWidth - transcriptTableWidthSlack
             )
             let fillTextWidth = max(280, availableTextWidth)
             let targetWidth = shouldPreferIntrinsicTextWidth
@@ -1066,15 +1110,13 @@ struct TranscriptTableView: NSViewRepresentable {
             lastAttributedCacheFontSize = fontSize
         }
 
-        func copySelection() {
-            guard let tableView else { return }
-            let selected = tableView.selectedRowIndexes
-            guard !selected.isEmpty else { return }
+        private func copyRows(at indexes: IndexSet) {
+            guard !indexes.isEmpty else { return }
 
-            let lines = selected.compactMap { index -> String? in
+            let lines = indexes.compactMap { index -> String? in
                 guard index >= 0, index < rows.count else { return nil }
                 let row = rows[index]
-                return "\(row.startLabel)  \(row.text)"
+                return showsTimecodes ? "\(row.startLabel)  \(row.text)" : row.text
             }
             let payload = lines.joined(separator: "\n")
             guard !payload.isEmpty else { return }
@@ -1082,12 +1124,21 @@ struct TranscriptTableView: NSViewRepresentable {
             NSPasteboard.general.setString(payload, forType: .string)
         }
 
+        func copySelection() {
+            guard let tableView else { return }
+            copyRows(at: tableView.selectedRowIndexes)
+        }
+
         @objc func copyFromMenu(_ sender: Any?) {
-            copySelection()
+            guard let tableView else { return }
+            let clickedRow = tableView.clickedRow
+            guard clickedRow >= 0, clickedRow < rows.count else { return }
+            copyRows(at: IndexSet(integer: clickedRow))
         }
 
         @objc func handleRowAction(_ sender: Any?) {
             guard let tableView else { return }
+            guard !currentEventUsesSelectionModifier else { return }
             let row = tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow
             guard row >= 0, row < rows.count else { return }
             onActivateRow?(rows[row])
@@ -1095,9 +1146,16 @@ struct TranscriptTableView: NSViewRepresentable {
 
         @objc func handleRowDoubleAction(_ sender: Any?) {
             guard let tableView else { return }
+            guard !currentEventUsesSelectionModifier else { return }
             let row = tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow
             guard row >= 0, row < rows.count else { return }
             onDoubleActivateRow?(rows[row])
+        }
+
+        private var currentEventUsesSelectionModifier: Bool {
+            guard let event = NSApp.currentEvent else { return false }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            return modifiers.contains(.command) || modifiers.contains(.shift)
         }
 
         func applyActiveSelectionIfNeeded(forceScroll: Bool = false) {
@@ -1244,7 +1302,7 @@ struct TranscriptTableView: NSViewRepresentable {
         tableView.usesAlternatingRowBackgroundColors = false
         tableView.backgroundColor = .clear
         tableView.gridStyleMask = []
-        tableView.selectionHighlightStyle = showsPlaybackIndicator ? .none : .regular
+        tableView.selectionHighlightStyle = showsPlaybackIndicator && !allowsMultipleSelection ? .none : .regular
         tableView.allowsMultipleSelection = allowsMultipleSelection
         tableView.allowsEmptySelection = true
         tableView.allowsColumnSelection = false
@@ -1281,6 +1339,7 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.rowsVersion = rowsVersion
         context.coordinator.fontSize = fontSize
         context.coordinator.displayMode = displayMode
+        context.coordinator.showsTimecodes = showsTimecodes
         context.coordinator.rowIndexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
         context.coordinator.allowsPlaybackRow = allowsPlaybackRow
         context.coordinator.activeRowID = allowsPlaybackRow
@@ -1328,6 +1387,7 @@ struct TranscriptTableView: NSViewRepresentable {
         let rowsChanged = context.coordinator.rowsVersion != rowsVersion
         let fontChanged = context.coordinator.fontSize != fontSize
         let displayModeChanged = context.coordinator.displayMode != displayMode
+        let timecodeVisibilityChanged = context.coordinator.showsTimecodes != showsTimecodes
         let searchChanged = context.coordinator.searchVersion != searchVersion
         let currentSearchResultChanged = context.coordinator.currentSearchResultRowID != currentSearchResultRowID
         let activeRowChanged = context.coordinator.activeRowID != resolvedActiveRowID
@@ -1335,8 +1395,10 @@ struct TranscriptTableView: NSViewRepresentable {
         let followsActiveRowChanged = context.coordinator.followsActiveRow != followsActiveRow
         let searchRevealChanged = context.coordinator.requestedSearchRevealRowID != requestedSearchRevealRowID
         let selectionModeChanged = tableView.allowsMultipleSelection != allowsMultipleSelection
-        let selectionHighlightChanged = tableView.selectionHighlightStyle != (showsPlaybackIndicator ? .none : .regular)
-        let shouldReload = rowsChanged || fontChanged || displayModeChanged
+        let desiredSelectionHighlightStyle: NSTableView.SelectionHighlightStyle =
+            showsPlaybackIndicator && !allowsMultipleSelection ? .none : .regular
+        let selectionHighlightChanged = tableView.selectionHighlightStyle != desiredSelectionHighlightStyle
+        let shouldReload = rowsChanged || fontChanged || displayModeChanged || timecodeVisibilityChanged
         let hasMeaningfulChanges = shouldReload || searchChanged || currentSearchResultChanged || activeRowChanged || playbackIndicatorChanged || followsActiveRowChanged || searchRevealChanged || selectionModeChanged || selectionHighlightChanged
 
         if !hasMeaningfulChanges {
@@ -1350,6 +1412,7 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.rowsVersion = rowsVersion
         context.coordinator.fontSize = fontSize
         context.coordinator.displayMode = displayMode
+        context.coordinator.showsTimecodes = showsTimecodes
         context.coordinator.allowsPlaybackRow = allowsPlaybackRow
         context.coordinator.activeRowID = resolvedActiveRowID
         context.coordinator.followsActiveRow = followsActiveRow
@@ -1363,7 +1426,7 @@ struct TranscriptTableView: NSViewRepresentable {
         context.coordinator.onActivateRow = onActivateRow
         context.coordinator.onDoubleActivateRow = onDoubleActivateRow
         tableView.allowsMultipleSelection = allowsMultipleSelection
-        tableView.selectionHighlightStyle = showsPlaybackIndicator ? .none : .regular
+        tableView.selectionHighlightStyle = desiredSelectionHighlightStyle
         if shouldReload {
             PlayheadDiagnostics.shared.noteModelWrite("transcript_table_reload")
             if rowsChanged || fontChanged || displayModeChanged {

@@ -481,6 +481,29 @@ enum TranscriptDisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum TranscriptTextSize: String, CaseIterable, Identifiable {
+    case small
+    case medium
+    case large
+
+    var id: String { rawValue }
+
+    var title: String {
+        rawValue.capitalized
+    }
+
+    var fontSize: CGFloat {
+        switch self {
+        case .small:
+            return 12
+        case .medium:
+            return 13
+        case .large:
+            return 15
+        }
+    }
+}
+
 enum URLDownloadPreset: String, CaseIterable, Identifiable {
     case compatibleBest = "Best Compatible"
     case compatible1080 = "1080p Compatible"

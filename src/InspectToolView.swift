@@ -15,9 +15,13 @@ struct InspectToolView: View {
     let hasAudioTrack: Bool
     let transcriptExportFormat: TranscriptExportFormat
     let transcriptDisplayMode: TranscriptDisplayMode
+    let transcriptShowsTimecodes: Bool
+    let transcriptTextSize: TranscriptTextSize
     let generateTranscript: () -> Void
     let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
     let setTranscriptDisplayMode: (TranscriptDisplayMode) -> Void
+    let setTranscriptShowsTimecodes: (Bool) -> Void
+    let setTranscriptTextSize: (TranscriptTextSize) -> Void
     let exportTranscript: (TranscriptExportFormat?) -> Void
     let toggleActivityConsole: () -> Void
     let copyActivityConsole: () -> Void
@@ -25,7 +29,6 @@ struct InspectToolView: View {
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var transcriptSearchText = ""
-    @State private var transcriptFontSize: CGFloat = 14
     private var allTranscriptRows: [TranscriptDisplayRow] {
         makeTranscriptDisplayRows(from: transcriptSegments, mode: transcriptDisplayMode)
     }
@@ -184,27 +187,13 @@ struct InspectToolView: View {
                                 TextField("Search transcript", text: $transcriptSearchText)
                                     .textFieldStyle(.roundedBorder)
 
-                                HStack(spacing: 4) {
-                                    Button {
-                                        transcriptFontSize = max(11, transcriptFontSize - 1)
-                                    } label: {
-                                        Image(systemName: "textformat.size.smaller")
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-
-                                    Button {
-                                        transcriptFontSize = min(24, transcriptFontSize + 1)
-                                    } label: {
-                                        Image(systemName: "textformat.size.larger")
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                }
-
-                                TranscriptDisplayModePicker(
+                                TranscriptViewOptionsButton(
                                     mode: transcriptDisplayMode,
-                                    setMode: setTranscriptDisplayMode
+                                    showsTimecodes: transcriptShowsTimecodes,
+                                    textSize: transcriptTextSize,
+                                    setMode: setTranscriptDisplayMode,
+                                    setShowsTimecodes: setTranscriptShowsTimecodes,
+                                    setTextSize: setTranscriptTextSize
                                 )
 
                                 TranscriptExportControls(
@@ -222,9 +211,10 @@ struct InspectToolView: View {
 
                             TranscriptTableView(
                                 rows: filteredTranscriptRows,
-                                rowsVersion: filteredTranscriptRows.count ^ Int(transcriptFontSize * 100),
-                                fontSize: transcriptFontSize,
-                                displayMode: transcriptDisplayMode
+                                rowsVersion: filteredTranscriptRows.count ^ Int(transcriptTextSize.fontSize * 100),
+                                fontSize: transcriptTextSize.fontSize,
+                                displayMode: transcriptDisplayMode,
+                                showsTimecodes: transcriptShowsTimecodes
                             )
                             .frame(minHeight: 120, maxHeight: 220)
 

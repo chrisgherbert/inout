@@ -52,6 +52,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
     let transcriptDisplayMode: TranscriptDisplayMode
+    let transcriptShowsTimecodes: Bool
+    let transcriptTextSize: TranscriptTextSize
     let smartMarkerTabs: [SmartMarkerAnalysisTab]
     let activeSmartMarkerTabID: UUID?
     let showsSmartMarkerSuggestions: Bool
@@ -59,6 +61,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let generateTranscript: () -> Void
     let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
     let setTranscriptDisplayMode: (TranscriptDisplayMode) -> Void
+    let setTranscriptShowsTimecodes: (Bool) -> Void
+    let setTranscriptTextSize: (TranscriptTextSize) -> Void
     let exportTranscript: (TranscriptExportFormat?) -> Void
     let seekToTranscriptTime: (Double) -> Void
     let playTranscriptFromTime: (Double) -> Void
@@ -102,6 +106,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
         lhs.transcriptDisplayMode == rhs.transcriptDisplayMode &&
+        lhs.transcriptShowsTimecodes == rhs.transcriptShowsTimecodes &&
+        lhs.transcriptTextSize == rhs.transcriptTextSize &&
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.smartMarkerRevision == rhs.smartMarkerRevision &&
         lhs.showsSmartMarkerSuggestions == rhs.showsSmartMarkerSuggestions
@@ -268,7 +274,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
 
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    transcriptDisplayModePicker
+                    transcriptViewOptionsButton
                     Spacer()
                         .frame(width: 8)
                     transcriptExportButton
@@ -277,7 +283,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         } else {
             HStack(spacing: 8) {
                 transcriptSearchField
-                transcriptDisplayModePicker
+                transcriptViewOptionsButton
                 transcriptExportButton
             }
         }
@@ -293,13 +299,17 @@ struct ClipTranscriptSidebarView: View, Equatable {
         )
     }
 
-    private var transcriptDisplayModePicker: some View {
-        TranscriptDisplayModePicker(
+    private var transcriptViewOptionsButton: some View {
+        TranscriptViewOptionsButton(
             mode: activeTranscriptDisplayMode,
+            showsTimecodes: transcriptShowsTimecodes,
+            textSize: transcriptTextSize,
             setMode: { mode in
                 displayModeOverride = mode
                 setTranscriptDisplayMode(mode)
-            }
+            },
+            setShowsTimecodes: setTranscriptShowsTimecodes,
+            setTextSize: setTranscriptTextSize
         )
     }
 
@@ -442,8 +452,9 @@ struct ClipTranscriptSidebarView: View, Equatable {
                 TranscriptTableView(
                     rows: displayedTranscriptRows,
                     rowsVersion: transcriptRowsVersion,
-                    fontSize: 13,
+                    fontSize: transcriptTextSize.fontSize,
                     displayMode: activeTranscriptDisplayMode,
+                    showsTimecodes: transcriptShowsTimecodes,
                     playbackPresentation: playbackPresentation,
                     allowsPlaybackRow: !suspendsPlaybackHighlightDuringScroll,
                     followsActiveRow: followsPlaybackRow,
@@ -453,7 +464,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     searchVersion: transcriptSearchVersion,
                     currentSearchResultRowID: currentSearchMatchID,
                     requestedSearchRevealRowID: requestedSearchRevealRowID,
-                    allowsMultipleSelection: false,
+                    allowsMultipleSelection: true,
                     onUserScrollActivityChanged: { active in
                         isUserScrollingTranscript = active
                     },

@@ -55,6 +55,8 @@ final class WorkspaceViewModel: ObservableObject {
         static let urlDownloadBrowserCookiesSource = "prefs.urlDownloadBrowserCookiesSource"
         static let transcriptExportFormat = "prefs.transcriptExportFormat"
         static let transcriptDisplayMode = "prefs.transcriptDisplayMode"
+        static let transcriptShowsTimecodes = "prefs.transcriptShowsTimecodes"
+        static let transcriptTextSize = "prefs.transcriptTextSize"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -349,6 +351,16 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var transcriptDisplayMode: TranscriptDisplayMode = .compact {
         didSet {
             UserDefaults.standard.set(transcriptDisplayMode.rawValue, forKey: DefaultsKey.transcriptDisplayMode)
+        }
+    }
+    @Published var transcriptShowsTimecodes = true {
+        didSet {
+            UserDefaults.standard.set(transcriptShowsTimecodes, forKey: DefaultsKey.transcriptShowsTimecodes)
+        }
+    }
+    @Published var transcriptTextSize: TranscriptTextSize = .medium {
+        didSet {
+            UserDefaults.standard.set(transcriptTextSize.rawValue, forKey: DefaultsKey.transcriptTextSize)
         }
     }
     @Published var estimatedSizeWarningThresholdGB: Double = 1.0 {
@@ -650,6 +662,13 @@ final class WorkspaceViewModel: ObservableObject {
         if let rawTranscriptDisplayMode = defaults.string(forKey: DefaultsKey.transcriptDisplayMode),
            let mode = TranscriptDisplayMode(rawValue: rawTranscriptDisplayMode) {
             transcriptDisplayMode = mode
+        }
+        if defaults.object(forKey: DefaultsKey.transcriptShowsTimecodes) != nil {
+            transcriptShowsTimecodes = defaults.bool(forKey: DefaultsKey.transcriptShowsTimecodes)
+        }
+        if let rawTranscriptTextSize = defaults.string(forKey: DefaultsKey.transcriptTextSize),
+           let size = TranscriptTextSize(rawValue: rawTranscriptTextSize) {
+            transcriptTextSize = size
         }
 
         if let rawCaptionStyle = defaults.string(forKey: DefaultsKey.burnInCaptionStyle),

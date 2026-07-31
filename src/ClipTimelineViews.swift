@@ -90,6 +90,8 @@ private struct ClipPlayerStageSection: View {
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
     let transcriptDisplayMode: TranscriptDisplayMode
+    let transcriptShowsTimecodes: Bool
+    let transcriptTextSize: TranscriptTextSize
     let smartMarkerTabs: [SmartMarkerAnalysisTab]
     let activeSmartMarkerTabID: UUID?
     let showsSmartMarkerSuggestions: Bool
@@ -102,6 +104,8 @@ private struct ClipPlayerStageSection: View {
     let onGenerateTranscript: () -> Void
     let onSetTranscriptExportFormat: (_ format: TranscriptExportFormat) -> Void
     let onSetTranscriptDisplayMode: (_ mode: TranscriptDisplayMode) -> Void
+    let onSetTranscriptShowsTimecodes: (_ shows: Bool) -> Void
+    let onSetTranscriptTextSize: (_ size: TranscriptTextSize) -> Void
     let onExportTranscript: (_ format: TranscriptExportFormat?) -> Void
     let onSeekToTranscriptTime: (_ seconds: Double) -> Void
     let onPlayTranscriptFromTime: (_ seconds: Double) -> Void
@@ -197,6 +201,8 @@ private struct ClipPlayerStageSection: View {
                             focusSearchFieldToken: focusSearchFieldToken,
                             transcriptExportFormat: transcriptExportFormat,
                             transcriptDisplayMode: transcriptDisplayMode,
+                            transcriptShowsTimecodes: transcriptShowsTimecodes,
+                            transcriptTextSize: transcriptTextSize,
                             smartMarkerTabs: smartMarkerTabs,
                             activeSmartMarkerTabID: activeSmartMarkerTabID,
                             showsSmartMarkerSuggestions: showsSmartMarkerSuggestions,
@@ -204,6 +210,8 @@ private struct ClipPlayerStageSection: View {
                             generateTranscript: onGenerateTranscript,
                             setTranscriptExportFormat: onSetTranscriptExportFormat,
                             setTranscriptDisplayMode: onSetTranscriptDisplayMode,
+                            setTranscriptShowsTimecodes: onSetTranscriptShowsTimecodes,
+                            setTranscriptTextSize: onSetTranscriptTextSize,
                             exportTranscript: onExportTranscript,
                             seekToTranscriptTime: onSeekToTranscriptTime,
                             playTranscriptFromTime: onPlayTranscriptFromTime,
@@ -278,6 +286,8 @@ extension ClipPlayerStageSection: Equatable {
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
         lhs.transcriptDisplayMode == rhs.transcriptDisplayMode &&
+        lhs.transcriptShowsTimecodes == rhs.transcriptShowsTimecodes &&
+        lhs.transcriptTextSize == rhs.transcriptTextSize &&
         lhs.smartMarkerRevision == rhs.smartMarkerRevision &&
         lhs.showsSmartMarkerSuggestions == rhs.showsSmartMarkerSuggestions &&
         lhs.isMiddleMousePanning == rhs.isMiddleMousePanning
@@ -2170,7 +2180,12 @@ struct ClipToolView: View {
             return min(clipTranscriptSidebarMinWidth, maximumSidebarWidth)
         }
 
-        let documentWidth = exactTranscriptTableDocumentWidth(for: rows, fontSize: 13)
+        let timeColumnWidth = model.transcriptShowsTimecodes ? transcriptTimeColumnPreferredWidth : 0
+        let documentWidth = exactTranscriptTableDocumentWidth(
+            for: rows,
+            fontSize: model.transcriptTextSize.fontSize,
+            timeColumnWidth: timeColumnWidth
+        )
         let sidebarPadding: CGFloat = 24
         let baseHeadroom: CGFloat = 56
         let legacyScrollerAllowance: CGFloat
@@ -2291,6 +2306,8 @@ struct ClipToolView: View {
                 focusSearchFieldToken: clipTranscriptSearchFocusToken,
                 transcriptExportFormat: model.transcriptExportFormat,
                 transcriptDisplayMode: model.transcriptDisplayMode,
+                transcriptShowsTimecodes: model.transcriptShowsTimecodes,
+                transcriptTextSize: model.transcriptTextSize,
                 smartMarkerTabs: smartMarkers.tabs,
                 activeSmartMarkerTabID: smartMarkers.activeTabID,
                 showsSmartMarkerSuggestions: smartMarkers.showsSuggestions,
@@ -2330,6 +2347,12 @@ struct ClipToolView: View {
                 },
                 onSetTranscriptDisplayMode: { mode in
                     model.transcriptDisplayMode = mode
+                },
+                onSetTranscriptShowsTimecodes: { shows in
+                    model.transcriptShowsTimecodes = shows
+                },
+                onSetTranscriptTextSize: { size in
+                    model.transcriptTextSize = size
                 },
                 onExportTranscript: { format in
                     model.exportTranscriptFromInspect(format: format)
