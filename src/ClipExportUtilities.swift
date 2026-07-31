@@ -50,30 +50,14 @@ enum ClipExportUtilities {
 
     static func promptClipExportDestination(
         defaultName: String,
-        contentType: UTType
+        contentType: UTType,
+        title: String = "Export Clip"
     ) -> URL? {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = defaultName
         panel.allowedContentTypes = [contentType]
         panel.canCreateDirectories = true
-        panel.title = "Export Clip"
-        guard panel.runModal() == .OK else { return nil }
-        return panel.url
-    }
-
-    static func defaultAudioExportFileName(sourceURL: URL, selectedAudioFormat: AudioFormat) -> String {
-        if selectedAudioFormat == .mp3 {
-            return sourceURL.deletingPathExtension().lastPathComponent + ".mp3"
-        }
-        return sourceURL.deletingPathExtension().lastPathComponent + ".m4a"
-    }
-
-    static func promptAudioExportDestination(sourceURL: URL, selectedAudioFormat: AudioFormat) -> URL? {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = defaultAudioExportFileName(sourceURL: sourceURL, selectedAudioFormat: selectedAudioFormat)
-        panel.allowedContentTypes = selectedAudioFormat == .mp3 ? [.mp3] : [.mpeg4Audio]
-        panel.canCreateDirectories = true
-        panel.title = "Export Audio"
+        panel.title = title
         guard panel.runModal() == .OK else { return nil }
         return panel.url
     }

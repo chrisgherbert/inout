@@ -288,37 +288,68 @@ struct ConvertToolView: View {
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var exportMode: ClipEncodingMode
+
+    init(model: WorkspaceViewModel, isCompactLayout: Bool) {
+        self.model = model
+        self.isCompactLayout = isCompactLayout
+        _exportMode = State(initialValue: model.hasVideoTrack ? .compressed : .audioOnly)
+    }
+
+    private var estimatedOutputSizeBytes: Int64? {
+        switch exportMode {
+        case .compressed:
+            return model.estimatedFullSourceAdvancedSizeBytes
+        case .audioOnly:
+            return model.estimatedFullSourceAudioOnlySizeBytes
+        case .fast:
+            return nil
+        }
+    }
+
+    private func resolveAvailableExportMode() {
+        if exportMode == .compressed, !model.hasVideoTrack, model.hasAudioTrack {
+            exportMode = .audioOnly
+        } else if exportMode == .audioOnly, !model.hasAudioTrack, model.hasVideoTrack {
+            exportMode = .compressed
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if model.sourceURL != nil {
                 Group {
-                    GroupBox("Audio Export") {
+                    GroupBox("Export Media") {
                         VStack(alignment: .leading, spacing: 10) {
                             VStack(alignment: .leading, spacing: 8) {
-                                Picker("Format", selection: $model.selectedAudioFormat) {
-                                    ForEach(AudioFormat.allCases) { format in
-                                        Text(format.rawValue).tag(format)
+                                Picker("Export type", selection: $exportMode) {
+                                    if model.hasVideoTrack {
+                                        Text("Video").tag(ClipEncodingMode.compressed)
+                                    }
+                                    if model.hasAudioTrack {
+                                        Text("Audio Only").tag(ClipEncodingMode.audioOnly)
                                     }
                                 }
+                                .labelsHidden()
                                 .pickerStyle(.segmented)
-                                .controlSize(.small)
+                                .controlSize(.regular)
+                                .frame(maxWidth: .infinity)
 
-                                HStack {
-                                    Text("Bitrate (MP3)")
-                                    Slider(value: Binding(
-                                        get: { Double(model.exportAudioBitrateKbps) },
-                                        set: { model.exportAudioBitrateKbps = Int($0.rounded()) }
-                                    ), in: 96...320, step: 32)
-                                    .controlSize(.small)
-                                    Text("\(model.exportAudioBitrateKbps) kbps")
-                                        .font(.caption.monospacedDigit())
-                                        .frame(width: 90, alignment: .trailing)
+                                Text(
+                                    exportMode == .compressed
+                                        ? "Export the complete video using the same options as Advanced clip export."
+                                        : "Export the complete audio track using the same options as Audio Only clip export."
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                                Divider()
+
+                                if exportMode == .compressed {
+                                    AdvancedVideoExportOptions(model: model, formats: ClipFormat.allCases)
+                                } else {
+                                    AudioOnlyExportOptions(model: model)
                                 }
-
-                                Text("M4A uses native AVFoundation export. MP3 uses ffmpeg and defaults to 128 kbps.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -326,13 +357,13 @@ struct ConvertToolView: View {
                             Divider()
 
                             HStack {
-                                if model.selectedAudioFormat == .mp3 {
+                                if estimatedOutputSizeBytes != nil {
                                     HStack(spacing: 8) {
                                         Label("Estimated output size", systemImage: "ruler")
                                             .font(.body.weight(.medium))
                                             .foregroundStyle(.tertiary)
                                         EstimatedSizePill(
-                                            bytes: model.estimatedAudioExportSizeBytes,
+                                            bytes: estimatedOutputSizeBytes,
                                             warningThresholdGB: model.estimatedSizeWarningThresholdGB,
                                             dangerThresholdGB: model.estimatedSizeDangerThresholdGB
                                         )
@@ -340,12 +371,17 @@ struct ConvertToolView: View {
                                 }
                                 Spacer(minLength: 8)
                                 Button {
-                                    model.startExport()
+                                    model.startFullSourceExport(mode: exportMode)
                                 } label: {
-                                    Label(model.isExporting ? "Exporting…" : "Export Audio", systemImage: "arrow.down.doc")
+                                    Label(
+                                        model.isActivityRunning
+                                            ? "Queue Export"
+                                            : (exportMode == .compressed ? "Export Video" : "Export Audio"),
+                                        systemImage: model.isActivityRunning ? "text.badge.plus" : "arrow.down.doc"
+                                    )
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(!model.canRequestAudioExport)
+                                .disabled(!model.canRequestFullSourceExport(mode: exportMode))
                             }
                         }
                         .padding(10)
@@ -372,10 +408,19 @@ struct ConvertToolView: View {
                 }
                 .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
             } else {
-                EmptyToolView(title: "Convert", subtitle: "Choose source media to enable audio export.")
+                EmptyToolView(title: "Convert", subtitle: "Choose source media to enable video or audio export.")
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.sourceURL != nil)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isExporting)
+        .onAppear {
+            resolveAvailableExportMode()
+        }
+        .onChange(of: model.hasVideoTrack) { _, _ in
+            resolveAvailableExportMode()
+        }
+        .onChange(of: model.hasAudioTrack) { _, _ in
+            resolveAvailableExportMode()
+        }
     }
 }

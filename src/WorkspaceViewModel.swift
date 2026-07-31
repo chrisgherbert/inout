@@ -27,7 +27,6 @@ struct QueuedClipExport: Identifiable, Equatable {
 
 enum QueuedJobKind: Equatable {
     case clip(skipSaveDialog: Bool)
-    case audioExport
     case analysis
 }
 
@@ -98,7 +97,6 @@ final class WorkspaceViewModel: ObservableObject {
     var analyzePhaseText = "Preparing analysis"
     @Published var wasCancelled = false
 
-    @Published var selectedAudioFormat: AudioFormat = .mp3
     @Published var defaultAudioBitrateKbps = 128 {
         didSet {
             let clamped = min(max(64, defaultAudioBitrateKbps), 320)
@@ -107,10 +105,9 @@ final class WorkspaceViewModel: ObservableObject {
                 return
             }
             UserDefaults.standard.set(clamped, forKey: DefaultsKey.audioBitrateKbps)
-            exportAudioBitrateKbps = clamped
+            clipAudioBitrateKbps = clamped
         }
     }
-    @Published var exportAudioBitrateKbps = 128
     @Published var isExporting = false {
         didSet {
             updateDockProgressIndicator()
@@ -427,11 +424,7 @@ final class WorkspaceViewModel: ObservableObject {
         let clipAdvancedCaptionStyle: BurnInCaptionStyle
         let clipAudioOnlyBoostAudio: Bool
         let clipAudioOnlyAddFadeInOut: Bool
-        let destinationURL: URL?
-    }
-    struct QueuedAudioExportConfig {
-        let selectedAudioFormat: AudioFormat
-        let exportAudioBitrateKbps: Int
+        let isFullSourceConversion: Bool
         let destinationURL: URL?
     }
     struct QueuedAnalysisConfig {
@@ -443,7 +436,6 @@ final class WorkspaceViewModel: ObservableObject {
     }
     var queuedJobKinds: [UUID: QueuedJobKind] = [:]
     var queuedClipExportConfigs: [UUID: QueuedClipExportConfig] = [:]
-    var queuedAudioExportConfigs: [UUID: QueuedAudioExportConfig] = [:]
     var queuedAnalysisConfigs: [UUID: QueuedAnalysisConfig] = [:]
     var waveformCache: [String: [Double]] = [:]
     var waveformCacheOrder: [String] = []
@@ -575,7 +567,7 @@ final class WorkspaceViewModel: ObservableObject {
         if savedBitrate > 0 {
             defaultAudioBitrateKbps = min(max(64, savedBitrate), 320)
         }
-        exportAudioBitrateKbps = defaultAudioBitrateKbps
+        clipAudioBitrateKbps = defaultAudioBitrateKbps
 
         if let rawMode = defaults.string(forKey: DefaultsKey.defaultClipEncodingMode),
            let mode = ClipEncodingMode(rawValue: rawMode) {
@@ -853,7 +845,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var canRequestAudioExport: Bool {
-        sourceURL != nil && !isGeneratingTranscript
+        sourceURL != nil && hasAudioTrack && sourceDurationSeconds > 0 && !isGeneratingTranscript
     }
 
     var canGenerateTranscript: Bool {
@@ -896,14 +888,6 @@ final class WorkspaceViewModel: ObservableObject {
         max(0, clipEndSeconds - clipStartSeconds)
     }
 
-    var estimatedAudioExportSizeBytes: Int64? {
-        guard selectedAudioFormat == .mp3 else { return nil }
-        return estimateFileSizeBytes(
-            durationSeconds: sourceDurationSeconds,
-            totalBitrateKbps: Double(exportAudioBitrateKbps)
-        )
-    }
-
     var estimatedClipAudioOnlySizeBytes: Int64? {
         guard clipAudioOnlyFormat != .wav else { return nil }
         return estimateFileSizeBytes(
@@ -918,6 +902,23 @@ final class WorkspaceViewModel: ObservableObject {
         let totalBitrateKbps = (clipVideoBitrateMbps * 1000.0) + (hasAudioTrack ? Double(clipAudioBitrateKbps) : 0)
         return estimateFileSizeBytes(
             durationSeconds: clipDurationSeconds,
+            totalBitrateKbps: totalBitrateKbps
+        )
+    }
+
+    var estimatedFullSourceAudioOnlySizeBytes: Int64? {
+        guard clipAudioOnlyFormat != .wav else { return nil }
+        return estimateFileSizeBytes(
+            durationSeconds: sourceDurationSeconds,
+            totalBitrateKbps: Double(clipAudioBitrateKbps)
+        )
+    }
+
+    var estimatedFullSourceAdvancedSizeBytes: Int64? {
+        let totalBitrateKbps = (clipVideoBitrateMbps * 1000.0) +
+            (hasAudioTrack ? Double(clipAudioBitrateKbps) : 0)
+        return estimateFileSizeBytes(
+            durationSeconds: sourceDurationSeconds,
             totalBitrateKbps: totalBitrateKbps
         )
     }

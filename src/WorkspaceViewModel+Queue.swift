@@ -36,14 +36,6 @@ extension WorkspaceViewModel {
         )
     }
 
-    func audioExportJobTitle(format: AudioFormat) -> String {
-        JobPresentationUtilities.audioExportJobTitle(format: format)
-    }
-
-    func audioExportJobSubtitle(bitrateKbps: Int) -> String {
-        JobPresentationUtilities.audioExportJobSubtitle(bitrateKbps: bitrateKbps)
-    }
-
     func analysisJobSubtitle(black: Bool, silence: Bool, profanity: Bool) -> String {
         JobPresentationUtilities.analysisJobSubtitle(black: black, silence: silence, profanity: profanity)
     }
@@ -52,35 +44,51 @@ extension WorkspaceViewModel {
         JobPresentationUtilities.analysisJobTitle(black: black, silence: silence, profanity: profanity)
     }
 
-    func defaultAudioExportFileName(for sourceURL: URL) -> String {
-        ClipExportUtilities.defaultAudioExportFileName(sourceURL: sourceURL, selectedAudioFormat: selectedAudioFormat)
-    }
-
-    func promptAudioExportDestination(for sourceURL: URL) -> URL? {
-        ClipExportUtilities.promptAudioExportDestination(sourceURL: sourceURL, selectedAudioFormat: selectedAudioFormat)
-    }
-
-    func defaultClipExportFileName(for sourceURL: URL) -> String {
-        ClipExportUtilities.defaultClipExportFileName(
+    func defaultClipExportFileName(
+        for sourceURL: URL,
+        config: QueuedClipExportConfig? = nil
+    ) -> String {
+        let config = config ?? queuedClipExportConfigSnapshot()
+        if config.isFullSourceConversion {
+            let outputExtension = config.clipEncodingMode == .audioOnly
+                ? config.clipAudioOnlyFormat.fileExtension
+                : config.selectedClipFormat.fileExtension
+            return sourceURL.deletingPathExtension().lastPathComponent + "_converted." + outputExtension
+        }
+        return ClipExportUtilities.defaultClipExportFileName(
             ClipExportNamingInput(
                 sourceName: sourceURL.deletingPathExtension().lastPathComponent,
-                clipEncodingMode: clipEncodingMode,
-                selectedClipFormat: selectedClipFormat,
-                clipAudioOnlyFormat: clipAudioOnlyFormat,
-                clipAdvancedVideoCodec: clipAdvancedVideoCodec,
-                clipCompatibleMaxResolution: clipCompatibleMaxResolution,
+                clipEncodingMode: config.clipEncodingMode,
+                selectedClipFormat: config.selectedClipFormat,
+                clipAudioOnlyFormat: config.clipAudioOnlyFormat,
+                clipAdvancedVideoCodec: config.clipAdvancedVideoCodec,
+                clipCompatibleMaxResolution: config.clipCompatibleMaxResolution,
                 sourceResolution: sourceInfo?.resolution,
-                clipStartSeconds: clipStartSeconds,
-                clipEndSeconds: clipEndSeconds,
+                clipStartSeconds: config.clipStartSeconds,
+                clipEndSeconds: config.clipEndSeconds,
                 advancedFilenameTemplate: advancedClipFilenameTemplate
             )
         )
     }
 
-    func promptClipExportDestination(for sourceURL: URL, defaultName: String) -> URL? {
-        ClipExportUtilities.promptClipExportDestination(
+    func promptClipExportDestination(
+        for sourceURL: URL,
+        defaultName: String,
+        config: QueuedClipExportConfig? = nil
+    ) -> URL? {
+        let config = config ?? queuedClipExportConfigSnapshot()
+        let title: String
+        if config.isFullSourceConversion {
+            title = config.clipEncodingMode == .audioOnly ? "Export Audio" : "Export Video"
+        } else {
+            title = "Export Clip"
+        }
+        return ClipExportUtilities.promptClipExportDestination(
             defaultName: defaultName,
-            contentType: clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.contentType : selectedClipFormat.contentType
+            contentType: config.clipEncodingMode == .audioOnly
+                ? config.clipAudioOnlyFormat.contentType
+                : config.selectedClipFormat.contentType,
+            title: title
         )
     }
 
@@ -98,8 +106,68 @@ extension WorkspaceViewModel {
             destinationURL = chosenURL
         }
         let config = queuedClipExportConfigSnapshot(destinationURL: destinationURL)
+        enqueueClipExport(config: config, skipSaveDialog: skipSaveDialog)
+    }
+
+    func startFullSourceExport(mode: ClipEncodingMode) {
+        guard mode == .compressed || mode == .audioOnly,
+              let sourceURL,
+              sourceDurationSeconds > 0,
+              !isGeneratingTranscript,
+              (mode == .audioOnly ? hasAudioTrack : hasVideoTrack) else {
+            uiMessage = "Unable to start conversion."
+            return
+        }
+
+        let pendingConfig = queuedClipExportConfigSnapshot(
+            startSeconds: 0,
+            endSeconds: sourceDurationSeconds,
+            encodingMode: mode,
+            isFullSourceConversion: true
+        )
+        let defaultName = defaultClipExportFileName(for: sourceURL, config: pendingConfig)
+        guard let destinationURL = promptClipExportDestination(
+            for: sourceURL,
+            defaultName: defaultName,
+            config: pendingConfig
+        ) else {
+            uiMessage = "Save cancelled."
+            return
+        }
+        let config = queuedClipExportConfigSnapshot(
+            destinationURL: destinationURL,
+            startSeconds: 0,
+            endSeconds: sourceDurationSeconds,
+            encodingMode: mode,
+            isFullSourceConversion: true
+        )
+
+        if isAnalyzing || isExporting || isGeneratingTranscript {
+            enqueueClipExport(config: config)
+        } else {
+            startClipExport(
+                preselectedDestination: destinationURL,
+                configOverride: config
+            )
+        }
+    }
+
+    func canRequestFullSourceExport(mode: ClipEncodingMode) -> Bool {
+        sourceURL != nil &&
+            sourceDurationSeconds > 0 &&
+            !isGeneratingTranscript &&
+            (mode == .audioOnly ? hasAudioTrack : hasVideoTrack)
+    }
+
+    private func enqueueClipExport(
+        config: QueuedClipExportConfig,
+        skipSaveDialog: Bool = false
+    ) {
+        guard let sourceURL else { return }
         let formatLabel = config.clipEncodingMode == .audioOnly ? config.clipAudioOnlyFormat.rawValue : config.selectedClipFormat.rawValue
-        let summary = clipJobTitle(skipSaveDialog: skipSaveDialog, mode: config.clipEncodingMode)
+        let summary = config.isFullSourceConversion
+            ? (config.clipEncodingMode == .audioOnly ? "Audio Export" : "Video Export")
+            : clipJobTitle(skipSaveDialog: skipSaveDialog, mode: config.clipEncodingMode)
         let subtitle = clipJobSubtitle(
             mode: config.clipEncodingMode,
             format: formatLabel,
@@ -117,32 +185,6 @@ extension WorkspaceViewModel {
         )
         queuedJobKinds[item.id] = .clip(skipSaveDialog: skipSaveDialog)
         queuedClipExportConfigs[item.id] = config
-        queuedJobs.append(item)
-        uiMessage = "Queued job (\(queuedJobs.count) pending)"
-        startNextQueuedJobIfPossible()
-    }
-
-    func enqueueCurrentAudioExport() {
-        guard canRequestAudioExport, let sourceURL else { return }
-        guard let destinationURL = promptAudioExportDestination(for: sourceURL) else {
-            uiMessage = "Save cancelled."
-            return
-        }
-        let item = QueuedClipExport(
-            id: UUID(),
-            createdAt: Date(),
-            fileName: sourceURL.lastPathComponent,
-            summary: audioExportJobTitle(format: selectedAudioFormat),
-            subtitle: audioExportJobSubtitle(bitrateKbps: exportAudioBitrateKbps),
-            status: .queued,
-            message: nil
-        )
-        queuedJobKinds[item.id] = .audioExport
-        queuedAudioExportConfigs[item.id] = QueuedAudioExportConfig(
-            selectedAudioFormat: selectedAudioFormat,
-            exportAudioBitrateKbps: exportAudioBitrateKbps,
-            destinationURL: destinationURL
-        )
         queuedJobs.append(item)
         uiMessage = "Queued job (\(queuedJobs.count) pending)"
         startNextQueuedJobIfPossible()
@@ -188,7 +230,6 @@ extension WorkspaceViewModel {
         queuedJobs.removeAll { $0.id == id }
         queuedJobKinds[id] = nil
         queuedClipExportConfigs[id] = nil
-        queuedAudioExportConfigs[id] = nil
         queuedAnalysisConfigs[id] = nil
     }
 
@@ -210,16 +251,21 @@ extension WorkspaceViewModel {
         for id in removableIDs {
             queuedJobKinds[id] = nil
             queuedClipExportConfigs[id] = nil
-            queuedAudioExportConfigs[id] = nil
             queuedAnalysisConfigs[id] = nil
         }
     }
 
-    func queuedClipExportConfigSnapshot(destinationURL: URL? = nil) -> QueuedClipExportConfig {
+    func queuedClipExportConfigSnapshot(
+        destinationURL: URL? = nil,
+        startSeconds: Double? = nil,
+        endSeconds: Double? = nil,
+        encodingMode: ClipEncodingMode? = nil,
+        isFullSourceConversion: Bool = false
+    ) -> QueuedClipExportConfig {
         QueuedClipExportConfig(
-            clipStartSeconds: clipStartSeconds,
-            clipEndSeconds: clipEndSeconds,
-            clipEncodingMode: clipEncodingMode,
+            clipStartSeconds: startSeconds ?? clipStartSeconds,
+            clipEndSeconds: endSeconds ?? clipEndSeconds,
+            clipEncodingMode: encodingMode ?? clipEncodingMode,
             selectedClipFormat: selectedClipFormat,
             clipAudioOnlyFormat: clipAudioOnlyFormat,
             clipAdvancedVideoCodec: clipAdvancedVideoCodec,
@@ -234,36 +280,15 @@ extension WorkspaceViewModel {
             clipAdvancedCaptionStyle: clipAdvancedCaptionStyle,
             clipAudioOnlyBoostAudio: clipAudioOnlyBoostAudio,
             clipAudioOnlyAddFadeInOut: clipAudioOnlyAddFadeInOut,
+            isFullSourceConversion: isFullSourceConversion,
             destinationURL: destinationURL
         )
-    }
-
-    func applyQueuedClipExportConfig(_ config: QueuedClipExportConfig) {
-        clipStartSeconds = config.clipStartSeconds
-        clipEndSeconds = config.clipEndSeconds
-        clipEncodingMode = config.clipEncodingMode
-        selectedClipFormat = config.selectedClipFormat
-        clipAudioOnlyFormat = config.clipAudioOnlyFormat
-        clipAdvancedVideoCodec = config.clipAdvancedVideoCodec
-        clipCompatibleSpeedPreset = config.clipCompatibleSpeedPreset
-        clipCompatibleMaxResolution = config.clipCompatibleMaxResolution
-        clipVideoBitrateMbps = config.clipVideoBitrateMbps
-        clipAudioBitrateKbps = config.clipAudioBitrateKbps
-        clipAdvancedBoostAudio = config.clipAdvancedBoostAudio
-        clipAdvancedBoostAmount = config.clipAdvancedBoostAmount
-        clipAdvancedAddFadeInOut = config.clipAdvancedAddFadeInOut
-        clipAdvancedBurnInCaptions = config.clipAdvancedBurnInCaptions
-        clipAdvancedCaptionStyle = config.clipAdvancedCaptionStyle
-        clipAudioOnlyBoostAudio = config.clipAudioOnlyBoostAudio
-        clipAudioOnlyAddFadeInOut = config.clipAudioOnlyAddFadeInOut
-        syncClipTextFields()
     }
 
     func clearQueuedJobs() {
         queuedJobs.removeAll()
         queuedJobKinds.removeAll()
         queuedClipExportConfigs.removeAll()
-        queuedAudioExportConfigs.removeAll()
         queuedAnalysisConfigs.removeAll()
         activeQueuedJobID = nil
     }
@@ -283,16 +308,12 @@ extension WorkspaceViewModel {
                 completeQueuedJobIfNeeded(next.id, status: .failed, message: "Missing clip export config.")
                 return
             }
-            applyQueuedClipExportConfig(config)
-            startClipExport(skipSaveDialog: skipSaveDialog, queueJobID: next.id, preselectedDestination: config.destinationURL)
-        case .audioExport:
-            guard let config = queuedAudioExportConfigs[next.id] else {
-                completeQueuedJobIfNeeded(next.id, status: .failed, message: "Missing audio export config.")
-                return
-            }
-            selectedAudioFormat = config.selectedAudioFormat
-            exportAudioBitrateKbps = config.exportAudioBitrateKbps
-            startExport(queueJobID: next.id, preselectedDestination: config.destinationURL)
+            startClipExport(
+                skipSaveDialog: skipSaveDialog,
+                queueJobID: next.id,
+                preselectedDestination: config.destinationURL,
+                configOverride: config
+            )
         case .analysis:
             guard let config = queuedAnalysisConfigs[next.id] else {
                 completeQueuedJobIfNeeded(next.id, status: .failed, message: "Missing analysis config.")

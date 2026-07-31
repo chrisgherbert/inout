@@ -164,13 +164,6 @@ enum WorkspaceTool: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum AudioFormat: String, CaseIterable, Identifiable {
-    case mp3 = "MP3"
-    case m4a = "M4A"
-
-    var id: String { rawValue }
-}
-
 enum ClipFormat: String, CaseIterable, Identifiable {
     case mp4 = "MP4"
     case mov = "MOV"

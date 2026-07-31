@@ -3,56 +3,87 @@ import AppKit
 import AVFoundation
 import InOutCore
 
-extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = false, queueJobID: UUID? = nil, preselectedDestination: URL? = nil) {
+extension WorkspaceViewModel {
+    func startClipExport(
+        skipSaveDialog: Bool = false,
+        queueJobID: UUID? = nil,
+        preselectedDestination: URL? = nil,
+        configOverride: QueuedClipExportConfig? = nil
+    ) {
         func finalizeQueued(_ status: ClipExportQueueStatus, _ message: String? = nil) {
             completeQueuedJobIfNeeded(queueJobID, status: status, message: message)
         }
 
-        if queueJobID == nil && (isAnalyzing || isExporting || isGeneratingTranscript) {
+        if configOverride == nil,
+           queueJobID == nil,
+           (isAnalyzing || isExporting || isGeneratingTranscript) {
             enqueueCurrentClipExport(skipSaveDialog: skipSaveDialog)
             return
         }
 
-        guard canRequestClipExport, let sourceURL else {
+        guard let sourceURL, !isGeneratingTranscript else {
             finalizeQueued(.failed, "Unable to start export.")
             return
         }
-        if !hasVideoTrack && clipEncodingMode != .audioOnly {
-            clipEncodingMode = .audioOnly
+        if configOverride == nil, !canRequestClipExport {
+            finalizeQueued(.failed, "Unable to start export.")
+            return
         }
-
-        clampClipRange()
-        guard clipDurationSeconds > 0 else {
+        if configOverride == nil {
+            if !hasVideoTrack && clipEncodingMode != .audioOnly {
+                clipEncodingMode = .audioOnly
+            }
+            clampClipRange()
+        }
+        let config = configOverride ?? queuedClipExportConfigSnapshot()
+        let exportDuration = max(0, config.clipEndSeconds - config.clipStartSeconds)
+        let exportName = config.isFullSourceConversion
+            ? (config.clipEncodingMode == .audioOnly ? "Audio export" : "Video export")
+            : "Clip export"
+        guard exportDuration > 0 else {
             finalizeQueued(.failed, "Invalid clip duration.")
             return
         }
 
-        let defaultName = defaultClipExportFileName(for: sourceURL)
+        let defaultName = defaultClipExportFileName(for: sourceURL, config: config)
 
         let destination: URL
         if let preselectedDestination {
             destination = preselectedDestination
-            try? FileManager.default.removeItem(at: destination)
         } else if skipSaveDialog {
             let sourceDirectory = sourceURL.deletingLastPathComponent()
             destination = MediaToolUtilities.uniqueUnderscoreIndexedURL(in: sourceDirectory, preferredFileName: defaultName)
         } else {
-            guard let chosenDestination = promptClipExportDestination(for: sourceURL, defaultName: defaultName) else {
+            guard let chosenDestination = promptClipExportDestination(
+                for: sourceURL,
+                defaultName: defaultName,
+                config: config
+            ) else {
                 finalizeQueued(.cancelled, "Save cancelled.")
                 return
             }
             destination = chosenDestination
-            try? FileManager.default.removeItem(at: destination)
         }
 
+        guard destination.standardizedFileURL != sourceURL.standardizedFileURL else {
+            finalizeQueued(.failed, "The export destination cannot replace the source file.")
+            uiMessage = "Choose a different export filename so the source media is preserved."
+            return
+        }
+        try? FileManager.default.removeItem(at: destination)
+
         if queueJobID == nil {
-            let formatLabel = clipEncodingMode == .audioOnly ? clipAudioOnlyFormat.rawValue : selectedClipFormat.rawValue
-            let summary = clipJobTitle(skipSaveDialog: skipSaveDialog, mode: clipEncodingMode)
+            let formatLabel = config.clipEncodingMode == .audioOnly
+                ? config.clipAudioOnlyFormat.rawValue
+                : config.selectedClipFormat.rawValue
+            let summary = config.isFullSourceConversion
+                ? (config.clipEncodingMode == .audioOnly ? "Audio Export" : "Video Export")
+                : clipJobTitle(skipSaveDialog: skipSaveDialog, mode: config.clipEncodingMode)
             let subtitle = clipJobSubtitle(
-                mode: clipEncodingMode,
+                mode: config.clipEncodingMode,
                 format: formatLabel,
-                startSeconds: clipStartSeconds,
-                endSeconds: clipEndSeconds
+                startSeconds: config.clipStartSeconds,
+                endSeconds: config.clipEndSeconds
             )
             _ = beginDirectJobTracking(
                 fileName: sourceURL.lastPathComponent,
@@ -75,16 +106,16 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
         exportCancellationRequested = false
         exportProgress = 0
         clearActivityConsole()
-        appendActivityConsole(skipSaveDialog ? "Quick clip export started" : "Clip export started", source: "export")
-        exportStatusText = queueJobID != nil ? "Running queued clip export…" : (skipSaveDialog ? "Quick exporting clip…" : "Exporting clip…")
+        appendActivityConsole("\(exportName) started", source: "export")
+        exportStatusText = queueJobID != nil ? "Running queued \(exportName.lowercased())…" : "\(exportName) in progress…"
         outputURL = nil
 
-        if clipEncodingMode == .audioOnly {
+        if config.clipEncodingMode == .audioOnly {
             exportTask = Task { [weak self] in
                 guard let self else { return }
                 await MainActor.run {
                     self.exportProgress = 0.1
-                    self.exportStatusText = "Exporting audio-only clip…"
+                    self.exportStatusText = config.isFullSourceConversion ? "Exporting audio…" : "Exporting audio-only clip…"
                 }
 
                 guard let ffmpegURL = self.findFFmpegExecutable() else {
@@ -94,7 +125,7 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                         self.exportTask = nil
                         self.isExporting = false
                         self.exportProgress = 0
-                        self.exportStatusText = "Clip export failed: No ffmpeg executable found."
+                        self.exportStatusText = "\(exportName) failed: No ffmpeg executable found."
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
                         self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
@@ -102,16 +133,16 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                     return
                 }
 
-                let start = String(format: "%.3f", self.clipStartSeconds)
-                let clipDuration = max(0.001, self.clipEndSeconds - self.clipStartSeconds)
+                let start = String(format: "%.3f", config.clipStartSeconds)
+                let clipDuration = max(0.001, config.clipEndSeconds - config.clipStartSeconds)
                 let durationStr = String(format: "%.3f", clipDuration)
-                let bitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
+                let bitrateKbps = min(max(64, config.clipAudioBitrateKbps), 320)
                 let fadeDuration = min(0.333, clipDuration / 2.0)
                 let fadeOutStart = max(0.0, clipDuration - fadeDuration)
                 let allowFadeForDuration = clipDuration >= 2.0
-                let applyAudioFade = self.clipAudioOnlyAddFadeInOut && allowFadeForDuration
+                let applyAudioFade = config.clipAudioOnlyAddFadeInOut && allowFadeForDuration
                 let codec: String
-                switch self.clipAudioOnlyFormat {
+                switch config.clipAudioOnlyFormat {
                 case .mp3:
                     codec = "libmp3lame"
                 case .m4a:
@@ -127,7 +158,7 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                         self.exportTask = nil
                         self.isExporting = false
                         self.exportProgress = 0
-                        self.exportStatusText = "Clip export failed: No audio track found in source."
+                        self.exportStatusText = "\(exportName) failed: No audio track found in source."
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
                         self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
@@ -140,8 +171,8 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                     audioFilters.append("afade=t=in:st=0:d=\(String(format: "%.3f", fadeDuration))")
                     audioFilters.append("afade=t=out:st=\(String(format: "%.3f", fadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
                 }
-                if self.clipAudioOnlyBoostAudio {
-                    audioFilters.append("volume=\(self.clipAdvancedBoostAmount.rawValue)dB")
+                if config.clipAudioOnlyBoostAudio {
+                    audioFilters.append("volume=\(config.clipAdvancedBoostAmount.rawValue)dB")
                     audioFilters.append("alimiter=limit=0.988553")
                 }
 
@@ -168,7 +199,7 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                 var outputArgs = [
                     "-c:a", codec
                 ]
-                if self.clipAudioOnlyFormat != .wav {
+                if config.clipAudioOnlyFormat != .wav {
                     outputArgs.append(contentsOf: ["-b:a", "\(bitrateKbps)k"])
                 }
 
@@ -176,7 +207,7 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                     executableURL: ffmpegURL,
                     arguments: args + outputArgs + [destination.path],
                     durationSeconds: clipDuration,
-                    statusPrefix: "Exporting audio-only clip"
+                    statusPrefix: config.isFullSourceConversion ? "Exporting audio" : "Exporting audio-only clip"
                 )
 
                 await MainActor.run {
@@ -186,29 +217,29 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                     self.isExporting = false
                     self.exportProgress = 0
                     if self.exportCancellationRequested {
-                        self.exportStatusText = "Clip export cancelled"
+                        self.exportStatusText = "\(exportName) cancelled"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
-                        self.notifyCompletion("Audio-Only Clip Export Stopped", message: self.exportStatusText)
+                        self.notifyCompletion("\(exportName.capitalized) Stopped", message: self.exportStatusText)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                         return
                     }
                     if let encodeError {
-                        self.exportStatusText = "Clip export failed: \(encodeError)"
+                        self.exportStatusText = "\(exportName) failed: \(encodeError)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
-                        self.notifyCompletion("Audio-Only Clip Export Failed", message: self.exportStatusText)
+                        self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     } else {
                         self.outputURL = destination
-                        self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
-                        if self.clipAudioOnlyAddFadeInOut && !applyAudioFade {
-                            self.uiMessage = "Clip export complete: \(destination.lastPathComponent). Audio fade was skipped for clips under 2.0s."
+                        self.exportStatusText = "\(exportName) complete: \(destination.lastPathComponent)"
+                        if config.clipAudioOnlyAddFadeInOut && !applyAudioFade {
+                            self.uiMessage = "\(exportName) complete: \(destination.lastPathComponent). Audio fade was skipped for media under 2.0s."
                         } else {
                             self.uiMessage = self.exportStatusText
                         }
                         self.lastActivityState = .success
-                        self.notifyCompletion("Audio-Only Clip Export Complete", message: self.uiMessage)
+                        self.notifyCompletion("\(exportName.capitalized) Complete", message: self.uiMessage)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.exportStatusText, outputURL: destination)
                     }
                 }
@@ -216,8 +247,8 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
             return
         }
 
-        if clipEncodingMode == .fast {
-            guard selectedClipFormat.supportsPassthrough else {
+        if config.clipEncodingMode == .fast {
+            guard config.selectedClipFormat.supportsPassthrough else {
                 activeClipExportRunToken = nil
                 isExporting = false
                 exportStatusText = "Fast mode supports only MP4 and MOV."
@@ -241,11 +272,11 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
             activeExportSession = session
 
             session.outputURL = destination
-            session.outputFileType = selectedClipFormat.fileType
+            session.outputFileType = config.selectedClipFormat.fileType
             session.shouldOptimizeForNetworkUse = true
             session.timeRange = CMTimeRange(
-                start: CMTime(seconds: clipStartSeconds, preferredTimescale: 600),
-                duration: CMTime(seconds: clipDurationSeconds, preferredTimescale: 600)
+                start: CMTime(seconds: config.clipStartSeconds, preferredTimescale: 600),
+                duration: CMTime(seconds: exportDuration, preferredTimescale: 600)
             )
 
             exportTask = Task { [weak self] in
@@ -314,7 +345,7 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
             guard let self else { return }
             await MainActor.run {
                 self.exportProgress = 0.1
-                self.exportStatusText = "Encoding compressed clip…"
+                self.exportStatusText = config.isFullSourceConversion ? "Encoding video…" : "Encoding compressed clip…"
             }
 
             guard let ffmpegURL = self.findFFmpegExecutable() else {
@@ -324,7 +355,7 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                     self.exportTask = nil
                     self.isExporting = false
                     self.exportProgress = 0
-                    self.exportStatusText = "Clip export failed: No ffmpeg executable found."
+                    self.exportStatusText = "\(exportName) failed: No ffmpeg executable found."
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
                     self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
@@ -332,8 +363,8 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                 return
             }
 
-            let bitrateKbps = max(500, Int((self.clipVideoBitrateMbps * 1000.0).rounded()))
-            let audioBitrateKbps = min(max(64, self.clipAudioBitrateKbps), 320)
+            let bitrateKbps = max(500, Int((config.clipVideoBitrateMbps * 1000.0).rounded()))
+            let audioBitrateKbps = min(max(64, config.clipAudioBitrateKbps), 320)
             // CRITICAL REGRESSION GUARD:
             // DO NOT REORDER THIS SEEK SEQUENCE.
             // Keep this hybrid seek order for advanced ffmpeg exports:
@@ -342,23 +373,23 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
             // first frame on long-GOP sources in both captioned and non-captioned paths.
             // Any caption path must reuse this exact order as well.
             let decoderPreRollSeconds = 2.5
-            let coarseSeekSeconds = max(0.0, self.clipStartSeconds - decoderPreRollSeconds)
-            let fineSeekSeconds = max(0.0, self.clipStartSeconds - coarseSeekSeconds)
+            let coarseSeekSeconds = max(0.0, config.clipStartSeconds - decoderPreRollSeconds)
+            let fineSeekSeconds = max(0.0, config.clipStartSeconds - coarseSeekSeconds)
             let coarseSeek = String(format: "%.6f", coarseSeekSeconds)
             let fineSeek = String(format: "%.6f", fineSeekSeconds)
-            let clipDuration = max(0.001, self.clipEndSeconds - self.clipStartSeconds)
+            let clipDuration = max(0.001, config.clipEndSeconds - config.clipStartSeconds)
             let durationStr = String(format: "%.3f", clipDuration)
             let fadeDuration = min(0.333, clipDuration / 2.0)
             let fadeOutStart = max(0.0, clipDuration - fadeDuration)
             let allowFadeForDuration = clipDuration >= 2.0
-            let applyAudioFade = self.clipAdvancedAddFadeInOut && allowFadeForDuration
+            let applyAudioFade = config.clipAdvancedAddFadeInOut && allowFadeForDuration
             let audioFadeInStart = fineSeekSeconds
             let audioFadeOutStart = fineSeekSeconds + fadeOutStart
-            let isWebM = self.selectedClipFormat == .webm
+            let isWebM = config.selectedClipFormat == .webm
             let sourceAsset = AVURLAsset(url: sourceURL)
             let selectedAudioTrackIndex = self.preferredAudioTrackIndex(for: sourceAsset)
             let hasSourceAudio = (selectedAudioTrackIndex != nil)
-            let videoCodec = isWebM ? "libvpx-vp9" : (self.clipAdvancedVideoCodec == .hevc ? "libx265" : "libx264")
+            let videoCodec = isWebM ? "libvpx-vp9" : (config.clipAdvancedVideoCodec == .hevc ? "libx265" : "libx264")
             let audioCodec = isWebM ? "libopus" : "aac"
             var videoFilters: [String] = []
             var audioFilters: [String] = []
@@ -374,12 +405,12 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                 "-t", durationStr,
                 "-map", "0:v:0",
                 "-c:v", videoCodec,
-                "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
+                "-preset", config.clipCompatibleSpeedPreset.ffmpegPreset,
                 "-pix_fmt", "yuv420p",
                 "-b:v", "\(bitrateKbps)k"
             ]
 
-            if let scaleFilter = self.clipCompatibleMaxResolution.scaleFilter {
+            if let scaleFilter = config.clipCompatibleMaxResolution.scaleFilter {
                 videoFilters.append(scaleFilter)
             }
 
@@ -391,8 +422,8 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                 audioFilters.append("afade=t=out:st=\(String(format: "%.3f", audioFadeOutStart)):d=\(String(format: "%.3f", fadeDuration))")
             }
 
-            if self.clipAdvancedBoostAudio && hasSourceAudio {
-                audioFilters.append("volume=\(self.clipAdvancedBoostAmount.rawValue)dB")
+            if config.clipAdvancedBoostAudio && hasSourceAudio {
+                audioFilters.append("volume=\(config.clipAdvancedBoostAmount.rawValue)dB")
                 audioFilters.append("alimiter=limit=0.988553")
             }
 
@@ -412,12 +443,12 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                 ])
             }
 
-            if self.selectedClipFormat == .mp4 || self.selectedClipFormat == .mov {
+            if config.selectedClipFormat == .mp4 || config.selectedClipFormat == .mov {
                 baselineArgs.append(contentsOf: ["-movflags", "+faststart"])
             }
 
             var encodeError: String? = nil
-            if self.clipAdvancedBurnInCaptions {
+            if config.clipAdvancedBurnInCaptions {
                 // CAPTION PIPELINE REGRESSION GUARD:
                 // Keep captioned exports as a strict staged-base 2-step flow:
                 //   1) Create a staged base clip using the same hybrid seek order as advanced export
@@ -448,7 +479,7 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                 }
 
                 if captionStageReady {
-                    let stagedBaseURL = captionStageDirectory.appendingPathComponent("base.\(self.selectedClipFormat.fileExtension)")
+                    let stagedBaseURL = captionStageDirectory.appendingPathComponent("base.\(config.selectedClipFormat.fileExtension)")
                     var stageArgs = baselineArgs
                     if !videoFilters.isEmpty {
                         stageArgs.append(contentsOf: ["-vf", videoFilters.joined(separator: ",")])
@@ -498,14 +529,14 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                                     "-i", stagedBaseURL.path,
                                     "-map", "0:v:0",
                                     "-c:v", videoCodec,
-                                    "-preset", self.clipCompatibleSpeedPreset.ffmpegPreset,
+                                    "-preset", config.clipCompatibleSpeedPreset.ffmpegPreset,
                                     "-pix_fmt", "yuv420p",
                                     "-b:v", "\(bitrateKbps)k",
-                                    "-vf", MediaToolUtilities.subtitlesFilterArgument(path: prepared.srtURL.path, style: self.clipAdvancedCaptionStyle),
+                                    "-vf", MediaToolUtilities.subtitlesFilterArgument(path: prepared.srtURL.path, style: config.clipAdvancedCaptionStyle),
                                     "-map", "0:a:0?",
                                     "-c:a", "copy"
                                 ]
-                                if self.selectedClipFormat == .mp4 || self.selectedClipFormat == .mov {
+                                if config.selectedClipFormat == .mp4 || config.selectedClipFormat == .mov {
                                     burnArgs.append(contentsOf: ["-movflags", "+faststart"])
                                 }
                                 burnArgs.append(destination.path)
@@ -533,7 +564,7 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                     executableURL: ffmpegURL,
                     arguments: args,
                     durationSeconds: clipDuration,
-                    statusPrefix: "Encoding advanced clip"
+                    statusPrefix: config.isFullSourceConversion ? "Encoding video" : "Encoding advanced clip"
                 )
             }
 
@@ -544,29 +575,29 @@ extension WorkspaceViewModel {    func startClipExport(skipSaveDialog: Bool = fa
                 self.isExporting = false
                 self.exportProgress = 0
                 if self.exportCancellationRequested {
-                    self.exportStatusText = "Clip export cancelled"
+                    self.exportStatusText = "\(exportName) cancelled"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .cancelled
-                    self.notifyCompletion("Compatible Clip Export Stopped", message: self.exportStatusText)
+                    self.notifyCompletion("\(exportName.capitalized) Stopped", message: self.exportStatusText)
                     self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                     return
                 }
                 if let encodeError {
-                    self.exportStatusText = "Clip export failed: \(encodeError)"
+                    self.exportStatusText = "\(exportName) failed: \(encodeError)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
-                    self.notifyCompletion("Compatible Clip Export Failed", message: self.exportStatusText)
+                    self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText)
                     self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                 } else {
                     self.outputURL = destination
-                    self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
-                    if self.clipAdvancedAddFadeInOut && !applyAudioFade {
-                        self.uiMessage = "Clip export complete: \(destination.lastPathComponent). Audio fade was skipped for clips under 2.0s."
+                    self.exportStatusText = "\(exportName) complete: \(destination.lastPathComponent)"
+                    if config.clipAdvancedAddFadeInOut && !applyAudioFade {
+                        self.uiMessage = "\(exportName) complete: \(destination.lastPathComponent). Audio fade was skipped for media under 2.0s."
                     } else {
                         self.uiMessage = self.exportStatusText
                     }
                     self.lastActivityState = .success
-                    self.notifyCompletion("Compatible Clip Export Complete", message: self.uiMessage)
+                    self.notifyCompletion("\(exportName.capitalized) Complete", message: self.uiMessage)
                     self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.exportStatusText, outputURL: destination)
                 }
             }

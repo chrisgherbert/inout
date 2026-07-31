@@ -22,14 +22,6 @@ enum JobPresentationUtilities {
         "\(mode.rawValue) • \(format) • \(formatSeconds(startSeconds)) → \(formatSeconds(endSeconds))"
     }
 
-    static func audioExportJobTitle(format: AudioFormat) -> String {
-        "Audio Export - \(format.rawValue)"
-    }
-
-    static func audioExportJobSubtitle(bitrateKbps: Int) -> String {
-        "\(bitrateKbps) kbps"
-    }
-
     static func analysisJobSubtitle(black: Bool, silence: Bool, profanity: Bool) -> String {
         var detectors: [String] = []
         if black { detectors.append("Black Frames") }

@@ -173,7 +173,7 @@ struct CheckBlackFramesApp: App {
                 Divider()
 
                 Button {
-                    focusedModel?.startExport()
+                    focusedModel?.startFullSourceExport(mode: .audioOnly)
                 } label: {
                     Label("Export Audio…", systemImage: "arrow.down.doc")
                 }

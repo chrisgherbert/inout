@@ -63,64 +63,6 @@ struct ClipOutputPanel: View {
             : "Export Clip. Option-click for Quick Export (no save dialog)."
     }
 
-    private var audioBitrateBinding: Binding<Double> {
-        Binding(
-            get: { Double(model.clipAudioBitrateKbps) },
-            set: { model.clipAudioBitrateKbps = Int($0.rounded()) }
-        )
-    }
-
-    @ViewBuilder
-    private func audioBitrateRow() -> some View {
-        HStack {
-            Text("Audio bitrate")
-                .frame(width: 120, alignment: .leading)
-            Slider(
-                value: audioBitrateBinding,
-                in: 64...320,
-                step: 32
-            )
-            .controlSize(.small)
-            Text("\(model.clipAudioBitrateKbps) kbps")
-                .font(.caption.monospacedDigit())
-                .frame(width: 90, alignment: .trailing)
-        }
-    }
-
-    @ViewBuilder
-    private func audioProcessingControls(
-        boostAudio: Binding<Bool>,
-        addFadeInOut: Binding<Bool>
-    ) -> some View {
-        HStack(spacing: 10) {
-            Toggle(
-                "Boost audio (+\(model.clipAdvancedBoostAmount.rawValue) dB, limit -0.1 dBFS)",
-                isOn: boostAudio
-            )
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-
-            if boostAudio.wrappedValue {
-                Picker("Boost amount", selection: $model.clipAdvancedBoostAmount) {
-                    ForEach(AdvancedBoostAmount.allCases) { amount in
-                        Text(amount.label).tag(amount)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .controlSize(.mini)
-                .frame(width: 88, alignment: .leading)
-                .help("Input gain before limiter.")
-            }
-
-            Spacer(minLength: 0)
-        }
-
-        Toggle("Add audio fade in/out (0.33s at start/end)", isOn: addFadeInOut)
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-    }
-
     var body: some View {
         GroupBox("Output") {
             VStack(alignment: .leading, spacing: 10) {
@@ -151,26 +93,7 @@ struct ClipOutputPanel: View {
 
                     Group {
                         if uiClipEncodingMode == .audioOnly {
-                            VStack(alignment: .leading, spacing: 10) {
-                                LabeledContent("Audio format") {
-                                    Picker("Audio format", selection: $model.clipAudioOnlyFormat) {
-                                        ForEach(ClipAudioOnlyFormat.allCases) { format in
-                                            Text(format.rawValue).tag(format)
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .labelsHidden()
-                                    .controlSize(.small)
-                                    .frame(width: 148)
-                                }
-
-                                audioBitrateRow()
-
-                                audioProcessingControls(
-                                    boostAudio: $model.clipAudioOnlyBoostAudio,
-                                    addFadeInOut: $model.clipAudioOnlyAddFadeInOut
-                                )
-                            }
+                            AudioOnlyExportOptions(model: model)
                         } else if uiClipEncodingMode == .fast {
                             LabeledContent("Format") {
                                 Picker("Format", selection: $model.selectedClipFormat) {
@@ -184,107 +107,7 @@ struct ClipOutputPanel: View {
                             .controlSize(.small)
                             .frame(width: 148)
                         } else {
-                            VStack(alignment: .leading, spacing: 10) {
-                                LabeledContent("Format") {
-                                    Picker("Format", selection: $model.selectedClipFormat) {
-                                        ForEach(advancedClipFormats) { format in
-                                            Text(format.rawValue).tag(format)
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .labelsHidden()
-                                    .controlSize(.small)
-                                    .frame(width: 148)
-                                }
-
-                                if model.selectedClipFormat != .webm {
-                                    LabeledContent("Video codec") {
-                                        Picker("Video codec", selection: $model.clipAdvancedVideoCodec) {
-                                            ForEach(AdvancedVideoCodec.allCases) { codec in
-                                                Text(codec.rawValue).tag(codec)
-                                            }
-                                        }
-                                        .pickerStyle(.menu)
-                                        .labelsHidden()
-                                        .controlSize(.small)
-                                        .frame(width: 148)
-                                    }
-                                } else {
-                                    Text("Video codec: VP9 (WebM)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                LabeledContent("Speed") {
-                                    Picker("Speed", selection: $model.clipCompatibleSpeedPreset) {
-                                        ForEach(CompatibleSpeedPreset.allCases) { preset in
-                                            Text(preset.rawValue).tag(preset)
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .labelsHidden()
-                                    .controlSize(.small)
-                                    .frame(width: 148)
-                                }
-
-                                LabeledContent("Max resolution") {
-                                    Picker("Max resolution", selection: $model.clipCompatibleMaxResolution) {
-                                        ForEach(CompatibleMaxResolution.allCases) { resolution in
-                                            Text(resolution.rawValue).tag(resolution)
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .labelsHidden()
-                                    .controlSize(.small)
-                                    .frame(width: 148)
-                                }
-
-                                HStack {
-                                    Text("Video bitrate")
-                                        .frame(width: 120, alignment: .leading)
-                                    Slider(value: $model.clipVideoBitrateMbps, in: 0.5...20, step: 0.5)
-                                        .controlSize(.small)
-                                    Text(String(format: "%.1f Mbps", model.clipVideoBitrateMbps))
-                                        .font(.caption.monospacedDigit())
-                                        .frame(width: 90, alignment: .trailing)
-                                }
-
-                                audioBitrateRow()
-
-                                audioProcessingControls(
-                                    boostAudio: $model.clipAdvancedBoostAudio,
-                                    addFadeInOut: $model.clipAdvancedAddFadeInOut
-                                )
-
-                                HStack(spacing: 10) {
-                                    Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
-                                        .toggleStyle(.switch)
-                                        .controlSize(.mini)
-                                        .disabled(!model.whisperTranscriptionAvailable)
-
-                                    if model.clipAdvancedBurnInCaptions {
-                                        Picker("Caption style", selection: $model.clipAdvancedCaptionStyle) {
-                                            ForEach(BurnInCaptionStyle.allCases) { style in
-                                                Text(style.rawValue).tag(style)
-                                            }
-                                        }
-                                        .labelsHidden()
-                                        .pickerStyle(.menu)
-                                        .controlSize(.mini)
-                                        .frame(width: 168, alignment: .leading)
-                                        .disabled(!model.whisperTranscriptionAvailable)
-                                        .help("Caption style for this export.")
-                                    }
-
-                                    Spacer(minLength: 0)
-                                }
-
-                                if !model.whisperTranscriptionAvailable {
-                                    Text("Whisper binary/model not available in app bundle.")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
+                            AdvancedVideoExportOptions(model: model, formats: advancedClipFormats)
                         }
                     }
                 }

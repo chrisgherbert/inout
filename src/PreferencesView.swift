@@ -766,7 +766,7 @@ struct PreferencesView: View {
     private var audioPane: some View {
         paneScroll {
             settingsSection("Export") {
-                settingsRow("Default MP3 bitrate") {
+                settingsRow("Default audio bitrate") {
                     Stepper(value: $model.defaultAudioBitrateKbps, in: 64...320, step: 32) {
                         Text("\(model.defaultAudioBitrateKbps) kbps")
                             .font(.system(.body, design: .monospaced))
