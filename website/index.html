@@ -3,108 +3,212 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>In/Out - Simple Clipping, Converting, and QA Testing of Media</title>
-  <meta name="description" content="In/Out is a focused macOS tool for clipping, converting, QA testing, transcription, and URL-based media import with fast keyboard-friendly workflows." />
+  <title>In/Out for macOS - Clip, Transcribe, and Review Video Faster</title>
+  <meta name="description" content="In/Out is a fast macOS app for reviewing long videos, searching local transcripts, finding useful moments, and exporting precise clips without setting up an editing project." />
+  <link rel="icon" href="./assets/icon.png" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <div class="page-bg"></div>
 
   <header class="site-header">
-    <div class="brand">
-      <img src="./assets/icon.png" alt="In/Out icon" class="brand-icon" />
+    <a class="brand" href="#top" aria-label="In/Out home">
+      <img src="./assets/icon.png" alt="" class="brand-icon" />
       <span class="brand-name">In/Out</span>
-    </div>
-    <nav class="header-nav">
-      <a href="#features">Features</a>
-      <a href="#screenshot">Screenshot</a>
-      <a href="#requirements">Requirements</a>
+    </a>
+    <nav class="header-nav" aria-label="Main navigation">
+      <a href="#how-it-works">How It Works</a>
+      <a href="#workflows">What You Can Do</a>
       <a href="#download">Download</a>
     </nav>
   </header>
 
-  <main>
+  <main id="top">
     <section class="hero">
-      <p class="eyebrow">macOS Media Utility</p>
-      <h1>Simple Clipping, Converting, and QA Testing of Media</h1>
+      <p class="eyebrow">Fast media review for macOS</p>
+      <h1>Find the moment.<br />Make the clip. Move on.</h1>
       <p class="hero-copy">
-        In/Out is built for fast editorial utility work: set accurate in/out points,
-        open media from local files or URLs, export clips and audio, inspect technical metadata, and run QA checks for black frames,
-        silence gaps, transcript-level review, and burned-caption exports without leaving a single app window.
+        Open a video or download one from a supported URL. Review it on a visual timeline,
+        search what was said, set precise In and Out points, and export the result without
+        creating a project in a full video editor.
       </p>
       <div class="hero-actions">
         <a id="download-btn" class="btn-primary" href="#" target="_blank" rel="noopener noreferrer">Download In/Out for macOS</a>
+        <a class="btn-secondary" href="#how-it-works">See How It Works</a>
       </div>
       <p id="release-meta" class="release-meta">Resolving latest release...</p>
+      <ul class="trust-list" aria-label="Product details">
+        <li>Fast local transcription</li>
+        <li>Apple silicon</li>
+        <li>Notarized for macOS</li>
+      </ul>
     </section>
 
-    <section id="screenshot" class="screenshot-section panel">
-      <h2>In/Out Interface</h2>
-      <p class="section-copy">
-        A dark, timeline-first workspace designed for precise media edits, quick exports, and technical checks.
-      </p>
+    <section id="screenshot" class="screenshot-section panel panel-featured">
+      <div class="section-heading">
+        <p class="section-kicker">One focused workspace</p>
+        <h2>Review, transcribe, and export in the same place</h2>
+        <p class="section-copy">
+          The player, searchable transcript, thumbnails, waveform, markers, and export controls
+          stay connected to the same timeline, so you can move from finding a moment to delivering it quickly.
+        </p>
+      </div>
       <div class="screenshot-frame">
-        <img src="./assets/screenshot.png" alt="In/Out screenshot" />
+        <img src="./assets/screenshot.png?v=20260731" alt="In/Out showing a video, searchable transcript, thumbnail timeline, waveform, selected range, and export controls" />
       </div>
     </section>
 
-    <section id="features" class="features panel">
-      <h2>Key Features</h2>
-      <ul>
-        <li>Fast clip workflow with timeline zoom, marker navigation, in/out shortcuts, and quick export.</li>
-        <li>Open media from URL with integrated yt-dlp import flow and quality/save-location controls.</li>
-        <li>Multiple output paths: fast passthrough, advanced transcode controls, and audio-only exports.</li>
-        <li>Built-in QA detection for black segments and silent gaps, with timeline visualization and segment lists.</li>
-        <li>Inspect panel with codec/bitrate/frame rate/resolution metadata and transcript tools.</li>
-        <li>Burned caption workflow powered by local Whisper integration for advanced clip exports.</li>
-      </ul>
-      <p class="section-copy">
-        It is intentionally focused on simple clipping and other video tasks rather than full nonlinear editing.
+    <section id="how-it-works" class="section-block">
+      <div class="section-heading narrow-heading">
+        <p class="section-kicker">How it works</p>
+        <h2>From a long recording to the part you need</h2>
+      </div>
+      <div class="steps-grid">
+        <article class="step-card">
+          <span class="step-number">1</span>
+          <h3>Open the source</h3>
+          <p>Drag in a video or audio file, choose one from your Mac, or paste a supported media URL.</p>
+        </article>
+        <article class="step-card">
+          <span class="step-number">2</span>
+          <h3>Find the moment</h3>
+          <p>Scrub the visual timeline, search the transcript, add markers, or ask AI Suggestions to find useful points and ranges.</p>
+        </article>
+        <article class="step-card">
+          <span class="step-number">3</span>
+          <h3>Export what you need</h3>
+          <p>Set In and Out points, then make a quick clip or choose advanced video, audio, caption, and processing options.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="workflows" class="section-block">
+      <div class="section-heading narrow-heading">
+        <p class="section-kicker">What you can do</p>
+        <h2>Practical tools for working through media</h2>
+        <p class="section-copy">
+          In/Out is designed for producers, journalists, researchers, and anyone who regularly turns long recordings into useful clips and text.
+        </p>
+      </div>
+      <div class="workflow-grid">
+        <article class="workflow-card">
+          <p class="card-label">Clip</p>
+          <h3>Make precise clips without project setup</h3>
+          <p>Use thumbnails, a waveform, zoom, markers, and familiar In/Out controls to isolate the exact range you want.</p>
+          <ul>
+            <li>Quick or advanced video export</li>
+            <li>Audio-only export and export queues</li>
+            <li>Frame capture and marker navigation</li>
+          </ul>
+        </article>
+
+        <article class="workflow-card">
+          <p class="card-label">Transcript</p>
+          <h3>Find what was said, not just where it happened</h3>
+          <p>Generate a fast local transcript, search it, follow along with playback, and click any passage to jump to that moment.</p>
+          <ul>
+            <li>Compact lines or readable paragraphs</li>
+            <li>Optional timecodes and adjustable text size</li>
+            <li>Copy passages or export Text, timed Text, and SRT</li>
+          </ul>
+        </article>
+
+        <article class="workflow-card workflow-card-accent">
+          <p class="card-label">AI Suggestions</p>
+          <h3>Turn analysis into something you can use</h3>
+          <p>Find highlights, topic changes, possible ad breaks, clip-worthy ranges, YouTube chapters, or written descriptions.</p>
+          <ul>
+            <li>Suggestions stay linked to the media timeline</li>
+            <li>Create custom analysis recipes</li>
+            <li>Refine results and revisit earlier versions</li>
+          </ul>
+          <p class="card-note">Optional. Choose a supported AI provider in Settings; cloud providers require your own API key.</p>
+        </article>
+
+        <article class="workflow-card">
+          <p class="card-label">Convert</p>
+          <h3>Prepare complete files for the next step</h3>
+          <p>Convert the full source to a new video or audio file using the same advanced controls available for clips.</p>
+          <ul>
+            <li>Video format, codec, resolution, and bitrate</li>
+            <li>MP3, M4A, WAV, and audio processing options</li>
+            <li>Burned captions when you need them</li>
+          </ul>
+        </article>
+
+        <article class="workflow-card">
+          <p class="card-label">Analyze</p>
+          <h3>Catch common problems before delivery</h3>
+          <p>Scan media for black frames, silence gaps, and profanity, then jump directly to each result for review.</p>
+        </article>
+
+        <article class="workflow-card">
+          <p class="card-label">Open &amp; Inspect</p>
+          <h3>Bring media in and understand what you have</h3>
+          <p>Download supported online media, use browser authentication when needed, and inspect codecs, resolution, frame rate, bitrate, audio, and container details.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="focus-section panel">
+      <div>
+        <p class="section-kicker">Purposefully focused</p>
+        <h2>Common media work without a full editing project</h2>
+      </div>
+      <p>
+        In/Out is not trying to replace a nonlinear editor. It is for the work before and around editing:
+        reviewing a long source, finding a quote, pulling a clean clip, making a transcript, converting a file,
+        or checking media before it goes somewhere else.
       </p>
     </section>
 
     <section id="requirements" class="requirements panel">
-      <h2>System Requirements</h2>
-      <ul>
-        <li>macOS 13 Ventura or later</li>
-        <li>Apple Silicon Mac</li>
-      </ul>
-      <div class="danger-callout" role="alert" aria-live="polite">
-        <span class="danger-icon" aria-hidden="true">!</span>
-        <div>
-          <p class="danger-title">Early Development Warning</p>
-          <p class="danger-copy">In/Out is in very early development and has not been extensively tested. Use at your own risk.</p>
-        </div>
+      <div class="requirements-copy">
+        <p class="section-kicker">Requirements &amp; privacy</p>
+        <h2>Built for current Macs</h2>
+        <ul>
+          <li>macOS 13 Ventura or later</li>
+          <li>Apple silicon Mac</li>
+        </ul>
+      </div>
+      <div class="assurance-callout">
+        <h3>Your transcription can stay local</h3>
+        <p>
+          Standard transcript generation runs on your Mac. AI Suggestions are optional. If you choose a cloud AI provider,
+          In/Out sends the analysis request to that provider and stores your API key in macOS Keychain.
+        </p>
       </div>
     </section>
 
-    <section id="download" class="download panel">
-      <h2>Download</h2>
-      <p class="section-copy">
-        Downloads are served from GitHub Releases. The buttons on this page target the latest
-        notarized DMG installer for In/Out.
-      </p>
-      <ol class="install-steps">
-        <li>Download the DMG installer.</li>
-        <li>Open it, then drag In/Out into your Applications folder.</li>
-        <li>Launch In/Out from Applications.</li>
-      </ol>
-      <p class="download-note">
-        When updating manually, open the new DMG and replace the existing copy in Applications.
-      </p>
-      <a id="download-btn-secondary" class="btn-primary bottom-download-btn" href="#" target="_blank" rel="noopener noreferrer">Download In/Out for macOS</a>
+    <section id="download" class="download panel panel-featured">
+      <div class="download-copy">
+        <p class="section-kicker">Download</p>
+        <h2>Install In/Out on your Mac</h2>
+        <p class="section-copy">The download is a notarized macOS installer served directly from the latest GitHub release.</p>
+        <a id="download-btn-secondary" class="btn-primary bottom-download-btn" href="#" target="_blank" rel="noopener noreferrer">Download In/Out for macOS</a>
+      </div>
+      <div class="install-guide">
+        <ol class="install-steps">
+          <li><span>Download and open the DMG.</span></li>
+          <li><span>Drag In/Out into the Applications folder shown in the installer.</span></li>
+          <li><span>Open In/Out from Applications.</span></li>
+        </ol>
+        <p class="download-note">
+          For updates, choose <strong>Check for Updates</strong> in the app. In/Out downloads and opens the new installer; drag it into Applications and choose Replace.
+        </p>
+      </div>
     </section>
   </main>
 
   <footer class="site-footer">
-    <p>In/Out</p>
+    <p>In/Out for macOS</p>
     <p class="footer-links">
-      <a id="releases-link" href="#" target="_blank" rel="noopener noreferrer">GitHub Releases</a>
-      <a id="repo-link" href="#" target="_blank" rel="noopener noreferrer" aria-label="GitHub Repository">
+      <a id="releases-link" href="#" target="_blank" rel="noopener noreferrer">Release History</a>
+      <a id="repo-link" href="#" target="_blank" rel="noopener noreferrer" aria-label="In/Out on GitHub">
         <svg class="github-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
           <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.63 2.29 6.71 5.47 7.8.4.08.55-.18.55-.39 0-.19-.01-.82-.01-1.48-2.01.45-2.53-.51-2.69-.98-.09-.25-.48-1.03-.82-1.24-.28-.16-.68-.57-.01-.58.63-.01 1.08.59 1.23.84.72 1.24 1.87.89 2.33.68.07-.54.28-.89.5-1.09-1.78-.21-3.64-.92-3.64-4.08 0-.9.31-1.64.82-2.22-.08-.21-.36-1.06.08-2.2 0 0 .67-.22 2.2.85.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.07 2.2-.85 2.2-.85.44 1.14.16 1.99.08 2.2.51.58.82 1.31.82 2.22 0 3.17-1.87 3.87-3.65 4.08.29.26.54.76.54 1.54 0 1.11-.01 2-.01 2.28 0 .21.15.47.55.39A8.2 8.2 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z"></path>
         </svg>
-        <span>GitHub Repo</span>
+        <span>GitHub</span>
       </a>
     </p>
   </footer>

@@ -16,7 +16,7 @@
       };
     }
 
-    return null;
+    return { owner: "chrisgherbert", repo: "inout" };
   }
 
   function setDownloadLink(url, label) {
@@ -33,7 +33,7 @@
     if (secondary) secondary.href = url;
     if (releasesLink) releasesLink.href = url.includes("/download/") ? url.split("/releases/")[0] + "/releases" : url;
     if (repoLink && releasesLink && releasesLink.href) repoLink.href = releasesLink.href.replace(/\/releases$/, "");
-    if (meta) meta.textContent = "Latest release ready";
+    if (meta) meta.textContent = "Latest notarized installer ready";
   }
 
   function setMetaText(text) {
@@ -59,11 +59,6 @@
 
   async function hydrateLatestDownload() {
     var repo = deriveRepo();
-    if (!repo) {
-      setMetaText("Set IN_AND_OUT_REPO in site.js for non-GitHub Pages hosting.");
-      return;
-    }
-
     var releasesUrl = "https://github.com/" + repo.owner + "/" + repo.repo + "/releases";
     var fallback = releasesUrl + "/latest";
     setDownloadLink(fallback, "View Latest Release");
@@ -79,7 +74,7 @@
 
       if (installerAsset && installerAsset.browser_download_url) {
         setDownloadLink(installerAsset.browser_download_url, "Download In/Out for macOS");
-        setMetaText("Latest: " + release.tag_name + " installer");
+        setMetaText("Latest: " + release.tag_name + " · Notarized DMG");
       } else {
         setDownloadLink(fallback, "View Releases");
         setMetaText("Latest release found, but no installer asset matched.");
