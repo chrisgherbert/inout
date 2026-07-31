@@ -802,7 +802,34 @@ struct SmartMarkerSmokeTest {
         let claudeOutputConfig = claudeBodyJSON?["output_config"] as? [String: Any]
         let claudeFormat = claudeOutputConfig?["format"] as? [String: Any]
         precondition(claudeFormat?["type"] as? String == "json_schema")
-        precondition(claudeFormat?["schema"] != nil)
+        let claudeSchema = claudeFormat?["schema"] as? [String: Any]
+        let claudeProperties = claudeSchema?["properties"] as? [String: Any]
+        let claudeMarkersSchema = claudeProperties?["markers"] as? [String: Any]
+        precondition(claudeMarkersSchema?["maxItems"] == nil)
+        let claudeMarkerItem = claudeMarkersSchema?["items"] as? [String: Any]
+        let claudeMarkerProperties = claudeMarkerItem?["properties"] as? [String: Any]
+        let claudeRelevanceSchema = claudeMarkerProperties?["relevance_score"]
+            as? [String: Any]
+        precondition(claudeRelevanceSchema?["minimum"] == nil)
+        precondition(claudeRelevanceSchema?["maximum"] == nil)
+
+        let claudeRefinementBody = try ClaudeMessagesClient.requestBody(
+            model: "claude-sonnet-4-6",
+            system: ClaudeMessagesClient.refinementSystemPrompt,
+            prompt: "Refine these suggestions.",
+            schema: SmartMarkerStructuredOutput.refinementSchema(maximumResults: 4)
+        )
+        let claudeRefinementJSON = try JSONSerialization.jsonObject(
+            with: claudeRefinementBody
+        ) as? [String: Any]
+        let claudeRefinementOutput = claudeRefinementJSON?["output_config"] as? [String: Any]
+        let claudeRefinementFormat = claudeRefinementOutput?["format"] as? [String: Any]
+        let claudeRefinementSchema = claudeRefinementFormat?["schema"] as? [String: Any]
+        let claudeRefinementProperties = claudeRefinementSchema?["properties"]
+            as? [String: Any]
+        let claudeSuggestionsSchema = claudeRefinementProperties?["suggestions"]
+            as? [String: Any]
+        precondition(claudeSuggestionsSchema?["maxItems"] == nil)
         let claudeEnvelope = try JSONSerialization.data(withJSONObject: [
             "id": "msg_test",
             "type": "message",

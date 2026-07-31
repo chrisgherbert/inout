@@ -351,7 +351,8 @@ struct ClaudeMessagesClient: Sendable {
         prompt: String,
         schema: [String: Any]
     ) throws -> Data {
-        try JSONSerialization.data(withJSONObject: [
+        let compatibleSchema = schemaByRemovingUnsupportedConstraints(schema)
+        return try JSONSerialization.data(withJSONObject: [
             "model": model,
             "max_tokens": 8_000,
             "system": system,
@@ -359,10 +360,36 @@ struct ClaudeMessagesClient: Sendable {
             "output_config": [
                 "format": [
                     "type": "json_schema",
-                    "schema": schema
+                    "schema": compatibleSchema
                 ]
             ]
         ])
+    }
+
+    private static func schemaByRemovingUnsupportedConstraints(
+        _ schema: [String: Any]
+    ) -> [String: Any] {
+        let unsupportedKeywords: Set<String> = [
+            "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+            "minLength", "maxLength", "minItems", "maxItems", "uniqueItems",
+            "minProperties", "maxProperties"
+        ]
+
+        return schema.reduce(into: [:]) { result, entry in
+            guard !unsupportedKeywords.contains(entry.key) else { return }
+            if entry.key == "properties", let properties = entry.value as? [String: Any] {
+                result[entry.key] = properties.mapValues { value in
+                    guard let propertySchema = value as? [String: Any] else { return value }
+                    return schemaByRemovingUnsupportedConstraints(propertySchema)
+                }
+            } else if let nestedSchema = entry.value as? [String: Any] {
+                result[entry.key] = schemaByRemovingUnsupportedConstraints(nestedSchema)
+            } else if let nestedSchemas = entry.value as? [[String: Any]] {
+                result[entry.key] = nestedSchemas.map(schemaByRemovingUnsupportedConstraints)
+            } else {
+                result[entry.key] = entry.value
+            }
+        }
     }
 
     static func parseModelList(_ data: Data) throws -> [String] {
