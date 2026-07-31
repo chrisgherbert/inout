@@ -666,6 +666,44 @@ struct SmartMarkerSmokeTest {
                 "00:00:00 Introduction\n00:02:14 Housing policy",
             "Copied text output must omit internal categories and explanations."
         )
+        var chapterHistoryTab = SmartMarkerAnalysisTab(
+            id: UUID(),
+            title: "YouTube Chapters",
+            configuration: chapterConfiguration,
+            suggestions: [chapterSuggestions[1]],
+            documentText: "",
+            refinementContext: nil,
+            refinementMessages: [],
+            refinementRevisions: [
+                SmartMarkerResultSnapshot(
+                    suggestions: chapterSuggestions,
+                    documentText: ""
+                )
+            ],
+            currentResultRefinementInstruction: "Use fewer chapters.",
+            selectedResultVersionIndex: 0,
+            isRefining: false,
+            refinementErrorText: "",
+            deletedSuggestionIDs: [],
+            highlightedSuggestionID: nil,
+            scrollPositionSuggestionID: nil,
+            isAnalyzing: false,
+            completedWindows: 1,
+            totalWindows: 1,
+            skippedWindowCount: 0,
+            errorText: ""
+        )
+        precondition(chapterHistoryTab.supportsResultHistory)
+        precondition(!chapterHistoryTab.isViewingCurrentResult)
+        precondition(chapterHistoryTab.displayedResult.suggestions == chapterSuggestions)
+        chapterHistoryTab.selectResultVersion(1)
+        precondition(chapterHistoryTab.isViewingCurrentResult)
+        precondition(chapterHistoryTab.displayedResult.suggestions == [chapterSuggestions[1]])
+        precondition(
+            chapterHistoryTab.displayedResult.refinementInstruction == "Use fewer chapters."
+        )
+        chapterHistoryTab.selectResultVersion(-1)
+        precondition(chapterHistoryTab.resolvedResultVersionIndex == 0)
         precondition(
             SmartMarkerAnalyzer.targetSuggestionCount(
                 duration: 30 * 60,

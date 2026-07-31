@@ -3,8 +3,6 @@ import AppKit
 
 @MainActor
 final class ClipTranscriptPlaybackPresentation {
-    private var segments: [TranscriptSegment] = []
-    private var rowIDBySegmentID: [UUID: UUID] = [:]
     private var lastUpdateTimestamp: CFTimeInterval = 0
     private(set) var displayRows: [TranscriptDisplayRow] = []
 
@@ -18,13 +16,9 @@ final class ClipTranscriptPlaybackPresentation {
     var activeRowDidChange: ((UUID?) -> Void)?
 
     func configure(
-        segments: [TranscriptSegment],
-        displayRows: [TranscriptDisplayRow],
-        rowIDBySegmentID: [UUID: UUID]
+        displayRows: [TranscriptDisplayRow]
     ) {
-        self.segments = segments
         self.displayRows = displayRows
-        self.rowIDBySegmentID = rowIDBySegmentID
         update(time: 0, force: true)
     }
 
@@ -35,8 +29,7 @@ final class ClipTranscriptPlaybackPresentation {
 
         let resolvedRowID = activeTranscriptDisplayRowID(
             at: time,
-            in: segments,
-            rowIDBySegmentID: rowIDBySegmentID
+            in: displayRows
         )
         if activeRowID != resolvedRowID {
             activeRowID = resolvedRowID
@@ -58,12 +51,14 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
+    let transcriptDisplayMode: TranscriptDisplayMode
     let smartMarkerTabs: [SmartMarkerAnalysisTab]
     let activeSmartMarkerTabID: UUID?
     let showsSmartMarkerSuggestions: Bool
     let smartMarkerRevision: Int
     let generateTranscript: () -> Void
     let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
+    let setTranscriptDisplayMode: (TranscriptDisplayMode) -> Void
     let exportTranscript: (TranscriptExportFormat?) -> Void
     let seekToTranscriptTime: (Double) -> Void
     let playTranscriptFromTime: (Double) -> Void
@@ -75,6 +70,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let playSmartMarker: (SmartMarkerSuggestion) -> Void
     let deleteSmartMarkerSuggestion: (UUID) -> Void
     let setSmartMarkerScrollPosition: (UUID?, UUID) -> Void
+    let selectSmartMarkerResultVersion: (Int, UUID) -> Void
     let cancelSmartMarkerAnalysis: (UUID) -> Void
     let refineSmartMarkerAnalysis: (UUID, String) -> Void
     let undoSmartMarkerRefinement: (UUID) -> Void
@@ -90,6 +86,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     @State private var transcriptSearchVersion: Int = 0
     @State private var isUserScrollingTranscript = false
     @State private var transcriptControlsAvailableWidth: CGFloat = 0
+    @State private var displayModeOverride: TranscriptDisplayMode?
 
     static func == (lhs: ClipTranscriptSidebarView, rhs: ClipTranscriptSidebarView) -> Bool {
         lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
@@ -104,13 +101,18 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
+        lhs.transcriptDisplayMode == rhs.transcriptDisplayMode &&
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.smartMarkerRevision == rhs.smartMarkerRevision &&
         lhs.showsSmartMarkerSuggestions == rhs.showsSmartMarkerSuggestions
     }
 
     private func makeTranscriptRows() -> [TranscriptDisplayRow] {
-        makeTranscriptDisplayRows(from: transcriptSegments)
+        makeTranscriptDisplayRows(from: transcriptSegments, mode: activeTranscriptDisplayMode)
+    }
+
+    private var activeTranscriptDisplayMode: TranscriptDisplayMode {
+        displayModeOverride ?? transcriptDisplayMode
     }
 
     private var normalizedSearchText: String {
@@ -171,7 +173,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     private var activeSmartMarkerSuggestionCount: Int {
         guard let activeSmartMarkerTabID else { return 0 }
         return smartMarkerTabs.first(where: { $0.id == activeSmartMarkerTabID })?
-            .suggestions.count ?? 0
+            .displayedResult.suggestions.count ?? 0
     }
 
     private var showsPlaybackIndicator: Bool {
@@ -266,12 +268,16 @@ struct ClipTranscriptSidebarView: View, Equatable {
 
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
+                    transcriptDisplayModePicker
+                    Spacer()
+                        .frame(width: 8)
                     transcriptExportButton
                 }
             }
         } else {
             HStack(spacing: 8) {
                 transcriptSearchField
+                transcriptDisplayModePicker
                 transcriptExportButton
             }
         }
@@ -284,6 +290,16 @@ struct ClipTranscriptSidebarView: View, Equatable {
                 set: { setTranscriptExportFormat($0) }
             ),
             exportTranscript: { exportTranscript(nil) }
+        )
+    }
+
+    private var transcriptDisplayModePicker: some View {
+        TranscriptDisplayModePicker(
+            mode: activeTranscriptDisplayMode,
+            setMode: { mode in
+                displayModeOverride = mode
+                setTranscriptDisplayMode(mode)
+            }
         )
     }
 
@@ -336,6 +352,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     onPlay: playSmartMarker,
                     onDeleteSuggestion: deleteSmartMarkerSuggestion,
                     onSetScrollPosition: setSmartMarkerScrollPosition,
+                    onSelectResultVersion: selectSmartMarkerResultVersion,
                     onCancelAnalysis: cancelSmartMarkerAnalysis,
                     onRefine: refineSmartMarkerAnalysis,
                     onUndoRefinement: undoSmartMarkerRefinement
@@ -426,6 +443,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     rows: displayedTranscriptRows,
                     rowsVersion: transcriptRowsVersion,
                     fontSize: 13,
+                    displayMode: activeTranscriptDisplayMode,
                     playbackPresentation: playbackPresentation,
                     allowsPlaybackRow: !suspendsPlaybackHighlightDuringScroll,
                     followsActiveRow: followsPlaybackRow,
@@ -497,6 +515,14 @@ struct ClipTranscriptSidebarView: View, Equatable {
         }
         .onChange(of: transcriptRefreshToken) { _ in
             refreshTranscriptRows()
+        }
+        .onChange(of: activeTranscriptDisplayMode) { _ in
+            refreshTranscriptRows()
+        }
+        .onChange(of: transcriptDisplayMode) { mode in
+            if displayModeOverride == mode {
+                displayModeOverride = nil
+            }
         }
         .onChange(of: normalizedSearchText) { _ in
             refreshSearchMatches()

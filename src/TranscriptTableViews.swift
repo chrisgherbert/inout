@@ -12,6 +12,30 @@ let transcriptTextColumnTrailingInset: CGFloat = 3
 let transcriptTextMeasurementPadding: CGFloat = transcriptTextColumnLeadingInset + transcriptTextColumnTrailingInset + 16
 let transcriptTableWidthSlack: CGFloat = transcriptTimeColumnTrailingInset + transcriptTextColumnLeadingInset + 14
 
+struct TranscriptDisplayModePicker: View {
+    let mode: TranscriptDisplayMode
+    let setMode: (TranscriptDisplayMode) -> Void
+
+    var body: some View {
+        Menu("View: \(mode.title)") {
+            ForEach(TranscriptDisplayMode.allCases) { option in
+                Button {
+                    setMode(option)
+                } label: {
+                    if option == mode {
+                        Label(option.title, systemImage: "checkmark")
+                    } else {
+                        Text(option.title)
+                    }
+                }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Choose how transcript rows are displayed")
+    }
+}
+
 func normalizedTranscriptSearchText(_ text: String) -> String {
     text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
 }
@@ -48,6 +72,7 @@ func exactTranscriptTableDocumentWidth(
 struct TranscriptDisplayRow: Identifiable, Equatable {
     let id: UUID
     let start: Double
+    let end: Double
     let startLabel: String
     let text: String
     let normalizedText: String
@@ -55,18 +80,21 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
 
 struct TranscriptDisplayRows {
     let rows: [TranscriptDisplayRow]
-    let rowIDBySegmentID: [UUID: UUID]
 }
 
-func makeTranscriptDisplayRows(from segments: [TranscriptSegment]) -> [TranscriptDisplayRow] {
-    makeTranscriptDisplayRowsWithLookup(from: segments).rows
+func makeTranscriptDisplayRows(
+    from segments: [TranscriptSegment],
+    mode: TranscriptDisplayMode = .compact
+) -> [TranscriptDisplayRow] {
+    makeTranscriptDisplayRowsWithLookup(from: segments, mode: mode).rows
 }
 
-func makeTranscriptDisplayRowsWithLookup(from segments: [TranscriptSegment]) -> TranscriptDisplayRows {
+func makeTranscriptDisplayRowsWithLookup(
+    from segments: [TranscriptSegment],
+    mode: TranscriptDisplayMode = .compact
+) -> TranscriptDisplayRows {
     var rows: [TranscriptDisplayRow] = []
     rows.reserveCapacity(segments.count)
-    var rowIDBySegmentID: [UUID: UUID] = [:]
-    rowIDBySegmentID.reserveCapacity(segments.count)
 
     for segment in segments {
         let text = normalizedTranscriptDisplayText(segment.text)
@@ -78,64 +106,123 @@ func makeTranscriptDisplayRowsWithLookup(from segments: [TranscriptSegment]) -> 
             rows[rows.count - 1] = TranscriptDisplayRow(
                 id: last.id,
                 start: last.start,
+                end: max(last.end, segment.end),
                 startLabel: last.startLabel,
                 text: mergedText,
                 normalizedText: normalizedTranscriptSearchText(mergedText)
             )
-            rowIDBySegmentID[segment.id] = last.id
         } else {
             let row = TranscriptDisplayRow(
                 id: segment.id,
                 start: segment.start,
+                end: segment.end,
                 startLabel: formatSeconds(segment.start),
                 text: text,
                 normalizedText: normalizedTranscriptSearchText(text)
             )
             rows.append(row)
-            rowIDBySegmentID[segment.id] = row.id
         }
     }
 
-    return TranscriptDisplayRows(rows: rows, rowIDBySegmentID: rowIDBySegmentID)
+    let compactRows = TranscriptDisplayRows(rows: rows)
+    guard mode == .paragraphs else { return compactRows }
+    return makeParagraphTranscriptDisplayRows(from: segments)
+}
+
+private func makeParagraphTranscriptDisplayRows(
+    from segments: [TranscriptSegment]
+) -> TranscriptDisplayRows {
+    var words: [TranscriptTimedWordUnit] = []
+    var segmentOrderByID: [UUID: Int] = [:]
+    segmentOrderByID.reserveCapacity(segments.count)
+    for segment in segments {
+        segmentOrderByID[segment.id] = segmentOrderByID.count
+        if segment.timedWords.isEmpty {
+            let text = normalizedTranscriptDisplayText(segment.text)
+            if !text.isEmpty {
+                let fallbackWords = text.split(whereSeparator: \.isWhitespace).map(String.init)
+                let duration = max(0.05, segment.end - segment.start)
+                let wordDuration = duration / Double(max(1, fallbackWords.count))
+                words.append(contentsOf: fallbackWords.enumerated().map { index, word in
+                    let start = segment.start + (Double(index) * wordDuration)
+                    return TranscriptTimedWordUnit(
+                        sourceSegmentID: segment.id,
+                        text: word,
+                        start: start,
+                        end: min(segment.end, start + wordDuration)
+                    )
+                })
+            }
+        } else {
+            words.append(contentsOf: segment.timedWords.map {
+                TranscriptTimedWordUnit(
+                    sourceSegmentID: segment.id,
+                    text: $0.word,
+                    start: $0.start,
+                    end: $0.end
+                )
+            })
+        }
+    }
+
+    let paragraphs = makeOptimizedTranscriptParagraphs(from: words)
+    var paragraphRows: [TranscriptDisplayRow] = []
+    var usedRowIDs: Set<UUID> = []
+    for paragraph in paragraphs {
+        let orderedSegmentIDs = paragraph.sourceSegmentIDs.sorted {
+            (segmentOrderByID[$0] ?? .max) < (segmentOrderByID[$1] ?? .max)
+        }
+        guard let firstSegmentID = orderedSegmentIDs.first else { continue }
+        let rowID = usedRowIDs.insert(firstSegmentID).inserted ? firstSegmentID : UUID()
+        let text = normalizedTranscriptDisplayText(paragraph.text)
+        paragraphRows.append(
+            TranscriptDisplayRow(
+                id: rowID,
+                start: paragraph.start,
+                end: paragraph.end,
+                startLabel: formatSeconds(paragraph.start),
+                text: text,
+                normalizedText: normalizedTranscriptSearchText(text)
+            )
+        )
+    }
+    return TranscriptDisplayRows(rows: paragraphRows)
 }
 
 func activeTranscriptDisplayRowID(
     at time: Double,
-    in segments: [TranscriptSegment],
-    rowIDBySegmentID: [UUID: UUID]
+    in rows: [TranscriptDisplayRow]
 ) -> UUID? {
-    guard !segments.isEmpty else { return nil }
+    guard !rows.isEmpty else { return nil }
     let trailingGrace: Double = 0.55
     let leadingGrace: Double = 0.12
     var low = 0
-    var high = segments.count - 1
+    var high = rows.count - 1
 
     while low <= high {
         let mid = (low + high) / 2
-        let segment = segments[mid]
-        if time < segment.start {
+        let row = rows[mid]
+        if time < row.start {
             high = mid - 1
-        } else if time >= segment.end {
+        } else if time >= row.end {
             low = mid + 1
         } else {
-            return rowIDBySegmentID[segment.id]
+            return row.id
         }
     }
 
-    if high >= 0, high < segments.count {
-        let previous = segments[high]
+    if high >= 0, high < rows.count {
+        let previous = rows[high]
         if time >= previous.start, time <= previous.end + trailingGrace {
-            return rowIDBySegmentID[previous.id]
+            return previous.id
         }
     }
-
-    if low >= 0, low < segments.count {
-        let upcoming = segments[low]
+    if low >= 0, low < rows.count {
+        let upcoming = rows[low]
         if time < upcoming.start, upcoming.start - time <= leadingGrace {
-            return rowIDBySegmentID[upcoming.id]
+            return upcoming.id
         }
     }
-
     return nil
 }
 
@@ -456,10 +543,57 @@ final class TranscriptNSTableRowView: NSTableRowView {
     }
 }
 
+private final class TranscriptNSTableCellView: NSTableCellView {
+    private var centerYConstraint: NSLayoutConstraint?
+    private var topConstraint: NSLayoutConstraint?
+    private var bottomConstraint: NSLayoutConstraint?
+
+    func installTextField(
+        _ textField: NSTextField,
+        leadingInset: CGFloat,
+        trailingInset: CGFloat
+    ) {
+        addSubview(textField)
+        self.textField = textField
+
+        let centerYConstraint = textField.centerYAnchor.constraint(equalTo: centerYAnchor)
+        let topConstraint = textField.topAnchor.constraint(equalTo: topAnchor, constant: 6)
+        let bottomConstraint = textField.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -5)
+        NSLayoutConstraint.activate([
+            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset),
+            textField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -trailingInset),
+            centerYConstraint
+        ])
+        self.centerYConstraint = centerYConstraint
+        self.topConstraint = topConstraint
+        self.bottomConstraint = bottomConstraint
+    }
+
+    func configure(for mode: TranscriptDisplayMode, wrapsText: Bool) {
+        guard let textField else { return }
+        let usesParagraphs = mode == .paragraphs
+        let shouldWrap = usesParagraphs && wrapsText
+        centerYConstraint?.isActive = !usesParagraphs
+        topConstraint?.isActive = usesParagraphs
+        bottomConstraint?.isActive = usesParagraphs
+        textField.lineBreakMode = shouldWrap ? .byWordWrapping : .byClipping
+        textField.maximumNumberOfLines = shouldWrap ? 0 : 1
+        textField.setContentCompressionResistancePriority(
+            shouldWrap ? .defaultLow : .defaultHigh,
+            for: .horizontal
+        )
+        textField.cell?.wraps = shouldWrap
+        textField.cell?.isScrollable = !shouldWrap
+        textField.cell?.usesSingleLineMode = !shouldWrap
+        textField.cell?.truncatesLastVisibleLine = false
+    }
+}
+
 struct TranscriptTableView: NSViewRepresentable {
     let rows: [TranscriptDisplayRow]
     let rowsVersion: Int
     let fontSize: CGFloat
+    var displayMode: TranscriptDisplayMode = .compact
     var playbackPresentation: ClipTranscriptPlaybackPresentation? = nil
     var activeRowID: UUID? = nil
     var allowsPlaybackRow = true
@@ -479,6 +613,7 @@ struct TranscriptTableView: NSViewRepresentable {
         var rows: [TranscriptDisplayRow] = []
         var rowsVersion: Int = 0
         var fontSize: CGFloat = 14
+        var displayMode: TranscriptDisplayMode = .compact
         var activeRowID: UUID?
         var allowsPlaybackRow = true
         var followsActiveRow = false
@@ -511,6 +646,9 @@ struct TranscriptTableView: NSViewRepresentable {
         var scrollEndWorkItem: DispatchWorkItem?
         var isUserScrolling = false
         var lastObservedClipBounds: NSRect = .zero
+        var segmentRowHeightCache: [UUID: CGFloat] = [:]
+        var segmentRowHeightWidth: CGFloat = -1
+        var segmentHeightRefreshWorkItem: DispatchWorkItem?
 
         private enum Column {
             static let time = NSUserInterfaceItemIdentifier("transcript_time")
@@ -528,6 +666,7 @@ struct TranscriptTableView: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(liveScrollEndObserver)
             }
             scrollEndWorkItem?.cancel()
+            segmentHeightRefreshWorkItem?.cancel()
         }
 
         func configureScrollObservation(for scrollView: NSScrollView) {
@@ -620,6 +759,49 @@ struct TranscriptTableView: NSViewRepresentable {
             rows.count
         }
 
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            guard displayMode == .paragraphs, row >= 0, row < rows.count else { return 24 }
+            let textWidth = max(
+                80,
+                (tableView.tableColumns.dropFirst().first?.width ?? 280) -
+                    transcriptTextColumnLeadingInset -
+                    transcriptTextColumnTrailingInset
+            )
+            if abs(segmentRowHeightWidth - textWidth) > 0.5 {
+                segmentRowHeightCache.removeAll(keepingCapacity: true)
+                segmentRowHeightWidth = textWidth
+            }
+            let item = rows[row]
+            if let cached = segmentRowHeightCache[item.id] {
+                return cached
+            }
+
+            let height = transcriptSegmentRowHeight(
+                text: item.text,
+                textWidth: textWidth,
+                fontSize: fontSize
+            )
+            segmentRowHeightCache[item.id] = height
+            return height
+        }
+
+        func invalidateSegmentRowHeights() {
+            segmentRowHeightCache.removeAll(keepingCapacity: true)
+            segmentRowHeightWidth = -1
+        }
+
+        private func scheduleSegmentRowHeightRefresh() {
+            segmentHeightRefreshWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self, let tableView = self.tableView, !self.rows.isEmpty else { return }
+                tableView.noteHeightOfRows(
+                    withIndexesChanged: IndexSet(integersIn: 0..<self.rows.count)
+                )
+            }
+            segmentHeightRefreshWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+        }
+
         func updateColumnWidths(in scrollView: NSScrollView) {
             guard let tableView else { return }
             guard tableView.tableColumns.count >= 2 else { return }
@@ -632,6 +814,26 @@ struct TranscriptTableView: NSViewRepresentable {
             let textColumn = tableView.tableColumns[1]
 
             let visibleDocumentWidth = max(0, scrollView.documentVisibleRect.width)
+            if displayMode == .paragraphs {
+                let targetWidth = max(
+                    280,
+                    visibleDocumentWidth - timeColumn.width - transcriptTableWidthSlack
+                )
+                let widthChanged = abs(textColumn.width - targetWidth) > 0.5
+                if widthChanged {
+                    textColumn.width = targetWidth
+                    invalidateSegmentRowHeights()
+                    scheduleSegmentRowHeightRefresh()
+                }
+                if scrollView.hasHorizontalScroller {
+                    scrollView.hasHorizontalScroller = false
+                    scrollView.tile()
+                }
+                return
+            }
+
+            segmentHeightRefreshWorkItem?.cancel()
+            segmentHeightRefreshWorkItem = nil
             let exactDocumentWidth = timeColumn.width +
                 preferredTranscriptTextColumnWidth() +
                 transcriptTableWidthSlack
@@ -670,17 +872,13 @@ struct TranscriptTableView: NSViewRepresentable {
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard row >= 0 && row < rows.count, let tableColumn else { return nil }
             let cellIdentifier = NSUserInterfaceItemIdentifier(tableColumn.identifier.rawValue + "_cell")
-            let cell = (tableView.makeView(withIdentifier: cellIdentifier, owner: nil) as? NSTableCellView) ?? {
+            let cell = (tableView.makeView(withIdentifier: cellIdentifier, owner: nil) as? TranscriptNSTableCellView) ?? {
                 PlayheadDiagnostics.shared.noteTranscriptCellCreated()
-                let cell = NSTableCellView(frame: .zero)
+                let cell = TranscriptNSTableCellView(frame: .zero)
                 cell.identifier = cellIdentifier
 
                 let textField = NSTextField(labelWithString: "")
                 textField.translatesAutoresizingMaskIntoConstraints = false
-                textField.lineBreakMode = .byClipping
-                textField.maximumNumberOfLines = 1
-                cell.addSubview(textField)
-                cell.textField = textField
 
                 let leadingInset = tableColumn.identifier == Column.time
                     ? transcriptTimeColumnLeadingInset
@@ -689,15 +887,19 @@ struct TranscriptTableView: NSViewRepresentable {
                     ? transcriptTimeColumnTrailingInset
                     : transcriptTextColumnTrailingInset
 
-                NSLayoutConstraint.activate([
-                    textField.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: leadingInset),
-                    textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -trailingInset),
-                    textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
-                ])
+                cell.installTextField(
+                    textField,
+                    leadingInset: leadingInset,
+                    trailingInset: trailingInset
+                )
                 return cell
             }()
 
             let item = rows[row]
+            cell.configure(
+                for: displayMode,
+                wrapsText: tableColumn.identifier == Column.text
+            )
             if tableColumn.identifier == Column.time {
                 cell.textField?.stringValue = item.startLabel
                 cell.textField?.textColor = NSColor.secondaryLabelColor
@@ -1075,7 +1277,10 @@ struct TranscriptTableView: NSViewRepresentable {
         tableView.menu = menu
 
         context.coordinator.tableView = tableView
+        context.coordinator.rows = rows
         context.coordinator.rowsVersion = rowsVersion
+        context.coordinator.fontSize = fontSize
+        context.coordinator.displayMode = displayMode
         context.coordinator.rowIndexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
         context.coordinator.allowsPlaybackRow = allowsPlaybackRow
         context.coordinator.activeRowID = allowsPlaybackRow
@@ -1101,6 +1306,7 @@ struct TranscriptTableView: NSViewRepresentable {
         scrollView.onLayoutUpdate = { [weak coordinator = context.coordinator] scrollView in
             coordinator?.updateColumnWidths(in: scrollView)
         }
+        tableView.reloadData()
         context.coordinator.configureScrollObservation(for: scrollView)
         context.coordinator.updateColumnWidths(in: scrollView)
         playbackPresentation?.activeRowDidChange = { [weak coordinator = context.coordinator] rowID in
@@ -1121,6 +1327,7 @@ struct TranscriptTableView: NSViewRepresentable {
         let previousCurrentSearchResultRowID = context.coordinator.currentSearchResultRowID
         let rowsChanged = context.coordinator.rowsVersion != rowsVersion
         let fontChanged = context.coordinator.fontSize != fontSize
+        let displayModeChanged = context.coordinator.displayMode != displayMode
         let searchChanged = context.coordinator.searchVersion != searchVersion
         let currentSearchResultChanged = context.coordinator.currentSearchResultRowID != currentSearchResultRowID
         let activeRowChanged = context.coordinator.activeRowID != resolvedActiveRowID
@@ -1129,7 +1336,7 @@ struct TranscriptTableView: NSViewRepresentable {
         let searchRevealChanged = context.coordinator.requestedSearchRevealRowID != requestedSearchRevealRowID
         let selectionModeChanged = tableView.allowsMultipleSelection != allowsMultipleSelection
         let selectionHighlightChanged = tableView.selectionHighlightStyle != (showsPlaybackIndicator ? .none : .regular)
-        let shouldReload = rowsChanged || fontChanged
+        let shouldReload = rowsChanged || fontChanged || displayModeChanged
         let hasMeaningfulChanges = shouldReload || searchChanged || currentSearchResultChanged || activeRowChanged || playbackIndicatorChanged || followsActiveRowChanged || searchRevealChanged || selectionModeChanged || selectionHighlightChanged
 
         if !hasMeaningfulChanges {
@@ -1142,6 +1349,7 @@ struct TranscriptTableView: NSViewRepresentable {
         }
         context.coordinator.rowsVersion = rowsVersion
         context.coordinator.fontSize = fontSize
+        context.coordinator.displayMode = displayMode
         context.coordinator.allowsPlaybackRow = allowsPlaybackRow
         context.coordinator.activeRowID = resolvedActiveRowID
         context.coordinator.followsActiveRow = followsActiveRow
@@ -1158,6 +1366,9 @@ struct TranscriptTableView: NSViewRepresentable {
         tableView.selectionHighlightStyle = showsPlaybackIndicator ? .none : .regular
         if shouldReload {
             PlayheadDiagnostics.shared.noteModelWrite("transcript_table_reload")
+            if rowsChanged || fontChanged || displayModeChanged {
+                context.coordinator.invalidateSegmentRowHeights()
+            }
             tableView.reloadData()
             context.coordinator.updateColumnWidths(in: nsView)
         } else {

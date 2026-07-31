@@ -55,6 +55,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let urlDownloadAuthenticationMode = "prefs.urlDownloadAuthenticationMode"
         static let urlDownloadBrowserCookiesSource = "prefs.urlDownloadBrowserCookiesSource"
         static let transcriptExportFormat = "prefs.transcriptExportFormat"
+        static let transcriptDisplayMode = "prefs.transcriptDisplayMode"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -346,6 +347,11 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var transcriptExportFormat: TranscriptExportFormat = .timedText {
         didSet {
             UserDefaults.standard.set(transcriptExportFormat.rawValue, forKey: DefaultsKey.transcriptExportFormat)
+        }
+    }
+    @Published var transcriptDisplayMode: TranscriptDisplayMode = .compact {
+        didSet {
+            UserDefaults.standard.set(transcriptDisplayMode.rawValue, forKey: DefaultsKey.transcriptDisplayMode)
         }
     }
     @Published var estimatedSizeWarningThresholdGB: Double = 1.0 {
@@ -648,6 +654,10 @@ final class WorkspaceViewModel: ObservableObject {
         if let rawTranscriptExportFormat = defaults.string(forKey: DefaultsKey.transcriptExportFormat),
            let format = TranscriptExportFormat(rawValue: rawTranscriptExportFormat) {
             transcriptExportFormat = format
+        }
+        if let rawTranscriptDisplayMode = defaults.string(forKey: DefaultsKey.transcriptDisplayMode),
+           let mode = TranscriptDisplayMode(rawValue: rawTranscriptDisplayMode) {
+            transcriptDisplayMode = mode
         }
 
         if let rawCaptionStyle = defaults.string(forKey: DefaultsKey.burnInCaptionStyle),

@@ -391,6 +391,17 @@ struct SmartMarkerRefinementContext: Equatable, Sendable {
 struct SmartMarkerResultSnapshot: Equatable, Sendable {
     let suggestions: [SmartMarkerSuggestion]
     let documentText: String
+    let refinementInstruction: String?
+
+    init(
+        suggestions: [SmartMarkerSuggestion],
+        documentText: String,
+        refinementInstruction: String? = nil
+    ) {
+        self.suggestions = suggestions
+        self.documentText = documentText
+        self.refinementInstruction = refinementInstruction
+    }
 }
 
 struct SmartMarkerAnalysisConfiguration: Equatable, Sendable {
@@ -411,6 +422,8 @@ struct SmartMarkerAnalysisTab: Identifiable, Equatable, Sendable {
     var refinementContext: SmartMarkerRefinementContext?
     var refinementMessages: [SmartMarkerRefinementMessage]
     var refinementRevisions: [SmartMarkerResultSnapshot]
+    var currentResultRefinementInstruction: String?
+    var selectedResultVersionIndex: Int
     var isRefining: Bool
     var refinementErrorText: String
     var deletedSuggestionIDs: Set<UUID>
@@ -434,6 +447,43 @@ struct SmartMarkerAnalysisTab: Identifiable, Equatable, Sendable {
         guard skippedWindowCount > 0 else { return "" }
         let noun = skippedWindowCount == 1 ? "section" : "sections"
         return "\(skippedWindowCount) \(noun) couldn’t be analyzed by \(configuration.providerID.title)."
+    }
+
+    var supportsResultHistory: Bool {
+        configuration.recipe.outputKind == .text
+    }
+
+    var latestResultVersionIndex: Int {
+        refinementRevisions.count
+    }
+
+    var resolvedResultVersionIndex: Int {
+        guard supportsResultHistory else { return latestResultVersionIndex }
+        return min(max(0, selectedResultVersionIndex), latestResultVersionIndex)
+    }
+
+    var isViewingCurrentResult: Bool {
+        resolvedResultVersionIndex == latestResultVersionIndex
+    }
+
+    var displayedResult: SmartMarkerResultSnapshot {
+        let versionIndex = resolvedResultVersionIndex
+        if versionIndex < refinementRevisions.count {
+            return refinementRevisions[versionIndex]
+        }
+        return SmartMarkerResultSnapshot(
+            suggestions: suggestions,
+            documentText: documentText,
+            refinementInstruction: currentResultRefinementInstruction
+        )
+    }
+
+    mutating func selectResultVersion(_ versionIndex: Int) {
+        guard supportsResultHistory else { return }
+        selectedResultVersionIndex = min(max(0, versionIndex), latestResultVersionIndex)
+        let displayedSuggestions = displayedResult.suggestions
+        highlightedSuggestionID = displayedSuggestions.first?.id
+        scrollPositionSuggestionID = displayedSuggestions.first?.id
     }
 
 }
@@ -1137,7 +1187,7 @@ final class SmartMarkerPresentationModel: ObservableObject {
     }
 
     var suggestions: [SmartMarkerSuggestion] {
-        activeTab?.suggestions ?? []
+        activeTab?.displayedResult.suggestions ?? []
     }
 
     var timelineSuggestions: [SmartMarkerSuggestion] {
@@ -1183,6 +1233,8 @@ final class SmartMarkerPresentationModel: ObservableObject {
             hasher.combine(tab.documentText)
             hasher.combine(tab.refinementMessages)
             hasher.combine(tab.refinementRevisions.count)
+            hasher.combine(tab.currentResultRefinementInstruction)
+            hasher.combine(tab.selectedResultVersionIndex)
             hasher.combine(tab.isRefining)
             hasher.combine(tab.refinementErrorText)
             hasher.combine(tab.highlightedSuggestionID)
@@ -1217,6 +1269,8 @@ final class SmartMarkerPresentationModel: ObservableObject {
             refinementContext: nil,
             refinementMessages: [],
             refinementRevisions: [],
+            currentResultRefinementInstruction: nil,
+            selectedResultVersionIndex: 0,
             isRefining: false,
             refinementErrorText: "",
             deletedSuggestionIDs: [],
@@ -1322,6 +1376,12 @@ final class SmartMarkerPresentationModel: ObservableObject {
         showsSuggestions = true
     }
 
+    func selectResultVersion(_ versionIndex: Int, for tabID: UUID) {
+        updateTab(tabID) { tab in
+            tab.selectResultVersion(versionIndex)
+        }
+    }
+
     func closeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         if analyzingTabID == id {
@@ -1368,7 +1428,9 @@ final class SmartMarkerPresentationModel: ObservableObject {
             return
         }
 
-        let priorConversation = tab.refinementMessages
+        // Later refinement messages can contradict an earlier result selected as a branch source.
+        let priorConversation = tab.isViewingCurrentResult ? tab.refinementMessages : []
+        let sourceResult = tab.displayedResult
         updateTab(tabID) {
             $0.refinementMessages.append(
                 SmartMarkerRefinementMessage(
@@ -1391,8 +1453,8 @@ final class SmartMarkerPresentationModel: ObservableObject {
         let request = SmartMarkerRefinementRequest(
             entries: context.entries,
             recipe: tab.configuration.recipe,
-            currentSuggestions: tab.suggestions,
-            currentDocumentText: tab.documentText,
+            currentSuggestions: sourceResult.suggestions,
+            currentDocumentText: sourceResult.documentText,
             conversation: priorConversation,
             instruction: normalizedInstruction,
             maximumResults: maximumResults
@@ -1452,13 +1514,17 @@ final class SmartMarkerPresentationModel: ObservableObject {
                         currentTab.refinementRevisions.append(
                             SmartMarkerResultSnapshot(
                                 suggestions: currentTab.suggestions,
-                                documentText: currentTab.documentText
+                                documentText: currentTab.documentText,
+                                refinementInstruction: currentTab.currentResultRefinementInstruction
                             )
                         )
                         currentTab.suggestions = replacementSuggestions
                         currentTab.documentText = replacementDocument
+                        currentTab.currentResultRefinementInstruction = normalizedInstruction
+                        currentTab.selectedResultVersionIndex = currentTab.latestResultVersionIndex
                         currentTab.deletedSuggestionIDs = []
                         currentTab.highlightedSuggestionID = replacementSuggestions.first?.id
+                        currentTab.scrollPositionSuggestionID = replacementSuggestions.first?.id
                     }
                     currentTab.refinementMessages.append(
                         SmartMarkerRefinementMessage(
@@ -1488,8 +1554,11 @@ final class SmartMarkerPresentationModel: ObservableObject {
             guard let previous = tab.refinementRevisions.popLast() else { return }
             tab.suggestions = previous.suggestions
             tab.documentText = previous.documentText
+            tab.currentResultRefinementInstruction = previous.refinementInstruction
+            tab.selectedResultVersionIndex = tab.latestResultVersionIndex
             tab.deletedSuggestionIDs = []
             tab.highlightedSuggestionID = previous.suggestions.first?.id
+            tab.scrollPositionSuggestionID = previous.suggestions.first?.id
             tab.refinementErrorText = ""
         }
     }
@@ -1508,6 +1577,7 @@ final class SmartMarkerPresentationModel: ObservableObject {
         undoManager: UndoManager?
     ) {
         guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }),
+              tabs[tabIndex].isViewingCurrentResult,
               let suggestionIndex = tabs[tabIndex].suggestions.firstIndex(where: { $0.id == id }) else {
             return
         }

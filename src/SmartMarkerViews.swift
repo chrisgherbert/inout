@@ -235,6 +235,11 @@ struct SmartMarkerSetupSheet: View {
     }
 }
 
+private struct SmartMarkerRefinementDisplayRevision: Equatable {
+    let tabID: UUID?
+    let revisionCount: Int
+}
+
 struct SmartMarkerReviewView: View {
     let tabs: [SmartMarkerAnalysisTab]
     let activeTabID: UUID?
@@ -245,22 +250,34 @@ struct SmartMarkerReviewView: View {
     let onPlay: (SmartMarkerSuggestion) -> Void
     let onDeleteSuggestion: (UUID) -> Void
     let onSetScrollPosition: (UUID?, UUID) -> Void
+    let onSelectResultVersion: (Int, UUID) -> Void
     let onCancelAnalysis: (UUID) -> Void
     let onRefine: (UUID, String) -> Void
     let onUndoRefinement: (UUID) -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var copiedSuggestionID: UUID?
     @State private var copiedAllTabID: UUID?
     @State private var refinementDraft = ""
+    @State private var refinementUpdatePulse = false
+    @State private var refinementUpdatePulseGeneration = 0
 
     private var activeTab: SmartMarkerAnalysisTab? {
         guard let activeTabID else { return nil }
         return tabs.first(where: { $0.id == activeTabID })
     }
 
+    private var activeRefinementDisplayRevision: SmartMarkerRefinementDisplayRevision {
+        SmartMarkerRefinementDisplayRevision(
+            tabID: activeTab?.id,
+            revisionCount: activeTab?.refinementRevisions.count ?? 0
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let activeTab {
+                let displayedResult = activeTab.displayedResult
                 resultsHeader(for: activeTab)
 
                 if tabs.count > 1 {
@@ -291,6 +308,11 @@ struct SmartMarkerReviewView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                if activeTab.supportsResultHistory,
+                   activeTab.latestResultVersionIndex > 0 {
+                    resultHistoryControl(for: activeTab)
+                }
+
                 if !activeTab.errorText.isEmpty {
                     ContentUnavailableView {
                         Label("Couldn’t Generate Suggestions", systemImage: "exclamationmark.triangle")
@@ -299,9 +321,9 @@ struct SmartMarkerReviewView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if activeTab.configuration.recipe.isDocumentText,
-                          !activeTab.documentText.isEmpty {
-                    documentResult(for: activeTab)
-                } else if activeTab.suggestions.isEmpty {
+                          !displayedResult.documentText.isEmpty {
+                    documentResult(displayedResult.documentText, for: activeTab)
+                } else if displayedResult.suggestions.isEmpty {
                     if !activeTab.isAnalyzing {
                         ContentUnavailableView(
                             "No Suggestions",
@@ -312,7 +334,7 @@ struct SmartMarkerReviewView: View {
                     Spacer(minLength: 0)
                 } else {
                     ScrollViewReader { proxy in
-                        List(activeTab.suggestions) { suggestion in
+                        List(displayedResult.suggestions) { suggestion in
                             SmartMarkerSuggestionRow(
                                 suggestion: suggestion,
                                 recipe: activeTab.configuration.recipe,
@@ -327,6 +349,7 @@ struct SmartMarkerReviewView: View {
                                 onDelete: {
                                     onDeleteSuggestion(suggestion.id)
                                 },
+                                allowsDeletion: activeTab.isViewingCurrentResult,
                                 onActivate: {
                                     onHighlight(suggestion)
                                 },
@@ -356,13 +379,13 @@ struct SmartMarkerReviewView: View {
                             }
                         }
                     }
-                    .id(activeTab.id)
+                    .id("\(activeTab.id.uuidString)-\(activeTab.resolvedResultVersionIndex)")
 
                     HStack {
                         Spacer()
                         Button {
                             copyAll(
-                                activeTab.suggestions,
+                                displayedResult.suggestions,
                                 outputKind: activeTab.configuration.recipe.outputKind
                             )
                         } label: {
@@ -378,19 +401,62 @@ struct SmartMarkerReviewView: View {
                 }
 
                 if !activeTab.isAnalyzing,
-                   (!activeTab.suggestions.isEmpty || !activeTab.documentText.isEmpty) {
+                   (!displayedResult.suggestions.isEmpty || !displayedResult.documentText.isEmpty) {
                     refinementPanel(for: activeTab)
                 }
             }
         }
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.accentColor.opacity(refinementUpdatePulse ? 0.05 : 0))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(
+                            Color.accentColor.opacity(refinementUpdatePulse ? 0.28 : 0),
+                            lineWidth: 1
+                        )
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .onChange(of: activeTabID) { _, _ in
             refinementDraft = ""
+        }
+        .onChange(of: activeRefinementDisplayRevision) { previous, current in
+            guard previous.tabID == current.tabID,
+                  current.tabID != nil,
+                  current.revisionCount > previous.revisionCount else {
+                return
+            }
+            showRefinementUpdatePulse()
+        }
+    }
+
+    private func showRefinementUpdatePulse() {
+        refinementUpdatePulseGeneration &+= 1
+        let generation = refinementUpdatePulseGeneration
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            refinementUpdatePulse = true
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(reduceMotion ? 40 : 70))
+            guard !Task.isCancelled,
+                  generation == refinementUpdatePulseGeneration else {
+                return
+            }
+            withAnimation(.easeOut(duration: reduceMotion ? 0.2 : 0.42)) {
+                refinementUpdatePulse = false
+            }
         }
     }
 
     private func resultsHeader(for tab: SmartMarkerAnalysisTab) -> some View {
         let resultCount = countText(
-            tab.suggestions.count,
+            tab.displayedResult.suggestions.count,
             recipe: tab.configuration.recipe
         )
         return HStack(spacing: 12) {
@@ -427,6 +493,57 @@ struct SmartMarkerReviewView: View {
             .disabled(tabs.contains { $0.isAnalyzing || $0.isRefining })
         }
         .padding(.horizontal, 4)
+    }
+
+    private func resultHistoryControl(for tab: SmartMarkerAnalysisTab) -> some View {
+        let versionIndex = tab.resolvedResultVersionIndex
+        let versionCount = tab.latestResultVersionIndex + 1
+        let instruction = tab.displayedResult.refinementInstruction?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Button {
+                    onSelectResultVersion(versionIndex - 1, tab.id)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                .disabled(versionIndex == 0)
+                .help("Show Previous Version")
+                .accessibilityLabel("Show Previous Version")
+
+                Text("Version \(versionIndex + 1) of \(versionCount)")
+                    .font(.caption.monospacedDigit())
+
+                Button {
+                    onSelectResultVersion(versionIndex + 1, tab.id)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .buttonStyle(.borderless)
+                .disabled(versionIndex == tab.latestResultVersionIndex)
+                .help("Show Next Version")
+                .accessibilityLabel("Show Next Version")
+
+                Text(tab.isViewingCurrentResult ? "Current" : "Earlier Version")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+            }
+
+            if let instruction, !instruction.isEmpty {
+                Text("Refinement: \(instruction)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(instruction)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
     }
 
     private func refinementPanel(for tab: SmartMarkerAnalysisTab) -> some View {
@@ -504,7 +621,7 @@ struct SmartMarkerReviewView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !tab.refinementRevisions.isEmpty {
+                if !tab.supportsResultHistory, !tab.refinementRevisions.isEmpty {
                     Button("Undo Refinement") {
                         onUndoRefinement(tab.id)
                     }
@@ -512,6 +629,12 @@ struct SmartMarkerReviewView: View {
                     .font(.caption)
                     .disabled(tab.isRefining)
                 }
+            }
+
+            if tab.supportsResultHistory, !tab.isViewingCurrentResult {
+                Text("Refining this version will create a new current version.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -523,10 +646,10 @@ struct SmartMarkerReviewView: View {
         onRefine(tab.id, message)
     }
 
-    private func documentResult(for tab: SmartMarkerAnalysisTab) -> some View {
+    private func documentResult(_ text: String, for tab: SmartMarkerAnalysisTab) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ScrollView {
-                Text(tab.documentText)
+                Text(text)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .textSelection(.enabled)
                     .padding(12)
@@ -539,7 +662,7 @@ struct SmartMarkerReviewView: View {
             HStack {
                 Spacer()
                 Button {
-                    copyToPasteboard(tab.documentText)
+                    copyToPasteboard(text)
                     copiedAllTabID = tab.id
                     Task {
                         try? await Task.sleep(for: .seconds(1.2))
@@ -683,6 +806,7 @@ private struct SmartMarkerSuggestionRow: View {
     let didCopy: Bool
     let onCopy: () -> Void
     let onDelete: () -> Void
+    let allowsDeletion: Bool
     let onActivate: () -> Void
     let onPlay: () -> Void
 
@@ -758,14 +882,16 @@ private struct SmartMarkerSuggestionRow: View {
                 .help(copyButtonLabel)
                 .accessibilityLabel(copyButtonLabel)
 
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .frame(width: 14, height: 14)
+                if allowsDeletion {
+                    Button(role: .destructive, action: onDelete) {
+                        Image(systemName: "trash")
+                            .frame(width: 14, height: 14)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Delete Suggestion")
+                    .accessibilityLabel("Delete Suggestion")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Delete Suggestion")
-                .accessibilityLabel("Delete Suggestion")
             }
             .padding(.top, 2)
         }

@@ -14,8 +14,10 @@ struct InspectToolView: View {
     let whisperTranscriptionAvailable: Bool
     let hasAudioTrack: Bool
     let transcriptExportFormat: TranscriptExportFormat
+    let transcriptDisplayMode: TranscriptDisplayMode
     let generateTranscript: () -> Void
     let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
+    let setTranscriptDisplayMode: (TranscriptDisplayMode) -> Void
     let exportTranscript: (TranscriptExportFormat?) -> Void
     let toggleActivityConsole: () -> Void
     let copyActivityConsole: () -> Void
@@ -25,7 +27,7 @@ struct InspectToolView: View {
     @State private var transcriptSearchText = ""
     @State private var transcriptFontSize: CGFloat = 14
     private var allTranscriptRows: [TranscriptDisplayRow] {
-        makeTranscriptDisplayRows(from: transcriptSegments)
+        makeTranscriptDisplayRows(from: transcriptSegments, mode: transcriptDisplayMode)
     }
 
     private var filteredTranscriptRows: [TranscriptDisplayRow] {
@@ -200,6 +202,11 @@ struct InspectToolView: View {
                                     .controlSize(.small)
                                 }
 
+                                TranscriptDisplayModePicker(
+                                    mode: transcriptDisplayMode,
+                                    setMode: setTranscriptDisplayMode
+                                )
+
                                 TranscriptExportControls(
                                     selectedFormat: Binding(
                                         get: { transcriptExportFormat },
@@ -216,7 +223,8 @@ struct InspectToolView: View {
                             TranscriptTableView(
                                 rows: filteredTranscriptRows,
                                 rowsVersion: filteredTranscriptRows.count ^ Int(transcriptFontSize * 100),
-                                fontSize: transcriptFontSize
+                                fontSize: transcriptFontSize,
+                                displayMode: transcriptDisplayMode
                             )
                             .frame(minHeight: 120, maxHeight: 220)
 

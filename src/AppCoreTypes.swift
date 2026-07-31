@@ -472,6 +472,22 @@ enum TranscriptExportFormat: String, CaseIterable, Identifiable {
     }
 }
 
+enum TranscriptDisplayMode: String, CaseIterable, Identifiable {
+    case compact
+    case paragraphs = "segments"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .compact:
+            return "Compact Lines"
+        case .paragraphs:
+            return "Paragraphs"
+        }
+    }
+}
+
 enum URLDownloadPreset: String, CaseIterable, Identifiable {
     case compatibleBest = "Best Compatible"
     case compatible1080 = "1080p Compatible"

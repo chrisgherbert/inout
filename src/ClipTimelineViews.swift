@@ -45,7 +45,6 @@ private final class ClipToolRuntimeState: ObservableObject {
     var selectionPlaybackBoundaryObserverToken: Any?
     var lastPlaybackUIUpdateTimestamp: CFTimeInterval = 0
     var lastPlaybackFollowUpdateTimestamp: CFTimeInterval = 0
-    var transcriptDisplayRowIDBySegmentID: [UUID: UUID] = [:]
     var selectionPlaybackEndSeconds: Double?
     var lastThumbnailStripRequestKey: String?
     var lastThumbnailStripPrewarmKey: String?
@@ -90,6 +89,7 @@ private struct ClipPlayerStageSection: View {
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
+    let transcriptDisplayMode: TranscriptDisplayMode
     let smartMarkerTabs: [SmartMarkerAnalysisTab]
     let activeSmartMarkerTabID: UUID?
     let showsSmartMarkerSuggestions: Bool
@@ -101,6 +101,7 @@ private struct ClipPlayerStageSection: View {
     let onTranscriptSidebarResizeEnded: () -> Void
     let onGenerateTranscript: () -> Void
     let onSetTranscriptExportFormat: (_ format: TranscriptExportFormat) -> Void
+    let onSetTranscriptDisplayMode: (_ mode: TranscriptDisplayMode) -> Void
     let onExportTranscript: (_ format: TranscriptExportFormat?) -> Void
     let onSeekToTranscriptTime: (_ seconds: Double) -> Void
     let onPlayTranscriptFromTime: (_ seconds: Double) -> Void
@@ -112,6 +113,7 @@ private struct ClipPlayerStageSection: View {
     let onPlaySmartMarker: (_ suggestion: SmartMarkerSuggestion) -> Void
     let onDeleteSmartMarkerSuggestion: (_ id: UUID) -> Void
     let onSetSmartMarkerScrollPosition: (_ suggestionID: UUID?, _ tabID: UUID) -> Void
+    let onSelectSmartMarkerResultVersion: (_ versionIndex: Int, _ tabID: UUID) -> Void
     let onCancelSmartMarkerAnalysis: (_ tabID: UUID) -> Void
     let onRefineSmartMarkerAnalysis: (_ tabID: UUID, _ instruction: String) -> Void
     let onUndoSmartMarkerRefinement: (_ tabID: UUID) -> Void
@@ -194,12 +196,14 @@ private struct ClipPlayerStageSection: View {
                             reduceTransparency: reduceTransparency,
                             focusSearchFieldToken: focusSearchFieldToken,
                             transcriptExportFormat: transcriptExportFormat,
+                            transcriptDisplayMode: transcriptDisplayMode,
                             smartMarkerTabs: smartMarkerTabs,
                             activeSmartMarkerTabID: activeSmartMarkerTabID,
                             showsSmartMarkerSuggestions: showsSmartMarkerSuggestions,
                             smartMarkerRevision: smartMarkerRevision,
                             generateTranscript: onGenerateTranscript,
                             setTranscriptExportFormat: onSetTranscriptExportFormat,
+                            setTranscriptDisplayMode: onSetTranscriptDisplayMode,
                             exportTranscript: onExportTranscript,
                             seekToTranscriptTime: onSeekToTranscriptTime,
                             playTranscriptFromTime: onPlayTranscriptFromTime,
@@ -211,6 +215,7 @@ private struct ClipPlayerStageSection: View {
                             playSmartMarker: onPlaySmartMarker,
                             deleteSmartMarkerSuggestion: onDeleteSmartMarkerSuggestion,
                             setSmartMarkerScrollPosition: onSetSmartMarkerScrollPosition,
+                            selectSmartMarkerResultVersion: onSelectSmartMarkerResultVersion,
                             cancelSmartMarkerAnalysis: onCancelSmartMarkerAnalysis,
                             refineSmartMarkerAnalysis: onRefineSmartMarkerAnalysis,
                             undoSmartMarkerRefinement: onUndoSmartMarkerRefinement,
@@ -272,6 +277,7 @@ extension ClipPlayerStageSection: Equatable {
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
+        lhs.transcriptDisplayMode == rhs.transcriptDisplayMode &&
         lhs.smartMarkerRevision == rhs.smartMarkerRevision &&
         lhs.showsSmartMarkerSuggestions == rhs.showsSmartMarkerSuggestions &&
         lhs.isMiddleMousePanning == rhs.isMiddleMousePanning
@@ -1224,13 +1230,16 @@ struct ClipToolView: View {
         runtime.transcriptPlaybackPresentation.update(time: time, force: force)
     }
 
-    private func refreshClipTranscriptLookup(_ segments: [TranscriptSegment]) {
-        let displayRows = makeTranscriptDisplayRowsWithLookup(from: segments)
-        runtime.transcriptDisplayRowIDBySegmentID = displayRows.rowIDBySegmentID
+    private func refreshClipTranscriptLookup(
+        _ segments: [TranscriptSegment],
+        mode: TranscriptDisplayMode? = nil
+    ) {
+        let displayRows = makeTranscriptDisplayRowsWithLookup(
+            from: segments,
+            mode: mode ?? model.transcriptDisplayMode
+        )
         runtime.transcriptPlaybackPresentation.configure(
-            segments: segments,
-            displayRows: displayRows.rows,
-            rowIDBySegmentID: runtime.transcriptDisplayRowIDBySegmentID
+            displayRows: displayRows.rows
         )
         syncClipTranscriptSidebarTimeIfNeeded(displayedPlayheadSeconds, force: true)
     }
@@ -2281,6 +2290,7 @@ struct ClipToolView: View {
                 reduceTransparency: reduceTransparency,
                 focusSearchFieldToken: clipTranscriptSearchFocusToken,
                 transcriptExportFormat: model.transcriptExportFormat,
+                transcriptDisplayMode: model.transcriptDisplayMode,
                 smartMarkerTabs: smartMarkers.tabs,
                 activeSmartMarkerTabID: smartMarkers.activeTabID,
                 showsSmartMarkerSuggestions: smartMarkers.showsSuggestions,
@@ -2317,6 +2327,9 @@ struct ClipToolView: View {
                 },
                 onSetTranscriptExportFormat: { format in
                     model.transcriptExportFormat = format
+                },
+                onSetTranscriptDisplayMode: { mode in
+                    model.transcriptDisplayMode = mode
                 },
                 onExportTranscript: { format in
                     model.exportTranscriptFromInspect(format: format)
@@ -2355,6 +2368,9 @@ struct ClipToolView: View {
                 },
                 onSetSmartMarkerScrollPosition: { suggestionID, tabID in
                     smartMarkers.setScrollPosition(suggestionID, for: tabID)
+                },
+                onSelectSmartMarkerResultVersion: { versionIndex, tabID in
+                    smartMarkers.selectResultVersion(versionIndex, for: tabID)
                 },
                 onCancelSmartMarkerAnalysis: { tabID in
                     smartMarkers.cancelAnalysis(tabID: tabID)
@@ -2871,6 +2887,9 @@ struct ClipToolView: View {
         }
         .onReceive(sourcePresentation.$transcriptSegments) { segments in
             refreshClipTranscriptLookup(segments)
+        }
+        .onChange(of: model.transcriptDisplayMode) { mode in
+            refreshClipTranscriptLookup(sourcePresentation.transcriptSegments, mode: mode)
         }
 
         let step3 = step2.onChange(of: model.clipEncodingMode) { mode in
