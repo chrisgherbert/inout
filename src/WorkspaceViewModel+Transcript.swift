@@ -606,7 +606,12 @@ extension WorkspaceViewModel {
             return destination.deletingPathExtension().appendingPathExtension(format.fileExtension)
         }()
 
-        let content = TranscriptUtilities.content(from: transcriptSegments, format: format)
+        let content = TranscriptUtilities.content(
+            from: transcriptSegments,
+            format: format,
+            layout: transcriptExportLayout,
+            timecodeStyle: transcriptExportTimecodeStyle
+        )
 
         do {
             try content.write(to: resolvedDestination, atomically: true, encoding: .utf8)

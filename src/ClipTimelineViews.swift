@@ -89,6 +89,8 @@ private struct ClipPlayerStageSection: View {
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
+    let transcriptExportLayout: TranscriptExportLayout
+    let transcriptExportTimecodeStyle: TranscriptExportTimecodeStyle
     let transcriptDisplayMode: TranscriptDisplayMode
     let transcriptShowsTimecodes: Bool
     let transcriptTextSize: TranscriptTextSize
@@ -103,6 +105,8 @@ private struct ClipPlayerStageSection: View {
     let onTranscriptSidebarResizeEnded: () -> Void
     let onGenerateTranscript: () -> Void
     let onSetTranscriptExportFormat: (_ format: TranscriptExportFormat) -> Void
+    let onSetTranscriptExportLayout: (_ layout: TranscriptExportLayout) -> Void
+    let onSetTranscriptExportTimecodeStyle: (_ style: TranscriptExportTimecodeStyle) -> Void
     let onSetTranscriptDisplayMode: (_ mode: TranscriptDisplayMode) -> Void
     let onSetTranscriptShowsTimecodes: (_ shows: Bool) -> Void
     let onSetTranscriptTextSize: (_ size: TranscriptTextSize) -> Void
@@ -200,6 +204,8 @@ private struct ClipPlayerStageSection: View {
                             reduceTransparency: reduceTransparency,
                             focusSearchFieldToken: focusSearchFieldToken,
                             transcriptExportFormat: transcriptExportFormat,
+                            transcriptExportLayout: transcriptExportLayout,
+                            transcriptExportTimecodeStyle: transcriptExportTimecodeStyle,
                             transcriptDisplayMode: transcriptDisplayMode,
                             transcriptShowsTimecodes: transcriptShowsTimecodes,
                             transcriptTextSize: transcriptTextSize,
@@ -209,6 +215,8 @@ private struct ClipPlayerStageSection: View {
                             smartMarkerRevision: smartMarkerRevision,
                             generateTranscript: onGenerateTranscript,
                             setTranscriptExportFormat: onSetTranscriptExportFormat,
+                            setTranscriptExportLayout: onSetTranscriptExportLayout,
+                            setTranscriptExportTimecodeStyle: onSetTranscriptExportTimecodeStyle,
                             setTranscriptDisplayMode: onSetTranscriptDisplayMode,
                             setTranscriptShowsTimecodes: onSetTranscriptShowsTimecodes,
                             setTranscriptTextSize: onSetTranscriptTextSize,
@@ -285,6 +293,8 @@ extension ClipPlayerStageSection: Equatable {
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
+        lhs.transcriptExportLayout == rhs.transcriptExportLayout &&
+        lhs.transcriptExportTimecodeStyle == rhs.transcriptExportTimecodeStyle &&
         lhs.transcriptDisplayMode == rhs.transcriptDisplayMode &&
         lhs.transcriptShowsTimecodes == rhs.transcriptShowsTimecodes &&
         lhs.transcriptTextSize == rhs.transcriptTextSize &&
@@ -2305,6 +2315,8 @@ struct ClipToolView: View {
                 reduceTransparency: reduceTransparency,
                 focusSearchFieldToken: clipTranscriptSearchFocusToken,
                 transcriptExportFormat: model.transcriptExportFormat,
+                transcriptExportLayout: model.transcriptExportLayout,
+                transcriptExportTimecodeStyle: model.transcriptExportTimecodeStyle,
                 transcriptDisplayMode: model.transcriptDisplayMode,
                 transcriptShowsTimecodes: model.transcriptShowsTimecodes,
                 transcriptTextSize: model.transcriptTextSize,
@@ -2344,6 +2356,12 @@ struct ClipToolView: View {
                 },
                 onSetTranscriptExportFormat: { format in
                     model.transcriptExportFormat = format
+                },
+                onSetTranscriptExportLayout: { layout in
+                    model.transcriptExportLayout = layout
+                },
+                onSetTranscriptExportTimecodeStyle: { style in
+                    model.transcriptExportTimecodeStyle = style
                 },
                 onSetTranscriptDisplayMode: { mode in
                     model.transcriptDisplayMode = mode

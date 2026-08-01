@@ -414,20 +414,29 @@ enum FrameSaveLocationMode: String, CaseIterable, Identifiable {
 }
 
 enum TranscriptExportFormat: String, CaseIterable, Identifiable {
-    case plainText = "plainText"
-    case timedText = "timedText"
+    case text
+    case markdown
+    case csv
+    case json
     case srt = "srt"
+    case webVTT = "vtt"
 
     var id: String { rawValue }
 
     var menuTitle: String {
         switch self {
-        case .plainText:
+        case .text:
             return "Text"
-        case .timedText:
-            return "Text w/ Timecodes"
+        case .markdown:
+            return "Markdown"
+        case .csv:
+            return "CSV"
+        case .json:
+            return "JSON"
         case .srt:
             return ".SRT"
+        case .webVTT:
+            return "WebVTT"
         }
     }
 
@@ -437,30 +446,88 @@ enum TranscriptExportFormat: String, CaseIterable, Identifiable {
 
     var fileExtension: String {
         switch self {
-        case .plainText, .timedText:
+        case .text:
             return "txt"
+        case .markdown:
+            return "md"
+        case .csv:
+            return "csv"
+        case .json:
+            return "json"
         case .srt:
             return "srt"
+        case .webVTT:
+            return "vtt"
         }
     }
 
     var contentType: UTType {
         switch self {
-        case .plainText, .timedText:
+        case .text:
             return .plainText
+        case .markdown:
+            return UTType(filenameExtension: "md") ?? .plainText
+        case .csv:
+            return .commaSeparatedText
+        case .json:
+            return .json
         case .srt:
             return UTType(filenameExtension: "srt") ?? .plainText
+        case .webVTT:
+            return UTType(filenameExtension: "vtt") ?? .plainText
         }
+    }
+
+    var supportsReadableLayout: Bool {
+        self == .text || self == .markdown
     }
 
     var helpText: String {
         switch self {
-        case .plainText:
-            return "Export transcript without timecodes"
-        case .timedText:
-            return "Export transcript with timecodes"
+        case .text:
+            return "Readable plain text with optional timecodes"
+        case .markdown:
+            return "Formatted text for AI tools and publishing"
+        case .csv:
+            return "Segment timing and text in spreadsheet columns"
+        case .json:
+            return "Complete structured segment data for automation"
         case .srt:
             return "Export transcript as SRT subtitles"
+        case .webVTT:
+            return "Export transcript as WebVTT web captions"
+        }
+    }
+}
+
+enum TranscriptExportLayout: String, CaseIterable, Identifiable {
+    case paragraphs
+    case compactLines
+    case continuousText
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .paragraphs: return "Paragraphs"
+        case .compactLines: return "Compact Lines"
+        case .continuousText: return "Continuous Text"
+        }
+    }
+}
+
+enum TranscriptExportTimecodeStyle: String, CaseIterable, Identifiable {
+    case none
+    case start
+    case startAndEnd
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .start: return "Start Time"
+        case .startAndEnd: return "Start and End"
         }
     }
 }

@@ -153,7 +153,7 @@ struct HelpDocumentationView: View {
                     bullets: [
                         "Open the transcript sidebar from the Clip tab, then choose Generate Transcript.",
                         "Or switch to Inspect and generate the transcript there.",
-                        "When a transcript is ready, you can export it as plain text or SRT."
+                        "When a transcript is ready, use Export to choose Text, Markdown, CSV, JSON, SRT, or WebVTT. Text and Markdown exports can use paragraphs, compact lines, or continuous text, with optional timecodes."
                     ]
                 ),
                 HelpSection(

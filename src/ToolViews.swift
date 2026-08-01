@@ -169,11 +169,17 @@ struct ToolContentView: View {
                         whisperTranscriptionAvailable: model.whisperTranscriptionAvailable,
                         hasAudioTrack: model.hasAudioTrack,
                         transcriptExportFormat: model.transcriptExportFormat,
+                        transcriptExportLayout: model.transcriptExportLayout,
+                        transcriptExportTimecodeStyle: model.transcriptExportTimecodeStyle,
                         transcriptDisplayMode: model.transcriptDisplayMode,
                         transcriptShowsTimecodes: model.transcriptShowsTimecodes,
                         transcriptTextSize: model.transcriptTextSize,
                         generateTranscript: { model.generateTranscript() },
                         setTranscriptExportFormat: { format in model.transcriptExportFormat = format },
+                        setTranscriptExportLayout: { layout in model.transcriptExportLayout = layout },
+                        setTranscriptExportTimecodeStyle: { style in
+                            model.transcriptExportTimecodeStyle = style
+                        },
                         setTranscriptDisplayMode: { mode in model.transcriptDisplayMode = mode },
                         setTranscriptShowsTimecodes: { model.transcriptShowsTimecodes = $0 },
                         setTranscriptTextSize: { model.transcriptTextSize = $0 },

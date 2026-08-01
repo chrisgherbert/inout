@@ -79,6 +79,12 @@ Behavior:
 - no signing/notarization/release
 - keeps bundled ffmpeg/whisper/model unchanged by default
 
+Focused transcript export validation:
+
+```bash
+./scripts/transcript_export_smoke.sh
+```
+
 Optional:
 
 ```bash

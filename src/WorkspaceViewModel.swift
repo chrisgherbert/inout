@@ -54,6 +54,8 @@ final class WorkspaceViewModel: ObservableObject {
         static let urlDownloadAuthenticationMode = "prefs.urlDownloadAuthenticationMode"
         static let urlDownloadBrowserCookiesSource = "prefs.urlDownloadBrowserCookiesSource"
         static let transcriptExportFormat = "prefs.transcriptExportFormat"
+        static let transcriptExportLayout = "prefs.transcriptExportLayout"
+        static let transcriptExportTimecodeStyle = "prefs.transcriptExportTimecodeStyle"
         static let transcriptDisplayMode = "prefs.transcriptDisplayMode"
         static let transcriptShowsTimecodes = "prefs.transcriptShowsTimecodes"
         static let transcriptTextSize = "prefs.transcriptTextSize"
@@ -343,9 +345,19 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(urlDownloadBrowserCookiesSource.rawValue, forKey: DefaultsKey.urlDownloadBrowserCookiesSource)
         }
     }
-    @Published var transcriptExportFormat: TranscriptExportFormat = .timedText {
+    @Published var transcriptExportFormat: TranscriptExportFormat = .text {
         didSet {
             UserDefaults.standard.set(transcriptExportFormat.rawValue, forKey: DefaultsKey.transcriptExportFormat)
+        }
+    }
+    @Published var transcriptExportLayout: TranscriptExportLayout = .compactLines {
+        didSet {
+            UserDefaults.standard.set(transcriptExportLayout.rawValue, forKey: DefaultsKey.transcriptExportLayout)
+        }
+    }
+    @Published var transcriptExportTimecodeStyle: TranscriptExportTimecodeStyle = .start {
+        didSet {
+            UserDefaults.standard.set(transcriptExportTimecodeStyle.rawValue, forKey: DefaultsKey.transcriptExportTimecodeStyle)
         }
     }
     @Published var transcriptDisplayMode: TranscriptDisplayMode = .compact {
@@ -655,9 +667,24 @@ final class WorkspaceViewModel: ObservableObject {
            let source = URLDownloadBrowserCookiesSource(rawValue: rawURLBrowserSource) {
             urlDownloadBrowserCookiesSource = source
         }
-        if let rawTranscriptExportFormat = defaults.string(forKey: DefaultsKey.transcriptExportFormat),
-           let format = TranscriptExportFormat(rawValue: rawTranscriptExportFormat) {
-            transcriptExportFormat = format
+        if let rawTranscriptExportFormat = defaults.string(forKey: DefaultsKey.transcriptExportFormat) {
+            if let format = TranscriptExportFormat(rawValue: rawTranscriptExportFormat) {
+                transcriptExportFormat = format
+            } else if rawTranscriptExportFormat == "plainText" {
+                transcriptExportFormat = .text
+                transcriptExportTimecodeStyle = .none
+            } else if rawTranscriptExportFormat == "timedText" {
+                transcriptExportFormat = .text
+                transcriptExportTimecodeStyle = .startAndEnd
+            }
+        }
+        if let rawTranscriptExportLayout = defaults.string(forKey: DefaultsKey.transcriptExportLayout),
+           let layout = TranscriptExportLayout(rawValue: rawTranscriptExportLayout) {
+            transcriptExportLayout = layout
+        }
+        if let rawTranscriptExportTimecodes = defaults.string(forKey: DefaultsKey.transcriptExportTimecodeStyle),
+           let style = TranscriptExportTimecodeStyle(rawValue: rawTranscriptExportTimecodes) {
+            transcriptExportTimecodeStyle = style
         }
         if let rawTranscriptDisplayMode = defaults.string(forKey: DefaultsKey.transcriptDisplayMode),
            let mode = TranscriptDisplayMode(rawValue: rawTranscriptDisplayMode) {

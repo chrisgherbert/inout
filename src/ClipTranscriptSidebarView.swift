@@ -51,6 +51,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
+    let transcriptExportLayout: TranscriptExportLayout
+    let transcriptExportTimecodeStyle: TranscriptExportTimecodeStyle
     let transcriptDisplayMode: TranscriptDisplayMode
     let transcriptShowsTimecodes: Bool
     let transcriptTextSize: TranscriptTextSize
@@ -60,6 +62,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let smartMarkerRevision: Int
     let generateTranscript: () -> Void
     let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
+    let setTranscriptExportLayout: (TranscriptExportLayout) -> Void
+    let setTranscriptExportTimecodeStyle: (TranscriptExportTimecodeStyle) -> Void
     let setTranscriptDisplayMode: (TranscriptDisplayMode) -> Void
     let setTranscriptShowsTimecodes: (Bool) -> Void
     let setTranscriptTextSize: (TranscriptTextSize) -> Void
@@ -105,6 +109,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.isScrubbing == rhs.isScrubbing &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
+        lhs.transcriptExportLayout == rhs.transcriptExportLayout &&
+        lhs.transcriptExportTimecodeStyle == rhs.transcriptExportTimecodeStyle &&
         lhs.transcriptDisplayMode == rhs.transcriptDisplayMode &&
         lhs.transcriptShowsTimecodes == rhs.transcriptShowsTimecodes &&
         lhs.transcriptTextSize == rhs.transcriptTextSize &&
@@ -294,6 +300,14 @@ struct ClipTranscriptSidebarView: View, Equatable {
             selectedFormat: Binding(
                 get: { transcriptExportFormat },
                 set: { setTranscriptExportFormat($0) }
+            ),
+            selectedLayout: Binding(
+                get: { transcriptExportLayout },
+                set: { setTranscriptExportLayout($0) }
+            ),
+            selectedTimecodeStyle: Binding(
+                get: { transcriptExportTimecodeStyle },
+                set: { setTranscriptExportTimecodeStyle($0) }
             ),
             exportTranscript: { exportTranscript(nil) }
         )
