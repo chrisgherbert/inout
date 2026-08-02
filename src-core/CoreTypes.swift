@@ -46,6 +46,59 @@ public struct ProfanityHit: Identifiable {
     }
 }
 
+public enum BadEditIssueKind: String, Sendable {
+    case blackFlash
+    case visualFlash
+    case suspiciouslyShortShot
+    case frozenVideo
+    case abruptAudioDiscontinuity
+    case audioClippingAtEditPoint
+    case streamMismatch
+    case timestampDiscontinuity
+    case decodeError
+}
+
+public enum BadEditConfidence: String, Sendable {
+    case high
+    case medium
+}
+
+public struct BadEditIssue: Identifiable, Sendable {
+    public let id: UUID
+    public let kind: BadEditIssueKind
+    public let confidence: BadEditConfidence
+    public let start: Double
+    public let end: Double
+    public let title: String
+    public let detail: String
+
+    public init(
+        id: UUID = UUID(),
+        kind: BadEditIssueKind,
+        confidence: BadEditConfidence,
+        start: Double,
+        end: Double,
+        title: String,
+        detail: String
+    ) {
+        self.id = id
+        self.kind = kind
+        self.confidence = confidence
+        self.start = start
+        self.end = max(start, end)
+        self.title = title
+        self.detail = detail
+    }
+
+    public var duration: Double {
+        max(0, end - start)
+    }
+
+    public var formatted: String {
+        "\(formatSeconds(start)) -> \(formatSeconds(end))  \(title): \(detail)"
+    }
+}
+
 public struct TranscriptWordTiming: Sendable {
     public let word: String
     public let start: Double
@@ -104,6 +157,7 @@ public struct DetectionOutput {
     public let segments: [Segment]
     public let silentSegments: [Segment]
     public let profanityHits: [ProfanityHit]
+    public let badEditIssues: [BadEditIssue]
     public let transcriptSegments: [TranscriptSegment]?
     public let mediaDuration: Double?
 
@@ -111,12 +165,14 @@ public struct DetectionOutput {
         segments: [Segment],
         silentSegments: [Segment],
         profanityHits: [ProfanityHit],
+        badEditIssues: [BadEditIssue] = [],
         transcriptSegments: [TranscriptSegment]?,
         mediaDuration: Double?
     ) {
         self.segments = segments
         self.silentSegments = silentSegments
         self.profanityHits = profanityHits
+        self.badEditIssues = badEditIssues
         self.transcriptSegments = transcriptSegments
         self.mediaDuration = mediaDuration
     }
@@ -127,9 +183,11 @@ public struct FileAnalysis {
     public var segments: [Segment]
     public var silentSegments: [Segment]
     public var profanityHits: [ProfanityHit]
+    public var badEditIssues: [BadEditIssue]
     public var includedBlackDetection: Bool
     public var includedSilenceDetection: Bool
     public var includedProfanityDetection: Bool
+    public var includedBadEditDetection: Bool
     public var profanityWordsSnapshot: String
     public var silenceMinDurationSeconds: Double
     public var mediaDuration: Double?
@@ -141,9 +199,11 @@ public struct FileAnalysis {
         segments: [Segment] = [],
         silentSegments: [Segment] = [],
         profanityHits: [ProfanityHit] = [],
+        badEditIssues: [BadEditIssue] = [],
         includedBlackDetection: Bool = true,
         includedSilenceDetection: Bool = true,
         includedProfanityDetection: Bool = false,
+        includedBadEditDetection: Bool = false,
         profanityWordsSnapshot: String = defaultProfanityWordsStorageString,
         silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds,
         mediaDuration: Double? = nil,
@@ -154,9 +214,11 @@ public struct FileAnalysis {
         self.segments = segments
         self.silentSegments = silentSegments
         self.profanityHits = profanityHits
+        self.badEditIssues = badEditIssues
         self.includedBlackDetection = includedBlackDetection
         self.includedSilenceDetection = includedSilenceDetection
         self.includedProfanityDetection = includedProfanityDetection
+        self.includedBadEditDetection = includedBadEditDetection
         self.profanityWordsSnapshot = profanityWordsSnapshot
         self.silenceMinDurationSeconds = silenceMinDurationSeconds
         self.mediaDuration = mediaDuration
@@ -201,6 +263,13 @@ public struct FileAnalysis {
                     pieces.append("\(profanityHits.count) profanity hit(s)")
                 }
             }
+            if includedBadEditDetection {
+                if badEditIssues.isEmpty {
+                    pieces.append("No possible bad edits")
+                } else {
+                    pieces.append("\(badEditIssues.count) possible bad edit(s)")
+                }
+            }
             return pieces.isEmpty ? "No analysis type enabled" : pieces.joined(separator: " • ")
         case .failed(let reason):
             return "Failed: \(reason)"
@@ -219,6 +288,10 @@ public struct FileAnalysis {
         profanityHits.map(\.formatted).joined(separator: "\n")
     }
 
+    public var formattedBadEditList: String {
+        badEditIssues.map(\.formatted).joined(separator: "\n")
+    }
+
     public var timelineDuration: Double? {
         if let mediaDuration, mediaDuration > 0 {
             return mediaDuration
@@ -226,7 +299,8 @@ public struct FileAnalysis {
         let maxBlackEnd = segments.map(\.end).max() ?? 0
         let maxSilentEnd = silentSegments.map(\.end).max() ?? 0
         let maxProfanityEnd = profanityHits.map(\.end).max() ?? 0
-        let maxEnd = max(maxBlackEnd, max(maxSilentEnd, maxProfanityEnd))
+        let maxBadEditEnd = badEditIssues.map(\.end).max() ?? 0
+        let maxEnd = max(maxBlackEnd, max(maxSilentEnd, max(maxProfanityEnd, maxBadEditEnd)))
         return maxEnd > 0 ? maxEnd : nil
     }
 }

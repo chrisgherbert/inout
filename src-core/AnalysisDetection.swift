@@ -4,6 +4,7 @@ import AVFoundation
 public func runDetection(
     file: URL,
     detectBlackFrames: Bool,
+    detectBadEdits: Bool,
     detectAudioSilence: Bool,
     detectProfanity: Bool,
     profanityWords: Set<String> = defaultProfanityWords,
@@ -11,6 +12,7 @@ public func runDetection(
     silenceMinDuration: Double = defaultMinSilenceDurationSeconds,
     onStatusUpdate: @escaping @Sendable (String) -> Void = { _ in },
     onBlackSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
+    onBadEditDetected: @escaping @Sendable (BadEditIssue) -> Void = { _ in },
     onSilentSegmentDetected: @escaping @Sendable (Segment) -> Void = { _ in },
     onProfanityDetected: @escaping @Sendable (ProfanityHit) -> Void = { _ in },
     onConsoleOutput: @escaping @Sendable (String, String) -> Void = { _, _ in },
@@ -24,20 +26,26 @@ public func runDetection(
 
     let mediaDuration = CMTimeGetSeconds(asset.duration)
     let safeDuration = mediaDuration.isFinite && mediaDuration > 0 ? mediaDuration : nil
+    let technicalDetectorCount = [detectBlackFrames, detectBadEdits, detectAudioSilence].filter { $0 }.count
+    let technicalProgressSpan = detectProfanity ? 0.70 : 0.99
+    let technicalPhaseSpan = technicalDetectorCount > 0
+        ? technicalProgressSpan / Double(technicalDetectorCount)
+        : 0
+    var technicalPhaseIndex = 0
 
     if detectBlackFrames {
         onStatusUpdate("Scanning video for black frames")
         guard asset.tracks(withMediaType: .video).first != nil else {
             return .failure(.failed("No video track found"))
         }
+        let phaseBase = Double(technicalPhaseIndex) * technicalPhaseSpan
         let detectionResult = detectBlackFramesWithFFmpeg(
             file: file,
             mediaDuration: safeDuration,
             onSegmentDetected: onBlackSegmentDetected,
             onConsoleOutput: onConsoleOutput,
             progressHandler: { phaseProgress in
-                let mappedProgress = detectAudioSilence ? (phaseProgress * 0.7) : phaseProgress
-                progressHandler(min(0.99, mappedProgress))
+                progressHandler(min(0.99, phaseBase + (min(1, max(0, phaseProgress)) * technicalPhaseSpan)))
             },
             shouldCancel: shouldCancel
         )
@@ -51,16 +59,39 @@ public func runDetection(
         case .failure(let error):
             return .failure(error)
         }
+        technicalPhaseIndex += 1
     }
 
     let outputDuration = mediaDuration.isFinite && mediaDuration > 0 ? mediaDuration : (lastTimestamp > 0 ? lastTimestamp : nil)
     let segments = detectBlackFrames ? buildSegments(blackIntervals: intervals, minDuration: minDurationSeconds) : []
     var silentSegments: [Segment] = []
     var profanityHits: [ProfanityHit] = []
+    var badEditIssues: [BadEditIssue] = []
     var transcriptSegmentsForProfanity: [TranscriptSegment]? = nil
+
+    if detectBadEdits {
+        onStatusUpdate("Checking for possible bad edits")
+        let phaseBase = Double(technicalPhaseIndex) * technicalPhaseSpan
+        let badEditResult = detectPossibleBadEdits(
+            file: file,
+            onIssueDetected: onBadEditDetected,
+            progressHandler: { phaseProgress in
+                progressHandler(min(0.99, phaseBase + (min(1, max(0, phaseProgress)) * technicalPhaseSpan)))
+            },
+            shouldCancel: shouldCancel
+        )
+        switch badEditResult {
+        case .success(let detected):
+            badEditIssues = detected
+        case .failure(let error):
+            return .failure(error)
+        }
+        technicalPhaseIndex += 1
+    }
 
     if detectAudioSilence {
         onStatusUpdate("Analyzing audio for silent gaps")
+        let phaseBase = Double(technicalPhaseIndex) * technicalPhaseSpan
         let audioResult = detectAudioSilenceSegments(
             file: file,
             minDuration: silenceMinDuration,
@@ -69,8 +100,7 @@ public func runDetection(
                 onSilentSegmentDetected(segment)
             }
         ) { audioProgress in
-            let clamped = min(1, max(0, audioProgress))
-            progressHandler(min(0.99, 0.7 + (clamped * 0.3)))
+            progressHandler(min(0.99, phaseBase + (min(1, max(0, audioProgress)) * technicalPhaseSpan)))
         } shouldCancel: {
             shouldCancel()
         }
@@ -81,13 +111,14 @@ public func runDetection(
         case .failure(let error):
             return .failure(error)
         }
+        technicalPhaseIndex += 1
     }
 
     if detectProfanity {
         let usingCachedTranscript = (cachedTranscriptSegments != nil)
         onStatusUpdate(usingCachedTranscript ? "Scanning transcript for profanity" : "Transcribing audio for profanity")
-        let profanityBase = (detectAudioSilence || detectBlackFrames) ? 0.70 : 0.0
-        let profanitySpan = (detectAudioSilence || detectBlackFrames) ? 0.29 : 0.99
+        let profanityBase = technicalDetectorCount > 0 ? technicalProgressSpan : 0.0
+        let profanitySpan = technicalDetectorCount > 0 ? (0.99 - technicalProgressSpan) : 0.99
         if let cachedTranscriptSegments {
             transcriptSegmentsForProfanity = cachedTranscriptSegments
             profanityHits = computeProfanityHits(in: cachedTranscriptSegments, profanityWords: profanityWords)
@@ -121,6 +152,7 @@ public func runDetection(
         segments: segments,
         silentSegments: silentSegments,
         profanityHits: profanityHits,
+        badEditIssues: badEditIssues,
         transcriptSegments: transcriptSegmentsForProfanity,
         mediaDuration: outputDuration
     ))

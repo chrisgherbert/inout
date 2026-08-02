@@ -253,6 +253,12 @@ struct AnalyzeToolView: View {
                     .controlSize(.small)
                     .disabled(model.isAnalyzing || !model.hasVideoTrack)
 
+                Toggle("Detect possible bad edits", isOn: $model.analyzeBadEdits)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(model.isAnalyzing || !model.hasVideoTrack)
+                    .help("Checks for brief visual interruptions, short shots, frozen video, audio discontinuities, clipped audio at edits, timing problems, and mismatched stream endings. This requires full video and audio scans.")
+
                 Toggle("Detect silent audio gaps (over \(model.silenceMinDurationLabel)s)", isOn: $model.analyzeAudioSilence)
                     .toggleStyle(.switch)
                     .controlSize(.small)

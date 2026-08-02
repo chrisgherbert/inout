@@ -15,6 +15,7 @@ extension WorkspaceViewModel {
         }
 
         let requestedBlack = effectiveAnalyzeBlackFrames
+        let requestedBadEdits = effectiveAnalyzeBadEdits
         let requestedSilence = effectiveAnalyzeAudioSilence
         let requestedProfanity = effectiveAnalyzeProfanity
         let requestedProfanityWordsSnapshot = normalizedProfanityWordsStorageString(profanityWordsText)
@@ -35,6 +36,7 @@ extension WorkspaceViewModel {
         }
 
         let hasCachedBlack = hasCompletedPrevious && (previous?.includedBlackDetection == true)
+        let hasCachedBadEdits = hasCompletedPrevious && (previous?.includedBadEditDetection == true)
         let hasCachedSilence = hasCompletedPrevious
             && (previous?.includedSilenceDetection == true)
             && abs((previous?.silenceMinDurationSeconds ?? 0) - silenceMinDurationSeconds) < 0.0001
@@ -43,22 +45,26 @@ extension WorkspaceViewModel {
             && (previous?.profanityWordsSnapshot == requestedProfanityWordsSnapshot)
 
         let runBlack = requestedBlack && !hasCachedBlack
+        let runBadEdits = requestedBadEdits && !hasCachedBadEdits
         let runSilence = requestedSilence && !hasCachedSilence
         let runProfanity = requestedProfanity && !hasCachedProfanity
 
         let cachedBlackSegments: [Segment] = requestedBlack && hasCachedBlack ? (previous?.segments ?? []) : []
+        let cachedBadEditIssues: [BadEditIssue] = requestedBadEdits && hasCachedBadEdits ? (previous?.badEditIssues ?? []) : []
         let cachedSilentSegments: [Segment] = requestedSilence && hasCachedSilence ? (previous?.silentSegments ?? []) : []
         let cachedProfanityHits: [ProfanityHit] = requestedProfanity && hasCachedProfanity ? (previous?.profanityHits ?? []) : []
 
-        if !runBlack && !runSilence && !runProfanity {
+        if !runBlack && !runBadEdits && !runSilence && !runProfanity {
             analysis = FileAnalysis(
                 fileURL: url,
                 segments: cachedBlackSegments,
                 silentSegments: cachedSilentSegments,
                 profanityHits: cachedProfanityHits,
+                badEditIssues: cachedBadEditIssues,
                 includedBlackDetection: requestedBlack,
                 includedSilenceDetection: requestedSilence,
                 includedProfanityDetection: requestedProfanity,
+                includedBadEditDetection: requestedBadEdits,
                 profanityWordsSnapshot: requestedProfanityWordsSnapshot,
                 silenceMinDurationSeconds: silenceMinDurationSeconds,
                 mediaDuration: sourceInfo?.durationSeconds ?? previous?.mediaDuration,
@@ -78,11 +84,13 @@ extension WorkspaceViewModel {
                 fileName: url.lastPathComponent,
                 summary: analysisJobTitle(
                     black: requestedBlack,
+                    badEdits: requestedBadEdits,
                     silence: requestedSilence,
                     profanity: requestedProfanity
                 ),
                 subtitle: analysisJobSubtitle(
                     black: requestedBlack,
+                    badEdits: requestedBadEdits,
                     silence: requestedSilence,
                     profanity: requestedProfanity
                 )
@@ -105,9 +113,11 @@ extension WorkspaceViewModel {
             existing.status = .running
             existing.progress = 0
             existing.segments = runBlack ? [] : cachedBlackSegments
+            existing.badEditIssues = runBadEdits ? [] : cachedBadEditIssues
             existing.silentSegments = runSilence ? [] : cachedSilentSegments
             existing.profanityHits = runProfanity ? [] : cachedProfanityHits
             existing.includedBlackDetection = requestedBlack
+            existing.includedBadEditDetection = requestedBadEdits
             existing.includedSilenceDetection = requestedSilence
             existing.includedProfanityDetection = requestedProfanity
             existing.profanityWordsSnapshot = requestedProfanityWordsSnapshot
@@ -120,9 +130,11 @@ extension WorkspaceViewModel {
                 segments: runBlack ? [] : cachedBlackSegments,
                 silentSegments: runSilence ? [] : cachedSilentSegments,
                 profanityHits: runProfanity ? [] : cachedProfanityHits,
+                badEditIssues: runBadEdits ? [] : cachedBadEditIssues,
                 includedBlackDetection: requestedBlack,
                 includedSilenceDetection: requestedSilence,
                 includedProfanityDetection: requestedProfanity,
+                includedBadEditDetection: requestedBadEdits,
                 profanityWordsSnapshot: requestedProfanityWordsSnapshot,
                 silenceMinDurationSeconds: silenceMinDurationSeconds,
                 mediaDuration: knownDuration,
@@ -134,6 +146,7 @@ extension WorkspaceViewModel {
             guard let self else { return }
             let flag = cancelFlag
             let detectBlack = runBlack
+            let detectBadEdits = runBadEdits
             let detectSilence = runSilence
             let detectProfanity = runProfanity
             let silenceMinDuration = self.silenceMinDurationSeconds
@@ -143,8 +156,8 @@ extension WorkspaceViewModel {
             var transcriptForAnalysis = cachedTranscript
 
             if needsFreshTranscript {
-                let transcriptProgressRange: ClosedRange<Double> = (detectBlack || detectSilence) ? (0.0...0.45) : (0.0...0.92)
-                let analysisProgressRange: ClosedRange<Double> = (detectBlack || detectSilence) ? (0.45...1.0) : (0.92...1.0)
+                let transcriptProgressRange: ClosedRange<Double> = (detectBlack || detectBadEdits || detectSilence) ? (0.0...0.45) : (0.0...0.92)
+                let analysisProgressRange: ClosedRange<Double> = (detectBlack || detectBadEdits || detectSilence) ? (0.45...1.0) : (0.92...1.0)
 
                 self.prepareTranscriptGenerationState(
                     fileName: fileName,
@@ -175,12 +188,15 @@ extension WorkspaceViewModel {
                     self.applyAnalysisResult(
                         .failure(.cancelled),
                         includedBlack: requestedBlack,
+                        includedBadEdits: requestedBadEdits,
                         includedSilence: requestedSilence,
                         includedProfanity: requestedProfanity,
                         ranBlack: runBlack,
+                        ranBadEdits: runBadEdits,
                         ranSilence: runSilence,
                         ranProfanity: runProfanity,
                         cachedBlackSegments: cachedBlackSegments,
+                        cachedBadEditIssues: cachedBadEditIssues,
                         cachedSilentSegments: cachedSilentSegments,
                         cachedProfanityHits: cachedProfanityHits,
                         profanityWordsSnapshot: requestedProfanityWordsSnapshot
@@ -192,12 +208,15 @@ extension WorkspaceViewModel {
                     self.applyAnalysisResult(
                         .failure(.failed(reason)),
                         includedBlack: requestedBlack,
+                        includedBadEdits: requestedBadEdits,
                         includedSilence: requestedSilence,
                         includedProfanity: requestedProfanity,
                         ranBlack: runBlack,
+                        ranBadEdits: runBadEdits,
                         ranSilence: runSilence,
                         ranProfanity: runProfanity,
                         cachedBlackSegments: cachedBlackSegments,
+                        cachedBadEditIssues: cachedBadEditIssues,
                         cachedSilentSegments: cachedSilentSegments,
                         cachedProfanityHits: cachedProfanityHits,
                         profanityWordsSnapshot: requestedProfanityWordsSnapshot
@@ -210,6 +229,7 @@ extension WorkspaceViewModel {
                     runDetection(
                         file: url,
                         detectBlackFrames: detectBlack,
+                        detectBadEdits: detectBadEdits,
                         detectAudioSilence: detectSilence,
                         detectProfanity: detectProfanity,
                         profanityWords: profanityWords,
@@ -223,6 +243,11 @@ extension WorkspaceViewModel {
                         onBlackSegmentDetected: { segment in
                             Task { @MainActor [weak self] in
                                 self?.appendDetectedBlackSegment(segment)
+                            }
+                        },
+                        onBadEditDetected: { issue in
+                            Task { @MainActor [weak self] in
+                                self?.appendDetectedBadEditIssue(issue)
                             }
                         },
                         onSilentSegmentDetected: { segment in
@@ -255,12 +280,15 @@ extension WorkspaceViewModel {
                 self.applyAnalysisResult(
                     result,
                     includedBlack: requestedBlack,
+                    includedBadEdits: requestedBadEdits,
                     includedSilence: requestedSilence,
                     includedProfanity: requestedProfanity,
                     ranBlack: runBlack,
+                    ranBadEdits: runBadEdits,
                     ranSilence: runSilence,
                     ranProfanity: runProfanity,
                     cachedBlackSegments: cachedBlackSegments,
+                    cachedBadEditIssues: cachedBadEditIssues,
                     cachedSilentSegments: cachedSilentSegments,
                     cachedProfanityHits: cachedProfanityHits,
                     profanityWordsSnapshot: requestedProfanityWordsSnapshot
@@ -280,6 +308,7 @@ extension WorkspaceViewModel {
                 runDetection(
                     file: url,
                     detectBlackFrames: detectBlack,
+                    detectBadEdits: detectBadEdits,
                     detectAudioSilence: detectSilence,
                     detectProfanity: detectProfanity,
                     profanityWords: profanityWords,
@@ -293,6 +322,11 @@ extension WorkspaceViewModel {
                     onBlackSegmentDetected: { segment in
                         Task { @MainActor [weak self] in
                             self?.appendDetectedBlackSegment(segment)
+                        }
+                    },
+                    onBadEditDetected: { issue in
+                        Task { @MainActor [weak self] in
+                            self?.appendDetectedBadEditIssue(issue)
                         }
                     },
                     onSilentSegmentDetected: { segment in
@@ -323,12 +357,15 @@ extension WorkspaceViewModel {
             self.applyAnalysisResult(
                 result,
                 includedBlack: requestedBlack,
+                includedBadEdits: requestedBadEdits,
                 includedSilence: requestedSilence,
                 includedProfanity: requestedProfanity,
                 ranBlack: runBlack,
+                ranBadEdits: runBadEdits,
                 ranSilence: runSilence,
                 ranProfanity: runProfanity,
                 cachedBlackSegments: cachedBlackSegments,
+                cachedBadEditIssues: cachedBadEditIssues,
                 cachedSilentSegments: cachedSilentSegments,
                 cachedProfanityHits: cachedProfanityHits,
                 profanityWordsSnapshot: requestedProfanityWordsSnapshot
@@ -369,6 +406,22 @@ extension WorkspaceViewModel {
         }
     }
 
+    func appendDetectedBadEditIssue(_ issue: BadEditIssue) {
+        guard var current = analysis else { return }
+        guard case .running = current.status else { return }
+        if let index = current.badEditIssues.firstIndex(where: { $0.id == issue.id }) {
+            current.badEditIssues[index] = issue
+            analysis = current
+            return
+        }
+        if !current.badEditIssues.contains(where: {
+            $0.kind == issue.kind && abs($0.start - issue.start) < 0.001
+        }) {
+            current.badEditIssues.append(issue)
+            analysis = current
+        }
+    }
+
     func appendDetectedSilentSegment(_ segment: Segment) {
         guard var current = analysis else { return }
         guard case .running = current.status else { return }
@@ -401,12 +454,15 @@ extension WorkspaceViewModel {
     func applyAnalysisResult(
         _ result: Result<DetectionOutput, DetectionError>,
         includedBlack: Bool,
+        includedBadEdits: Bool,
         includedSilence: Bool,
         includedProfanity: Bool,
         ranBlack: Bool,
+        ranBadEdits: Bool,
         ranSilence: Bool,
         ranProfanity: Bool,
         cachedBlackSegments: [Segment],
+        cachedBadEditIssues: [BadEditIssue],
         cachedSilentSegments: [Segment],
         cachedProfanityHits: [ProfanityHit],
         profanityWordsSnapshot: String
@@ -422,9 +478,11 @@ extension WorkspaceViewModel {
         switch result {
         case .success(let output):
             current.segments = ranBlack ? output.segments : cachedBlackSegments
+            current.badEditIssues = ranBadEdits ? output.badEditIssues : cachedBadEditIssues
             current.silentSegments = ranSilence ? output.silentSegments : cachedSilentSegments
             current.profanityHits = ranProfanity ? output.profanityHits : cachedProfanityHits
             current.includedBlackDetection = includedBlack
+            current.includedBadEditDetection = includedBadEdits
             current.includedSilenceDetection = includedSilence
             current.includedProfanityDetection = includedProfanity
             current.profanityWordsSnapshot = profanityWordsSnapshot
@@ -437,9 +495,10 @@ extension WorkspaceViewModel {
                 hasCachedTranscript = true
                 transcriptStatusText = transcript.isEmpty ? "Transcript generated (no speech detected)." : "Transcript generated (\(transcript.count) segment(s))."
             }
-            if current.segments.isEmpty && current.silentSegments.isEmpty && current.profanityHits.isEmpty {
+            if current.segments.isEmpty && current.badEditIssues.isEmpty && current.silentSegments.isEmpty && current.profanityHits.isEmpty {
                 var noneParts: [String] = []
                 if includedBlack { noneParts.append("black segments") }
+                if includedBadEdits { noneParts.append("possible bad edits") }
                 if includedSilence { noneParts.append("silent gaps") }
                 if includedProfanity { noneParts.append("profanity") }
                 uiMessage = noneParts.isEmpty ? "No analysis type enabled." : "No \(noneParts.joined(separator: ", ")) found."
@@ -450,6 +509,13 @@ extension WorkspaceViewModel {
                         parts.append("No black segments")
                     } else {
                         parts.append("\(current.segments.count) black segment(s)")
+                    }
+                }
+                if includedBadEdits {
+                    if current.badEditIssues.isEmpty {
+                        parts.append("No possible bad edits")
+                    } else {
+                        parts.append("\(current.badEditIssues.count) possible bad edit(s)")
                     }
                 }
                 if includedSilence {
@@ -474,7 +540,7 @@ extension WorkspaceViewModel {
                let sound = NSSound(named: soundName) {
                 sound.play()
             }
-            notifyCompletion("Black Frame Analysis Complete", message: uiMessage)
+            notifyCompletion("Media Analysis Complete", message: uiMessage)
         case .failure(.cancelled):
             current.status = .failed("Stopped")
             analysis = current
@@ -482,14 +548,14 @@ extension WorkspaceViewModel {
             analyzeStatusText = "Analysis stopped"
             uiMessage = "Analysis stopped"
             lastActivityState = .cancelled
-            notifyCompletion("Black Frame Analysis Stopped", message: uiMessage)
+            notifyCompletion("Media Analysis Stopped", message: uiMessage)
         case .failure(.failed(let reason)):
             current.status = .failed(reason)
             analysis = current
             analyzeStatusText = "Analysis failed"
             uiMessage = "Analysis failed: \(reason)"
             lastActivityState = .failed
-            notifyCompletion("Black Frame Analysis Failed", message: uiMessage)
+            notifyCompletion("Media Analysis Failed", message: uiMessage)
         }
     }
 

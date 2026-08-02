@@ -36,12 +36,12 @@ extension WorkspaceViewModel {
         )
     }
 
-    func analysisJobSubtitle(black: Bool, silence: Bool, profanity: Bool) -> String {
-        JobPresentationUtilities.analysisJobSubtitle(black: black, silence: silence, profanity: profanity)
+    func analysisJobSubtitle(black: Bool, badEdits: Bool, silence: Bool, profanity: Bool) -> String {
+        JobPresentationUtilities.analysisJobSubtitle(black: black, badEdits: badEdits, silence: silence, profanity: profanity)
     }
 
-    func analysisJobTitle(black: Bool, silence: Bool, profanity: Bool) -> String {
-        JobPresentationUtilities.analysisJobTitle(black: black, silence: silence, profanity: profanity)
+    func analysisJobTitle(black: Bool, badEdits: Bool, silence: Bool, profanity: Bool) -> String {
+        JobPresentationUtilities.analysisJobTitle(black: black, badEdits: badEdits, silence: silence, profanity: profanity)
     }
 
     func defaultClipExportFileName(
@@ -198,11 +198,13 @@ extension WorkspaceViewModel {
             fileName: sourceURL.lastPathComponent,
             summary: analysisJobTitle(
                 black: analyzeBlackFrames,
+                badEdits: analyzeBadEdits,
                 silence: analyzeAudioSilence,
                 profanity: analyzeProfanity
             ),
             subtitle: analysisJobSubtitle(
                 black: analyzeBlackFrames,
+                badEdits: analyzeBadEdits,
                 silence: analyzeAudioSilence,
                 profanity: analyzeProfanity
             ),
@@ -212,6 +214,7 @@ extension WorkspaceViewModel {
         queuedJobKinds[item.id] = .analysis
         queuedAnalysisConfigs[item.id] = QueuedAnalysisConfig(
             analyzeBlackFrames: analyzeBlackFrames,
+            analyzeBadEdits: analyzeBadEdits,
             analyzeAudioSilence: analyzeAudioSilence,
             analyzeProfanity: analyzeProfanity,
             silenceMinDurationSeconds: silenceMinDurationSeconds,
@@ -320,6 +323,7 @@ extension WorkspaceViewModel {
                 return
             }
             analyzeBlackFrames = config.analyzeBlackFrames
+            analyzeBadEdits = config.analyzeBadEdits
             analyzeAudioSilence = config.analyzeAudioSilence
             analyzeProfanity = config.analyzeProfanity
             silenceMinDurationSeconds = config.silenceMinDurationSeconds

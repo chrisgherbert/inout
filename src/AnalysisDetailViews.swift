@@ -4,9 +4,11 @@ import AVKit
 
 struct SegmentTimelineView: View {
     let blackSegments: [Segment]
+    let badEditSegments: [Segment]
     let silentSegments: [Segment]
     let profanitySegments: [Segment]
     let showBlackLane: Bool
+    let showBadEditLane: Bool
     let showSilentLane: Bool
     let showProfanityLane: Bool
     let duration: Double
@@ -44,7 +46,7 @@ struct SegmentTimelineView: View {
     }
 
     var body: some View {
-        let hasVisibleLane = showBlackLane || showSilentLane || showProfanityLane
+        let hasVisibleLane = showBlackLane || showBadEditLane || showSilentLane || showProfanityLane
 
         VStack(alignment: .leading, spacing: 8) {
             Text("Timeline")
@@ -54,6 +56,9 @@ struct SegmentTimelineView: View {
             VStack(alignment: .leading, spacing: 5) {
                 if showBlackLane {
                     lane(label: "Black", segments: blackSegments, color: Color.black.opacity(0.9))
+                }
+                if showBadEditLane {
+                    lane(label: "Bad Edits", segments: badEditSegments, color: Color.cyan.opacity(0.9))
                 }
                 if showSilentLane {
                     lane(label: "Silence", segments: silentSegments, color: Color.orange.opacity(0.85))
@@ -110,6 +115,7 @@ struct DetailView: View {
     @State private var player = AVPlayer()
     @State private var isPlaying = false
     @State private var hoveredBlackSegmentID: UUID?
+    @State private var hoveredBadEditIssueID: UUID?
     @State private var hoveredSilentSegmentID: UUID?
     @State private var hoveredProfanityHitID: UUID?
 
@@ -124,6 +130,14 @@ struct DetailView: View {
         player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
         player.play()
         isPlaying = true
+    }
+
+    private func seek(to time: Double) {
+        player.seek(
+            to: CMTime(seconds: max(0, time), preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
     }
 
     private func jump(by seconds: Double) {
@@ -158,13 +172,92 @@ struct DetailView: View {
         if let timelineDuration = file.timelineDuration {
             SegmentTimelineView(
                 blackSegments: file.includedBlackDetection ? file.segments : [],
+                badEditSegments: file.includedBadEditDetection ? file.badEditIssues.map {
+                    Segment(start: $0.start, end: $0.end, duration: max($0.duration, 0.04))
+                } : [],
                 silentSegments: file.includedSilenceDetection ? file.silentSegments : [],
                 profanitySegments: file.includedProfanityDetection ? file.profanityHits.map { Segment(start: $0.start, end: $0.end, duration: $0.duration) } : [],
                 showBlackLane: analysisHasRunOrIsRunning && file.includedBlackDetection,
+                showBadEditLane: analysisHasRunOrIsRunning && file.includedBadEditDetection,
                 showSilentLane: analysisHasRunOrIsRunning && file.includedSilenceDetection,
                 showProfanityLane: analysisHasRunOrIsRunning && file.includedProfanityDetection,
                 duration: timelineDuration
             )
+        }
+
+        if file.includedBadEditDetection && (showEmptySections || !file.badEditIssues.isEmpty) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Possible Bad Edits")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if showCopyButtons {
+                        Button("Copy Findings") {
+                            copyToClipboard(file.formattedBadEditList)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                if file.badEditIssues.isEmpty {
+                    Text("No possible bad edits detected yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 4)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 4) {
+                            ForEach(file.badEditIssues.sorted { $0.start < $1.start }) { issue in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: issue.confidence == .high ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
+                                        .foregroundStyle(issue.confidence == .high ? Color.orange : Color.secondary)
+                                        .frame(width: 16)
+                                    Text(formatSeconds(issue.start))
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 112, alignment: .leading)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 6) {
+                                            Text(issue.title)
+                                                .font(.body.weight(.medium))
+                                            Text(issue.confidence.rawValue.capitalized)
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(issue.detail)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                                        .fill(hoveredBadEditIssueID == issue.id ? Color.cyan.opacity(0.12) : Color.clear)
+                                )
+                                .contentShape(Rectangle())
+                                .onHover { isHovering in
+                                    hoveredBadEditIssueID = isHovering ? issue.id : (hoveredBadEditIssueID == issue.id ? nil : hoveredBadEditIssueID)
+                                }
+                                .gesture(
+                                    TapGesture(count: 2)
+                                        .onEnded { play(from: max(0, issue.start - 2)) }
+                                        .exclusively(
+                                            before: TapGesture()
+                                                .onEnded { seek(to: issue.start) }
+                                        )
+                                )
+                                .help("Click to seek; double-click to play with two seconds of context")
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 240)
+                }
+            }
         }
 
         if file.includedBlackDetection && (showEmptySections || !file.segments.isEmpty) {
@@ -391,7 +484,7 @@ struct DetailView: View {
                         Spacer()
                     }
 
-                    if !file.segments.isEmpty || !file.silentSegments.isEmpty || !file.profanityHits.isEmpty {
+                    if !file.segments.isEmpty || !file.badEditIssues.isEmpty || !file.silentSegments.isEmpty || !file.profanityHits.isEmpty {
                         Text("Detections so far")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -403,6 +496,19 @@ struct DetailView: View {
                                     .foregroundStyle(.secondary)
                                 ForEach(Array(file.segments.suffix(8))) { segment in
                                     Text(segment.formatted)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        if !file.badEditIssues.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Possible bad edits: \(file.badEditIssues.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                ForEach(Array(file.badEditIssues.suffix(8))) { issue in
+                                    Text(issue.formatted)
                                         .font(.caption.monospacedDigit())
                                         .foregroundStyle(.secondary)
                                 }
@@ -451,6 +557,15 @@ struct DetailView: View {
                                 .foregroundStyle(.green)
                         } else {
                             Label("Black segments detected: \(file.segments.count)", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    if file.includedBadEditDetection {
+                        if file.badEditIssues.isEmpty {
+                            Label("No possible bad edits detected", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("Possible bad edits detected: \(file.badEditIssues.count)", systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
                         }
                     }

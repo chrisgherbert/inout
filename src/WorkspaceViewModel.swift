@@ -292,6 +292,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var geminiConnectionStatusText = ""
     @Published var geminiConnectionSucceeded = false
     @Published var analyzeBlackFrames = true
+    @Published var analyzeBadEdits = false
     @Published var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds {
         didSet {
             let clamped = min(5.0, max(0.5, silenceMinDurationSeconds))
@@ -453,6 +454,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
     struct QueuedAnalysisConfig {
         let analyzeBlackFrames: Bool
+        let analyzeBadEdits: Bool
         let analyzeAudioSilence: Bool
         let analyzeProfanity: Bool
         let silenceMinDurationSeconds: Double
@@ -710,11 +712,11 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     var canAnalyze: Bool {
-        sourceURL != nil && !isAnalyzing && !isExporting && !isGeneratingTranscript && (effectiveAnalyzeBlackFrames || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
+        sourceURL != nil && !isAnalyzing && !isExporting && !isGeneratingTranscript && (effectiveAnalyzeBlackFrames || effectiveAnalyzeBadEdits || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
     }
 
     var canRequestAnalyze: Bool {
-        sourceURL != nil && !isGeneratingTranscript && (effectiveAnalyzeBlackFrames || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
+        sourceURL != nil && !isGeneratingTranscript && (effectiveAnalyzeBlackFrames || effectiveAnalyzeBadEdits || effectiveAnalyzeAudioSilence || effectiveAnalyzeProfanity)
     }
 
     var hasVideoTrack: Bool {
@@ -728,6 +730,10 @@ final class WorkspaceViewModel: ObservableObject {
 
     var effectiveAnalyzeBlackFrames: Bool {
         analyzeBlackFrames && hasVideoTrack
+    }
+
+    var effectiveAnalyzeBadEdits: Bool {
+        analyzeBadEdits && hasVideoTrack
     }
 
     var effectiveAnalyzeAudioSilence: Bool {
