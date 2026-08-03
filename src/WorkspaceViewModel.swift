@@ -40,6 +40,10 @@ final class WorkspaceViewModel: ObservableObject {
         static let jumpIntervalSeconds = "prefs.jumpIntervalSeconds"
         static let completionSound = "prefs.completionSound"
         static let appearance = "prefs.appearance"
+        static let analyzeBlackFrames = "prefs.analyzeBlackFrames"
+        static let analyzeBadEdits = "prefs.analyzeBadEdits"
+        static let analyzeAudioSilence = "prefs.analyzeAudioSilence"
+        static let analyzeProfanity = "prefs.analyzeProfanity"
         static let silenceMinDurationSeconds = "prefs.silenceMinDurationSeconds"
         static let profanityWords = "prefs.profanityWords"
         static let frameSaveLocationMode = "prefs.frameSaveLocationMode"
@@ -291,8 +295,16 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var isTestingGeminiConnection = false
     @Published var geminiConnectionStatusText = ""
     @Published var geminiConnectionSucceeded = false
-    @Published var analyzeBlackFrames = true
-    @Published var analyzeBadEdits = false
+    @Published var analyzeBlackFrames = false {
+        didSet {
+            UserDefaults.standard.set(analyzeBlackFrames, forKey: DefaultsKey.analyzeBlackFrames)
+        }
+    }
+    @Published var analyzeBadEdits = false {
+        didSet {
+            UserDefaults.standard.set(analyzeBadEdits, forKey: DefaultsKey.analyzeBadEdits)
+        }
+    }
     @Published var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds {
         didSet {
             let clamped = min(5.0, max(0.5, silenceMinDurationSeconds))
@@ -303,8 +315,16 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(clamped, forKey: DefaultsKey.silenceMinDurationSeconds)
         }
     }
-    @Published var analyzeAudioSilence = true
-    @Published var analyzeProfanity = false
+    @Published var analyzeAudioSilence = false {
+        didSet {
+            UserDefaults.standard.set(analyzeAudioSilence, forKey: DefaultsKey.analyzeAudioSilence)
+        }
+    }
+    @Published var analyzeProfanity = false {
+        didSet {
+            UserDefaults.standard.set(analyzeProfanity, forKey: DefaultsKey.analyzeProfanity)
+        }
+    }
     @Published var profanityWordsText: String = defaultProfanityWordsStorageString {
         didSet {
             // Persist raw user text so TextEditor remains fully editable while typing.
@@ -625,6 +645,10 @@ final class WorkspaceViewModel: ObservableObject {
            let savedAppearance = AppAppearance(rawValue: rawAppearance) {
             appearance = savedAppearance
         }
+        analyzeBlackFrames = defaults.bool(forKey: DefaultsKey.analyzeBlackFrames)
+        analyzeBadEdits = defaults.bool(forKey: DefaultsKey.analyzeBadEdits)
+        analyzeAudioSilence = defaults.bool(forKey: DefaultsKey.analyzeAudioSilence)
+        analyzeProfanity = defaults.bool(forKey: DefaultsKey.analyzeProfanity)
         let warningGB = defaults.double(forKey: DefaultsKey.estimatedSizeWarningThresholdGB)
         if warningGB > 0 {
             estimatedSizeWarningThresholdGB = min(max(0.04, warningGB), 20.0)

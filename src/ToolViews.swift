@@ -190,6 +190,38 @@ struct ToolContentView: View {
     }
 }
 
+private struct AnalysisCheckRow: View {
+    let title: String
+    let description: String
+    @Binding var isOn: Bool
+    let isEnabled: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(isEnabled ? .primary : .secondary)
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 20)
+
+            Toggle(title, isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(!isEnabled)
+                .accessibilityLabel(title)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+    }
+}
+
 struct AnalyzeToolView: View {
     @ObservedObject var model: WorkspaceViewModel
     let isCompactLayout: Bool
@@ -202,17 +234,76 @@ struct AnalyzeToolView: View {
         )
     }
 
+    private var selectedCheckCount: Int {
+        [
+            model.effectiveAnalyzeBlackFrames,
+            model.effectiveAnalyzeBadEdits,
+            model.effectiveAnalyzeAudioSilence,
+            model.effectiveAnalyzeProfanity
+        ].filter { $0 }.count
+    }
+
+    private var selectedCheckDescription: String {
+        "\(selectedCheckCount) \(selectedCheckCount == 1 ? "check" : "checks") selected"
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             if model.sourceURL != nil {
-                HStack(spacing: 8) {
-                    Button {
-                        model.startAnalysis()
-                    } label: {
-                        Label(model.isAnalyzing ? "Analyzing…" : "Run Analysis", systemImage: "waveform.path.ecg")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Video Analysis")
+                        .font(.title3.weight(.semibold))
+                    Text("Check the video for common technical issues.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                GroupBox("Analysis Checks") {
+                    VStack(spacing: 0) {
+                        AnalysisCheckRow(
+                            title: "Black frames",
+                            description: "Find sections where the picture is fully black.",
+                            isOn: blackFrameToggleBinding,
+                            isEnabled: !model.isAnalyzing && model.hasVideoTrack
+                        )
+
+                        Divider()
+
+                        AnalysisCheckRow(
+                            title: "Possible bad edits",
+                            description: "Find frozen video, unusually short shots, and abrupt audio changes.",
+                            isOn: $model.analyzeBadEdits,
+                            isEnabled: !model.isAnalyzing && model.hasVideoTrack
+                        )
+                        .help("Checks for brief visual interruptions, short shots, frozen video, audio discontinuities, clipped audio at edits, timing problems, and mismatched stream endings. This requires full video and audio scans.")
+
+                        Divider()
+
+                        AnalysisCheckRow(
+                            title: "Silent audio gaps",
+                            description: "Find silence lasting longer than \(model.silenceMinDurationLabel) seconds.",
+                            isOn: $model.analyzeAudioSilence,
+                            isEnabled: !model.isAnalyzing && model.hasAudioTrack
+                        )
+
+                        Divider()
+
+                        AnalysisCheckRow(
+                            title: "Profanity",
+                            description: "Find potentially profane language.",
+                            isOn: $model.analyzeProfanity,
+                            isEnabled: !model.isAnalyzing && model.hasAudioTrack
+                        )
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.canRequestAnalyze)
+                    .padding(.horizontal, 6)
+                }
+
+                HStack(spacing: 8) {
+                    Text(selectedCheckDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 8)
 
                     if model.isAnalyzing {
                         Button {
@@ -223,28 +314,15 @@ struct AnalyzeToolView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
+
+                    Button {
+                        model.startAnalysis()
+                    } label: {
+                        Label(model.isAnalyzing ? "Analyzing…" : "Run Analysis", systemImage: "waveform.path.ecg")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canRequestAnalyze)
                 }
-
-                Toggle("Detect black frames", isOn: blackFrameToggleBinding)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .disabled(model.isAnalyzing || !model.hasVideoTrack)
-
-                Toggle("Detect possible bad edits", isOn: $model.analyzeBadEdits)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .disabled(model.isAnalyzing || !model.hasVideoTrack)
-                    .help("Checks for brief visual interruptions, short shots, frozen video, audio discontinuities, clipped audio at edits, timing problems, and mismatched stream endings. This requires full video and audio scans.")
-
-                Toggle("Detect silent audio gaps (over \(model.silenceMinDurationLabel)s)", isOn: $model.analyzeAudioSilence)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .disabled(model.isAnalyzing || !model.hasAudioTrack)
-
-                Toggle("Detect profanity (Whisper transcription)", isOn: $model.analyzeProfanity)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .disabled(model.isAnalyzing || !model.hasAudioTrack)
 
                 if let analysis = model.analysis {
                     Text(analysis.summary)
@@ -252,21 +330,15 @@ struct AnalyzeToolView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Group {
-                    if let analysis = model.analysis {
-                        DetailView(
-                            file: analysis,
-                            isCompactLayout: isCompactLayout,
-                            model: model,
-                            activity: model.activityPresentation
-                        )
-                    } else {
-                        Text("Ready to analyze")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                if let analysis = model.analysis {
+                    DetailView(
+                        file: analysis,
+                        isCompactLayout: isCompactLayout,
+                        model: model,
+                        activity: model.activityPresentation
+                    )
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
                 }
-                .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
             } else {
                 EmptyToolView(title: "Analyze", subtitle: "Choose media and run analysis.")
             }
