@@ -7,6 +7,19 @@ struct TranscriptExportControls: View {
     let exportTranscript: () -> Void
     @State private var showsPopover = false
 
+    private func optionRow<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            content()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     var body: some View {
         Button {
             showsPopover.toggle()
@@ -21,10 +34,8 @@ struct TranscriptExportControls: View {
                 Text("Export Transcript")
                     .font(.headline)
 
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
-                    GridRow {
-                        Text("Format")
-                            .foregroundStyle(.secondary)
+                VStack(spacing: 10) {
+                    optionRow("Format") {
                         Picker("Format", selection: $selectedFormat) {
                             ForEach(TranscriptExportFormat.allCases) { format in
                                 Text(format.pickerTitle)
@@ -32,13 +43,10 @@ struct TranscriptExportControls: View {
                             }
                         }
                         .labelsHidden()
-                        .frame(width: 160)
                     }
 
                     if selectedFormat.supportsReadableLayout {
-                        GridRow {
-                            Text("Layout")
-                                .foregroundStyle(.secondary)
+                        optionRow("Layout") {
                             Picker("Layout", selection: $selectedLayout) {
                                 ForEach(TranscriptExportLayout.allCases) { layout in
                                     Text(layout.title)
@@ -46,12 +54,9 @@ struct TranscriptExportControls: View {
                                 }
                             }
                             .labelsHidden()
-                            .frame(width: 160)
                         }
 
-                        GridRow {
-                            Text("Timecodes")
-                                .foregroundStyle(.secondary)
+                        optionRow("Timecodes") {
                             Picker("Timecodes", selection: $selectedTimecodeStyle) {
                                 ForEach(TranscriptExportTimecodeStyle.allCases) { style in
                                     Text(style.title)
@@ -59,7 +64,6 @@ struct TranscriptExportControls: View {
                                 }
                             }
                             .labelsHidden()
-                            .frame(width: 160)
                             .disabled(selectedLayout == .continuousText)
                         }
                     }
