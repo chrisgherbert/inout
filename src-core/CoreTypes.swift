@@ -310,46 +310,64 @@ public struct SourceMediaInfo {
     public var durationSeconds: Double?
     public var overallBitrateBps: Double?
     public var containerDescription: String?
+    public var videoStreamCount: Int
     public var videoCodec: String?
     public var resolution: String?
     public var frameRate: Double?
     public var videoBitrateBps: Double?
     public var colorPrimaries: String?
     public var colorTransfer: String?
+    public var videoStartSeconds: Double?
+    public var videoDurationSeconds: Double?
+    public var audioStreamCount: Int
     public var audioCodec: String?
     public var sampleRateHz: Double?
     public var channels: Int?
     public var audioBitrateBps: Double?
+    public var audioStartSeconds: Double?
+    public var audioDurationSeconds: Double?
 
     public init(
         fileSizeBytes: Int64? = nil,
         durationSeconds: Double? = nil,
         overallBitrateBps: Double? = nil,
         containerDescription: String? = nil,
+        videoStreamCount: Int = 0,
         videoCodec: String? = nil,
         resolution: String? = nil,
         frameRate: Double? = nil,
         videoBitrateBps: Double? = nil,
         colorPrimaries: String? = nil,
         colorTransfer: String? = nil,
+        videoStartSeconds: Double? = nil,
+        videoDurationSeconds: Double? = nil,
+        audioStreamCount: Int = 0,
         audioCodec: String? = nil,
         sampleRateHz: Double? = nil,
         channels: Int? = nil,
-        audioBitrateBps: Double? = nil
+        audioBitrateBps: Double? = nil,
+        audioStartSeconds: Double? = nil,
+        audioDurationSeconds: Double? = nil
     ) {
         self.fileSizeBytes = fileSizeBytes
         self.durationSeconds = durationSeconds
         self.overallBitrateBps = overallBitrateBps
         self.containerDescription = containerDescription
+        self.videoStreamCount = videoStreamCount
         self.videoCodec = videoCodec
         self.resolution = resolution
         self.frameRate = frameRate
         self.videoBitrateBps = videoBitrateBps
         self.colorPrimaries = colorPrimaries
         self.colorTransfer = colorTransfer
+        self.videoStartSeconds = videoStartSeconds
+        self.videoDurationSeconds = videoDurationSeconds
+        self.audioStreamCount = audioStreamCount
         self.audioCodec = audioCodec
         self.sampleRateHz = sampleRateHz
         self.channels = channels
         self.audioBitrateBps = audioBitrateBps
+        self.audioStartSeconds = audioStartSeconds
+        self.audioDurationSeconds = audioDurationSeconds
     }
 }

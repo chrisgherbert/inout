@@ -176,7 +176,14 @@ func loadSourceMediaInfo(for url: URL) -> SourceMediaInfo {
         info.containerDescription = "MPEG-4"
     }
 
-    if let videoTrack = asset.tracks(withMediaType: .video).first {
+    let videoTracks = asset.tracks(withMediaType: .video)
+    info.videoStreamCount = videoTracks.count
+    if let videoTrack = videoTracks.first {
+        if let timing = mediaContentTimeRange(for: videoTrack) {
+            info.videoStartSeconds = timing.start
+            info.videoDurationSeconds = timing.duration
+        }
+
         let size = videoTrack.naturalSize.applying(videoTrack.preferredTransform)
         let width = Int(abs(size.width).rounded())
         let height = Int(abs(size.height).rounded())
@@ -213,7 +220,14 @@ func loadSourceMediaInfo(for url: URL) -> SourceMediaInfo {
         }
     }
 
-    if let audioTrack = asset.tracks(withMediaType: .audio).first {
+    let audioTracks = asset.tracks(withMediaType: .audio)
+    info.audioStreamCount = audioTracks.count
+    if let audioTrack = audioTracks.first {
+        if let timing = mediaContentTimeRange(for: audioTrack) {
+            info.audioStartSeconds = timing.start
+            info.audioDurationSeconds = timing.duration
+        }
+
         let aBitrate = audioTrack.estimatedDataRate
         if aBitrate > 0 {
             info.audioBitrateBps = Double(aBitrate)
