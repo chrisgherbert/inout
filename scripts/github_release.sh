@@ -99,6 +99,18 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
+CURRENT_BRANCH="$(git branch --show-current)"
+if [[ -z "$CURRENT_BRANCH" ]]; then
+  echo "Release must be created from a named Git branch."
+  exit 1
+fi
+git fetch origin "$CURRENT_BRANCH" --quiet
+if [[ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/$CURRENT_BRANCH")" ]]; then
+  echo "Local $CURRENT_BRANCH does not match origin/$CURRENT_BRANCH."
+  echo "Push the tested release commit before creating the GitHub release."
+  exit 1
+fi
+
 TAG="v$VERSION"
 VERSIONED_DMG="$DIST_DIR/In-Out-macOS-$TAG.dmg"
 SHA_PATH="$VERSIONED_DMG.sha256"
