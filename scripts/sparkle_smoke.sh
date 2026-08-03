@@ -19,10 +19,13 @@ if [[ ! -d "$FRAMEWORK" ]]; then
 fi
 
 FEED="$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$PLIST")"
+SPARKLE_BUNDLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :SUBundleName' "$PLIST")"
 PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PLIST")"
 AUTOMATIC_CHECKS="$(/usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' "$PLIST")"
 
 [[ "$FEED" == "$EXPECTED_FEED" ]] || { echo "Unexpected Sparkle feed: $FEED"; exit 1; }
+[[ "$SPARKLE_BUNDLE_NAME" == "In-Out" ]] || { echo "Unexpected Sparkle bundle name: $SPARKLE_BUNDLE_NAME"; exit 1; }
+[[ "$SPARKLE_BUNDLE_NAME" != *'/'* ]] || { echo "Sparkle bundle name cannot contain path separators."; exit 1; }
 [[ "$PUBLIC_KEY" == "$EXPECTED_KEY" ]] || { echo "Unexpected Sparkle public key."; exit 1; }
 [[ "$AUTOMATIC_CHECKS" == "true" ]] || { echo "Automatic update checks are not enabled."; exit 1; }
 

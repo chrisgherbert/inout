@@ -430,6 +430,8 @@ cat > "$PLIST" <<PLIST
   <true/>
   <key>SUFeedURL</key>
   <string>${SPARKLE_FEED_URL}</string>
+  <key>SUBundleName</key>
+  <string>In-Out</string>
   <key>SUPublicEDKey</key>
   <string>${SPARKLE_PUBLIC_KEY}</string>
   <key>SUEnableAutomaticChecks</key>
