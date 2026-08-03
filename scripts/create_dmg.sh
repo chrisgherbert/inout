@@ -55,7 +55,7 @@ hdiutil create -quiet -srcfolder "$STAGING_DIR" -volname "$VOL_NAME" -fs HFS+ -f
 
 ATTACH_OUTPUT="$(hdiutil attach -readwrite -noverify -noautoopen "$RW_DMG")"
 DEVICE="$(echo "$ATTACH_OUTPUT" | awk '/Apple_HFS/ {print $1; exit}')"
-MOUNT_DIR="$(echo "$ATTACH_OUTPUT" | awk '/Apple_HFS/ {print $NF; exit}')"
+MOUNT_DIR="$(echo "$ATTACH_OUTPUT" | awk '/Apple_HFS/ {sub(/^.*Apple_HFS[[:space:]]+/, ""); print; exit}')"
 if [[ -z "$DEVICE" ]]; then
   echo "Failed to determine mounted DMG device."
   exit 1
