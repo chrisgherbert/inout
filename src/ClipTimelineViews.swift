@@ -2373,7 +2373,7 @@ struct ClipToolView: View {
                     model.transcriptTextSize = size
                 },
                 onExportTranscript: { format in
-                    model.exportTranscriptFromInspect(format: format)
+                    model.exportTranscript(format: format)
                 },
                 onSeekToTranscriptTime: { seconds in
                     seekPlayerAndFocusViewport(to: seconds, focusViewport: true)

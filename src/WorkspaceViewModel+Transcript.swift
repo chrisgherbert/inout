@@ -585,7 +585,7 @@ extension WorkspaceViewModel {
         return range.lowerBound + ((range.upperBound - range.lowerBound) * clamped)
     }
 
-    func exportTranscriptFromInspect(format requestedFormat: TranscriptExportFormat? = nil) {
+    func exportTranscript(format requestedFormat: TranscriptExportFormat? = nil) {
         guard let sourceURL else { return }
         guard !transcriptSegments.isEmpty else { return }
         let format = requestedFormat ?? transcriptExportFormat

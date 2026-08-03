@@ -1,49 +1,15 @@
 import SwiftUI
 import AppKit
-import AVKit
 
 struct InspectToolView: View {
     @ObservedObject var activity: ActivityPresentationModel
     let sourceURL: URL?
-    let analysis: FileAnalysis?
     let sourceInfo: SourceMediaInfo?
-    let transcriptSegments: [TranscriptSegment]
-    let transcriptStatusText: String
-    let canGenerateTranscript: Bool
-    let isGeneratingTranscript: Bool
-    let whisperTranscriptionAvailable: Bool
-    let hasAudioTrack: Bool
-    let transcriptExportFormat: TranscriptExportFormat
-    let transcriptExportLayout: TranscriptExportLayout
-    let transcriptExportTimecodeStyle: TranscriptExportTimecodeStyle
-    let transcriptDisplayMode: TranscriptDisplayMode
-    let transcriptShowsTimecodes: Bool
-    let transcriptTextSize: TranscriptTextSize
-    let generateTranscript: () -> Void
-    let setTranscriptExportFormat: (TranscriptExportFormat) -> Void
-    let setTranscriptExportLayout: (TranscriptExportLayout) -> Void
-    let setTranscriptExportTimecodeStyle: (TranscriptExportTimecodeStyle) -> Void
-    let setTranscriptDisplayMode: (TranscriptDisplayMode) -> Void
-    let setTranscriptShowsTimecodes: (Bool) -> Void
-    let setTranscriptTextSize: (TranscriptTextSize) -> Void
-    let exportTranscript: (TranscriptExportFormat?) -> Void
     let toggleActivityConsole: () -> Void
     let copyActivityConsole: () -> Void
     let clearActivityConsole: () -> Void
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @State private var transcriptSearchText = ""
-    private var allTranscriptRows: [TranscriptDisplayRow] {
-        makeTranscriptDisplayRows(from: transcriptSegments, mode: transcriptDisplayMode)
-    }
-
-    private var filteredTranscriptRows: [TranscriptDisplayRow] {
-        let query = normalizedTranscriptSearchText(transcriptSearchText.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard !query.isEmpty else {
-            return allTranscriptRows
-        }
-        return allTranscriptRows.filter { $0.normalizedText.contains(query) }
-    }
 
     private func fileIcon(for url: URL) -> NSImage {
         let icon = NSWorkspace.shared.icon(forFile: url.path)
@@ -153,90 +119,6 @@ struct InspectToolView: View {
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
-                    .background(
-                        adaptiveContainerFill(
-                            material: .thinMaterial,
-                            fallback: Color(nsColor: .controlBackgroundColor),
-                            reduceTransparency: reduceTransparency
-                        ),
-                        in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
-                    )
-                }
-
-                GroupBox("Transcript") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if transcriptSegments.isEmpty {
-                            Text(transcriptStatusText)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            if !canGenerateTranscript && hasAudioTrack {
-                                Text("Transcription resources are not available in this app bundle.")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            } else if !hasAudioTrack {
-                                Text("No audio track available.")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Button(isGeneratingTranscript ? "Generating Transcript…" : "Generate Transcript") {
-                                generateTranscript()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(!canGenerateTranscript || isGeneratingTranscript)
-                        } else {
-                            HStack(spacing: 8) {
-                                TextField("Search transcript", text: $transcriptSearchText)
-                                    .textFieldStyle(.roundedBorder)
-
-                                TranscriptViewOptionsButton(
-                                    mode: transcriptDisplayMode,
-                                    showsTimecodes: transcriptShowsTimecodes,
-                                    textSize: transcriptTextSize,
-                                    setMode: setTranscriptDisplayMode,
-                                    setShowsTimecodes: setTranscriptShowsTimecodes,
-                                    setTextSize: setTranscriptTextSize
-                                )
-
-                                TranscriptExportControls(
-                                    selectedFormat: Binding(
-                                        get: { transcriptExportFormat },
-                                        set: { setTranscriptExportFormat($0) }
-                                    ),
-                                    selectedLayout: Binding(
-                                        get: { transcriptExportLayout },
-                                        set: { setTranscriptExportLayout($0) }
-                                    ),
-                                    selectedTimecodeStyle: Binding(
-                                        get: { transcriptExportTimecodeStyle },
-                                        set: { setTranscriptExportTimecodeStyle($0) }
-                                    ),
-                                    exportTranscript: { exportTranscript(nil) }
-                                )
-                            }
-
-                            Text(transcriptStatusText)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            TranscriptTableView(
-                                rows: filteredTranscriptRows,
-                                rowsVersion: filteredTranscriptRows.count ^ Int(transcriptTextSize.fontSize * 100),
-                                fontSize: transcriptTextSize.fontSize,
-                                displayMode: transcriptDisplayMode,
-                                showsTimecodes: transcriptShowsTimecodes
-                            )
-                            .frame(minHeight: 120, maxHeight: 220)
-
-                            Text("Tip: Use Shift/Cmd-click to select multiple rows, then press Cmd-C to copy.")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
                     .background(
                         adaptiveContainerFill(
                             material: .thinMaterial,
