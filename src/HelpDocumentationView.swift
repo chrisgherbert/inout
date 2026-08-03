@@ -172,7 +172,8 @@ struct HelpDocumentationView: View {
                     bullets: [
                         "Command-click rows to add or remove individual rows from the selection.",
                         "Shift-click to select a continuous range of rows.",
-                        "Press Command-C to copy the selected rows. Right-click Copy operates on the row you clicked.",
+                        "Press Command-C to copy the selected rows. Right-click a selected row to copy the selection, or an unselected row to copy only that row.",
+                        "Press Escape or click below the transcript rows to clear the selection.",
                         "Copied rows include timecodes only when timecodes are visible."
                     ]
                 ),

@@ -357,7 +357,34 @@ private let transcriptTrailingPunctuation = Set(".,;:!?")
 final class TranscriptNSTableView: NSTableView {
     var copySelectionHandler: (() -> Void)?
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let clickedRow = row(at: convert(event.locationInWindow, from: nil))
+        guard clickedRow >= 0 else { return nil }
+
+        if !selectedRowIndexes.contains(clickedRow) {
+            selectRowIndexes(IndexSet(integer: clickedRow), byExtendingSelection: false)
+        }
+
+        let selectionCount = selectedRowIndexes.count
+        menu?.items.first?.title = selectionCount > 1
+            ? "Copy \(selectionCount) Transcript Lines"
+            : "Copy"
+        return super.menu(for: event)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let clickedRow = row(at: convert(event.locationInWindow, from: nil))
+        if clickedRow < 0 {
+            deselectAll(nil)
+        }
+        super.mouseDown(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            deselectAll(nil)
+            return
+        }
         if event.modifierFlags.contains(.command),
            event.charactersIgnoringModifiers?.lowercased() == "c" {
             copySelectionHandler?()
@@ -1131,9 +1158,7 @@ struct TranscriptTableView: NSViewRepresentable {
 
         @objc func copyFromMenu(_ sender: Any?) {
             guard let tableView else { return }
-            let clickedRow = tableView.clickedRow
-            guard clickedRow >= 0, clickedRow < rows.count else { return }
-            copyRows(at: IndexSet(integer: clickedRow))
+            copyRows(at: tableView.selectedRowIndexes)
         }
 
         @objc func handleRowAction(_ sender: Any?) {
