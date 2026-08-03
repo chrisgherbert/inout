@@ -188,31 +188,107 @@ if ! grep -Fq "releases/download/$TAG/$(basename "$VERSIONED_DMG")" "$APPCAST_PA
   exit 1
 fi
 
-if gh release view "$TAG" >/dev/null 2>&1; then
-  echo "Release $TAG already exists; uploading updated assets..."
+verify_release_asset() {
+  local asset_path="$1"
+  local asset_name="$(basename "$asset_path")"
+  local local_size="$(stat -f '%z' "$asset_path")"
+  local remote_size
+  remote_size="$(gh release view "$TAG" --json assets | python3 -c '
+import json
+import sys
+
+asset_name = sys.argv[1]
+assets = json.load(sys.stdin).get("assets", [])
+for asset in assets:
+    if asset.get("name") == asset_name:
+        print(asset.get("size", ""))
+        break
+' "$asset_name")"
+
+  if [[ -z "$remote_size" || "$remote_size" != "$local_size" ]]; then
+    echo "Release asset verification failed: $asset_name (local $local_size, remote ${remote_size:-missing})"
+    return 1
+  fi
+  echo "Verified release asset: $asset_name ($local_size bytes)"
+}
+
+upload_release_payload() {
   gh release upload \
     "$TAG" \
     "$VERSIONED_DMG" \
     "$SHA_PATH" \
     "$RUNTIME_ARCHIVE" \
     "$RUNTIME_SHA_PATH" \
-    "$APPCAST_PATH" \
     --clobber
+
+  verify_release_asset "$VERSIONED_DMG"
+  verify_release_asset "$SHA_PATH"
+  verify_release_asset "$RUNTIME_ARCHIVE"
+  verify_release_asset "$RUNTIME_SHA_PATH"
+}
+
+upload_and_verify_appcast() {
+  gh release upload "$TAG" "$APPCAST_PATH" --clobber
+  verify_release_asset "$APPCAST_PATH"
+}
+
+return_release_to_draft() {
+  echo "Returning $TAG to draft because its public update assets are not ready."
+  gh release edit "$TAG" --draft=true || true
+}
+
+publish_staged_release() {
+  upload_release_payload
+
+  echo "Publishing release after payload verification..."
+  gh release edit "$TAG" --draft=false
+
+  PUBLIC_DMG_URL="https://github.com/chrisgherbert/inout/releases/download/$TAG/$(basename "$VERSIONED_DMG")"
+  echo "Waiting for the public DMG download to become available..."
+  if ! curl \
+      --fail \
+      --location \
+      --head \
+      --retry 8 \
+      --retry-all-errors \
+      --retry-delay 2 \
+      --silent \
+      --show-error \
+      "$PUBLIC_DMG_URL" >/dev/null; then
+    return_release_to_draft
+    return 1
+  fi
+
+  # Upload the feed last so installed apps cannot discover a release whose
+  # large DMG is still uploading or propagating through GitHub's CDN.
+  if ! upload_and_verify_appcast; then
+    return_release_to_draft
+    return 1
+  fi
+}
+
+if gh release view "$TAG" >/dev/null 2>&1; then
+  IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
+  if [[ "$IS_DRAFT" == "true" ]]; then
+    echo "Resuming staged draft release $TAG..."
+    publish_staged_release
+  else
+    echo "Release $TAG already exists; uploading updated assets..."
+    upload_release_payload
+    upload_and_verify_appcast
+  fi
 else
   CREATE_ARGS=(
     "$TAG"
-    "$VERSIONED_DMG"
-    "$SHA_PATH"
-    "$RUNTIME_ARCHIVE"
-    "$RUNTIME_SHA_PATH"
-    "$APPCAST_PATH"
     --title "In/Out $TAG"
     --notes-file "$NOTES_PATH"
+    --draft
   )
   if [[ "$VERSION" == *"-"* ]]; then
     CREATE_ARGS+=(--prerelease)
   fi
   gh release create "${CREATE_ARGS[@]}"
+  publish_staged_release
 fi
 
 echo "Done"
