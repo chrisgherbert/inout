@@ -38,6 +38,12 @@ LEGACY_APP_2="$DIST/CheckBlackFrames.app"
 BIN="$APP/Contents/MacOS/$APP_EXECUTABLE"
 PLIST="$APP/Contents/Info.plist"
 APP_RESOURCES="$APP/Contents/Resources"
+APP_FRAMEWORKS="$APP/Contents/Frameworks"
+SPARKLE_DIR="$($ROOT_DIR/scripts/fetch_sparkle.sh)"
+SPARKLE_FRAMEWORK_SOURCE="$SPARKLE_DIR/Sparkle.framework"
+SPARKLE_FRAMEWORK_DEST="$APP_FRAMEWORKS/Sparkle.framework"
+SPARKLE_PUBLIC_KEY="6/pySHU9/kwRnn1qolnPflgpxFo5TWeA66nKjY9I2y0="
+SPARKLE_FEED_URL="https://github.com/chrisgherbert/inout/releases/latest/download/appcast.xml"
 ICON_SOURCE_PNG="$ROOT_DIR/assets/AppIcon-1024.png"
 ICON_BASE_NAME="AppIcon"
 ICON_ICNS_NAME="${ICON_BASE_NAME}.icns"
@@ -292,7 +298,7 @@ rm -rf "$LEGACY_APP_1" "$LEGACY_APP_2"
 if [[ "$PRESERVE_APP_BUNDLE" -eq 0 ]]; then
   rm -rf "$APP"
 fi
-mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES"
+mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES" "$APP_FRAMEWORKS"
 mkdir -p "$ROOT_DIR/assets"
 
 SWIFT_SOURCES=("$SRC_DIR"/*.swift)
@@ -361,6 +367,7 @@ swiftc \
   -module-name "$APP_EXECUTABLE" \
   -module-cache-path "$MODULE_CACHE" \
   -I "$CORE_MODULE_DIR" \
+  -F "$SPARKLE_DIR" \
   -framework SwiftUI \
   -framework AppKit \
   -framework AVFoundation \
@@ -368,6 +375,9 @@ swiftc \
   -framework CoreMedia \
   -framework Foundation \
   -framework Security \
+  -framework Sparkle \
+  -Xlinker -rpath \
+  -Xlinker @executable_path/../Frameworks \
   -Xlinker -weak_framework \
   -Xlinker FoundationModels \
   "${CORE_LINK_INPUTS[@]}" \
@@ -418,11 +428,21 @@ cat > "$PLIST" <<PLIST
   <string>${MIN_MACOS_VERSION}</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>SUFeedURL</key>
+  <string>${SPARKLE_FEED_URL}</string>
+  <key>SUPublicEDKey</key>
+  <string>${SPARKLE_PUBLIC_KEY}</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
 </dict>
 </plist>
 PLIST
 
 chmod +x "$BIN"
+
+rm -rf "$SPARKLE_FRAMEWORK_DEST"
+/usr/bin/ditto "$SPARKLE_FRAMEWORK_SOURCE" "$SPARKLE_FRAMEWORK_DEST"
+echo "Bundled Sparkle framework: $SPARKLE_FRAMEWORK_SOURCE"
 
 if [[ -f "$ICON_SOURCE_PNG" ]]; then
   if [[ "$BUILD_MODE" != "release" && "$REFRESH_BUNDLED_TOOLS" -eq 0 && \

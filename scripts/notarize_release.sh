@@ -107,6 +107,8 @@ if [[ "$SKIP_SMOKE" -eq 0 ]]; then
   "$APP_PATH/Contents/Resources/yt-dlp" --ignore-config --version >/dev/null
   echo "Running bundled ffmpeg smoke tests..."
   "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
+  echo "Running Sparkle updater smoke test..."
+  "$ROOT_DIR/scripts/sparkle_smoke.sh" "$APP_PATH"
 fi
 
 echo "Checking signing identity availability..."
@@ -127,6 +129,23 @@ for binary in "$APP_PATH/Contents/Resources/ffmpeg" "$APP_PATH/Contents/Resource
     echo "Warning: nested binary not found, skipping: $binary"
   fi
 done
+
+SPARKLE_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then
+  echo "Missing Sparkle framework: $SPARKLE_FRAMEWORK"
+  exit 1
+fi
+# Sparkle's helpers have different signing requirements, so sign them from the
+# inside out rather than using --deep.
+codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" \
+  "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Installer.xpc"
+codesign --force --options runtime --timestamp --preserve-metadata=entitlements --sign "$DEV_ID_APP" \
+  "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Downloader.xpc"
+codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" \
+  "$SPARKLE_FRAMEWORK/Versions/B/Autoupdate"
+codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" \
+  "$SPARKLE_FRAMEWORK/Versions/B/Updater.app"
+codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$SPARKLE_FRAMEWORK"
 
 if [[ -f "$APP_PATH/Contents/Resources/yt-dlp" ]]; then
   if [[ ! -f "$YTDLP_ENTITLEMENTS" ]]; then

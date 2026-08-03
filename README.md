@@ -83,6 +83,7 @@ Focused transcript export validation:
 
 ```bash
 ./scripts/transcript_export_smoke.sh
+./scripts/sparkle_smoke.sh
 ```
 
 Optional:
@@ -111,6 +112,8 @@ Optional:
 
 - Release builds enforce pinned binary checks and portability audits.
 - Notarization flow runs dependency audits + smoke tests before submission.
+- Sparkle 2 is checksum-pinned and embedded by `scripts/build_app.sh`.
+- GitHub releases include a signed `appcast.xml`; installed copies use it to download and install updates in place.
 
 ```bash
 ./scripts/notarize_release.sh
@@ -119,4 +122,5 @@ Optional:
 
 Release artifacts:
 - notarized installer DMG for users
+- signed Sparkle appcast for automatic in-place updates
 - managed Python runtime tarball for downloader support

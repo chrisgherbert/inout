@@ -317,7 +317,7 @@ struct HelpDocumentationView: View {
         HelpTopic(
             id: "updates",
             title: "Install and update",
-            summary: "Install In/Out from its disk image and use the built-in updater for new releases.",
+            summary: "Install In/Out once, then let the built-in updater install new releases in place.",
             symbolName: "arrow.down.app",
             sections: [
                 HelpSection(
@@ -332,11 +332,10 @@ struct HelpDocumentationView: View {
                     title: "Install an update",
                     steps: [
                         "Choose In/Out > Check for Updates. In/Out also checks automatically when it opens.",
-                        "When an update is available, choose Download and Open. The DMG is saved in Downloads and opened automatically.",
-                        "Choose In/Out > Quit In/Out, then drag the updated app onto Applications and choose Replace.",
-                        "Reopen In/Out from Applications."
+                        "When an update is available, choose Install Update.",
+                        "In/Out downloads, installs, and relaunches the new version automatically."
                     ],
-                    note: "Closing the app window does not quit the app. Use Quit In/Out or press Command-Q before replacing it."
+                    note: "Updating from a version installed before in-place updates were introduced may require one final DMG installation."
                 )
             ]
         ),

@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard !PlayheadBenchmarkConfig.shared.enabled else { return }
         Task { @MainActor in
-            AppUpdateChecker.shared.performInitialCheckIfNeeded()
+            AppUpdateChecker.shared.start()
         }
     }
 }
@@ -72,7 +72,7 @@ struct CheckBlackFramesApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
-                    AppUpdateChecker.shared.checkForUpdates(userInitiated: true)
+                    AppUpdateChecker.shared.checkForUpdates()
                 }
             }
 

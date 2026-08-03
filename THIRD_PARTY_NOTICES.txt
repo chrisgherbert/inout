@@ -20,3 +20,16 @@ Core ML model: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml
 Model license: Creative Commons Attribution 4.0 International (CC BY 4.0)
 
 This notice is included for attribution and license tracking.
+
+Sparkle
+-------
+
+Copyright (c) 2006-2013 Andy Matuschak.
+Copyright (c) 2009-2013 Elgato Systems GmbH.
+Copyright (c) 2011-2014 Kornel Lesiński.
+Copyright (c) 2015-2017 Mayur Pawashe.
+Copyright (c) 2014 C.W. Betts.
+Copyright (c) 2014 Petroules Corporation.
+Copyright (c) 2014 Big Nerd Ranch.
+License: MIT
+Source: https://github.com/sparkle-project/Sparkle

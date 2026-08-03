@@ -12,6 +12,8 @@ APP_NAME="In-Out.app"
 APP_PATH="$DIST_DIR/$APP_NAME"
 NOTARIZED_DMG="$DIST_DIR/In-Out-macOS.dmg"
 NOTES_PATH="$DIST_DIR/release-notes.md"
+APPCAST_PATH="$DIST_DIR/appcast.xml"
+SPARKLE_KEY_ACCOUNT="com.bulwark.BulwarkVideoTools"
 
 usage() {
   cat <<USAGE
@@ -147,9 +149,43 @@ Build metadata:
 - CFBundleVersion: $BUILD_NUMBER
 EOF
 
+SPARKLE_DIR="$($ROOT_DIR/scripts/fetch_sparkle.sh)"
+APPCAST_INPUT_DIR="$DIST_DIR/sparkle-appcast-input"
+rm -rf "$APPCAST_INPUT_DIR"
+mkdir -p "$APPCAST_INPUT_DIR"
+cp "$VERSIONED_DMG" "$APPCAST_INPUT_DIR/"
+cp "$NOTES_PATH" "$APPCAST_INPUT_DIR/$(basename "${VERSIONED_DMG%.dmg}").md"
+
+echo "Generating signed Sparkle appcast..."
+"$SPARKLE_DIR/bin/generate_appcast" \
+  --account "$SPARKLE_KEY_ACCOUNT" \
+  --download-url-prefix "https://github.com/chrisgherbert/inout/releases/download/$TAG/" \
+  --link "https://chrisgherbert.github.io/inout/" \
+  --maximum-deltas 0 \
+  --embed-release-notes \
+  -o "$APPCAST_PATH" \
+  "$APPCAST_INPUT_DIR"
+
+xmllint --noout "$APPCAST_PATH"
+if ! grep -q 'sparkle:edSignature=' "$APPCAST_PATH"; then
+  echo "Generated appcast does not contain a Sparkle EdDSA signature."
+  exit 1
+fi
+if ! grep -Fq "releases/download/$TAG/$(basename "$VERSIONED_DMG")" "$APPCAST_PATH"; then
+  echo "Generated appcast does not reference the expected release DMG."
+  exit 1
+fi
+
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo "Release $TAG already exists; uploading updated assets..."
-  gh release upload "$TAG" "$VERSIONED_DMG" "$SHA_PATH" "$RUNTIME_ARCHIVE" "$RUNTIME_SHA_PATH" --clobber
+  gh release upload \
+    "$TAG" \
+    "$VERSIONED_DMG" \
+    "$SHA_PATH" \
+    "$RUNTIME_ARCHIVE" \
+    "$RUNTIME_SHA_PATH" \
+    "$APPCAST_PATH" \
+    --clobber
 else
   CREATE_ARGS=(
     "$TAG"
@@ -157,6 +193,7 @@ else
     "$SHA_PATH"
     "$RUNTIME_ARCHIVE"
     "$RUNTIME_SHA_PATH"
+    "$APPCAST_PATH"
     --title "In/Out $TAG"
     --notes-file "$NOTES_PATH"
   )
@@ -172,3 +209,4 @@ echo "Uploaded asset: $VERSIONED_DMG"
 echo "Checksum file:  $SHA_PATH"
 echo "Runtime asset:  $RUNTIME_ARCHIVE"
 echo "Runtime sha:    $RUNTIME_SHA_PATH"
+echo "Sparkle feed:   $APPCAST_PATH"
