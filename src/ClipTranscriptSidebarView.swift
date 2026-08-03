@@ -182,12 +182,6 @@ struct ClipTranscriptSidebarView: View, Equatable {
         !smartMarkerTabs.isEmpty
     }
 
-    private var activeSmartMarkerSuggestionCount: Int {
-        guard let activeSmartMarkerTabID else { return 0 }
-        return smartMarkerTabs.first(where: { $0.id == activeSmartMarkerTabID })?
-            .displayedResult.suggestions.count ?? 0
-    }
-
     private var showsPlaybackIndicator: Bool {
         true
     }
@@ -339,7 +333,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
                         )
                     ) {
                         Text("Transcript").tag(false)
-                        Text("Suggestions (\(activeSmartMarkerSuggestionCount))").tag(true)
+                        Text("Suggestions").tag(true)
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
