@@ -1,6 +1,46 @@
 import SwiftUI
 import AppKit
 
+enum PreferencesPane: String, CaseIterable, Identifiable {
+    case general = "General"
+    case tools = "Tools"
+    case ai = "AI"
+    case analyze = "Analyze"
+    case clip = "Clip"
+    case audio = "Audio"
+
+    var id: String { rawValue }
+
+    var symbol: String {
+        switch self {
+        case .general: return "gearshape"
+        case .tools: return "wrench.and.screwdriver"
+        case .ai: return "sparkles"
+        case .analyze: return "waveform.path.ecg"
+        case .clip: return "timeline.selection"
+        case .audio: return "waveform"
+        }
+    }
+}
+
+@MainActor
+final class PreferencesNavigator: ObservableObject {
+    static let shared = PreferencesNavigator()
+
+    @Published private(set) var requestedPane: PreferencesPane?
+
+    private init() {}
+
+    func request(_ pane: PreferencesPane) {
+        requestedPane = pane
+    }
+
+    func consume(_ pane: PreferencesPane) {
+        guard requestedPane == pane else { return }
+        requestedPane = nil
+    }
+}
+
 struct PreferencesView: View {
     @ObservedObject var model: WorkspaceViewModel
     @State private var profanityEntry = ""
@@ -12,28 +52,7 @@ struct PreferencesView: View {
     @State private var showsCustomGeminiModelField = false
     @State private var selectedPane: PreferencesPane = .general
     @StateObject private var smartMarkerRecipeStore = SmartMarkerRecipeStore.shared
-
-    private enum PreferencesPane: String, CaseIterable, Identifiable {
-        case general = "General"
-        case tools = "Tools"
-        case ai = "AI"
-        case analyze = "Analyze"
-        case clip = "Clip"
-        case audio = "Audio"
-
-        var id: String { rawValue }
-
-        var symbol: String {
-            switch self {
-            case .general: return "gearshape"
-            case .tools: return "wrench.and.screwdriver"
-            case .ai: return "sparkles"
-            case .analyze: return "waveform.path.ecg"
-            case .clip: return "timeline.selection"
-            case .audio: return "waveform"
-            }
-        }
-    }
+    @StateObject private var navigator = PreferencesNavigator.shared
 
     @ViewBuilder
     private func settingsRow<Control: View>(_ label: String, @ViewBuilder control: () -> Control) -> some View {
@@ -819,6 +838,16 @@ struct PreferencesView: View {
         .frame(width: 760, height: 560)
         .onAppear {
             model.recheckSetupChecks()
+            applyRequestedPane(navigator.requestedPane)
         }
+        .onChange(of: navigator.requestedPane) { _, pane in
+            applyRequestedPane(pane)
+        }
+    }
+
+    private func applyRequestedPane(_ pane: PreferencesPane?) {
+        guard let pane else { return }
+        selectedPane = pane
+        navigator.consume(pane)
     }
 }

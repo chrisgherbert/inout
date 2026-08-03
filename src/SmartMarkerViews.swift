@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 private enum SmartMarkerSetupMode: String, CaseIterable, Identifiable {
-    case freeform = "Freeform"
     case presetTasks = "Preset Tasks"
+    case freeform = "Freeform"
 
     var id: String { rawValue }
 }
@@ -21,7 +21,8 @@ struct SmartMarkerSetupSheet: View {
     @State private var preferNearbyPauses = true
     @State private var adHocPrompt = ""
     @State private var adHocScope: SmartMarkerScope = .entireVideo
-    @State private var setupMode: SmartMarkerSetupMode = .freeform
+    @State private var setupMode: SmartMarkerSetupMode = .presetTasks
+    @Environment(\.openSettings) private var openSettings
 
     private var availabilityMessage: String? {
         SmartMarkerAnalyzer.availabilityMessage(for: providerID)
@@ -115,8 +116,19 @@ struct SmartMarkerSetupSheet: View {
 
     private var presetTasksContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Choose a task")
-                .font(.headline)
+            HStack {
+                Text("Choose a task")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    PreferencesNavigator.shared.request(.ai)
+                    openSettings()
+                } label: {
+                    Label("Manage Tasks…", systemImage: "gearshape")
+                }
+                .buttonStyle(.link)
+                .controlSize(.small)
+            }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
