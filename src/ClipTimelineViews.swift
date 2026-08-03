@@ -15,6 +15,7 @@ private final class ClipToolRuntimeState: ObservableObject {
     var thumbnailStripTask: Task<[TimelineThumbnailTile], Never>?
     var thumbnailStripDebounceTask: Task<Void, Never>?
     var thumbnailStripPrewarmTask: Task<Void, Never>?
+    var thumbnailStripRetryTask: Task<Void, Never>?
     var keyMonitor: Any?
     var flagsMonitor: Any?
     var scrollMonitor: Any?
@@ -48,6 +49,8 @@ private final class ClipToolRuntimeState: ObservableObject {
     var selectionPlaybackEndSeconds: Double?
     var lastThumbnailStripRequestKey: String?
     var lastThumbnailStripPrewarmKey: String?
+    var thumbnailStripRetryRequestKey: String?
+    var thumbnailStripRetryAttempts: [String: Int] = [:]
     var lastThumbnailViewportMidpointSeconds: Double?
     var playerResizeStartHeight: CGFloat?
     var playerResizeStartGlobalY: CGFloat?
@@ -698,8 +701,12 @@ struct ClipToolView: View {
         runtime.thumbnailStripDebounceTask = nil
         runtime.thumbnailStripPrewarmTask?.cancel()
         runtime.thumbnailStripPrewarmTask = nil
+        runtime.thumbnailStripRetryTask?.cancel()
+        runtime.thumbnailStripRetryTask = nil
         runtime.lastThumbnailStripRequestKey = nil
         runtime.lastThumbnailStripPrewarmKey = nil
+        runtime.thumbnailStripRetryRequestKey = nil
+        runtime.thumbnailStripRetryAttempts.removeAll(keepingCapacity: false)
         thumbnailTiles = []
         thumbnailTilesRevision &+= 1
         thumbnailStripImage = nil
@@ -841,6 +848,21 @@ struct ClipToolView: View {
         }
     }
 
+    private func thumbnailTilesMatchingCurrentScale(
+        _ tiles: [TimelineThumbnailTile],
+        requests: [ThumbnailStripRequest]
+    ) -> [TimelineThumbnailTile] {
+        guard let reference = requests.first else { return [] }
+        let referenceDuration = max(0.0001, reference.endSeconds - reference.startSeconds)
+        let expectedPixelsPerSecond = Double(reference.pixelWidth) / referenceDuration
+        return tiles.filter { tile in
+            let tileDuration = max(0.0001, tile.endSeconds - tile.startSeconds)
+            let tilePixelsPerSecond = Double(tile.image.width) / tileDuration
+            let densityDifference = abs(tilePixelsPerSecond - expectedPixelsPerSecond) / max(1, expectedPixelsPerSecond)
+            return tile.image.height == reference.pixelHeight && densityDifference < 0.02
+        }
+    }
+
     private func scheduleThumbnailTilePrewarm(
         requests: [ThumbnailStripRequest],
         anchorRequestKey: String,
@@ -852,7 +874,9 @@ struct ClipToolView: View {
 
         guard !requests.isEmpty else { return }
 
-        let uncachedRequests = requests.filter { model.timelineThumbnailStripImageFromCache(forKey: $0.cacheKey) == nil }
+        let uncachedRequests = requests
+            .filter { model.timelineThumbnailStripImageFromCache(forKey: $0.cacheKey) == nil }
+            .prefix(80)
         guard !uncachedRequests.isEmpty else { return }
 
         runtime.lastThumbnailStripPrewarmKey = anchorRequestKey
@@ -939,8 +963,17 @@ struct ClipToolView: View {
         }
 
         if runtime.lastThumbnailStripRequestKey == tilePlan.requestKey,
-           !thumbnailTiles.isEmpty || isThumbnailStripLoading {
+           isThumbnailStripLoading {
             return
+        }
+
+        if runtime.thumbnailStripRetryRequestKey != tilePlan.requestKey {
+            if let previousRetryKey = runtime.thumbnailStripRetryRequestKey {
+                runtime.thumbnailStripRetryAttempts[previousRetryKey] = nil
+            }
+            runtime.thumbnailStripRetryTask?.cancel()
+            runtime.thumbnailStripRetryTask = nil
+            runtime.thumbnailStripRetryRequestKey = nil
         }
 
         runtime.lastThumbnailStripRequestKey = tilePlan.requestKey
@@ -963,7 +996,17 @@ struct ClipToolView: View {
 
         let allDisplayTilesCached = cachedDisplayTiles.count == tilePlan.display.count
         if allDisplayTilesCached {
+            let finalizedTiles = thumbnailTilesMatchingCurrentScale(
+                mergedCachedDisplayTiles,
+                requests: tilePlan.display
+            )
+            if finalizedTiles.map(\.cacheKey) != thumbnailTiles.map(\.cacheKey) {
+                thumbnailTiles = finalizedTiles
+                thumbnailTilesRevision &+= 1
+            }
             isThumbnailStripLoading = false
+            runtime.thumbnailStripRetryAttempts[tilePlan.requestKey] = nil
+            runtime.thumbnailStripRetryRequestKey = nil
             scheduleThumbnailTilePrewarm(
                 requests: tilePlan.prewarm,
                 anchorRequestKey: tilePlan.requestKey,
@@ -974,6 +1017,9 @@ struct ClipToolView: View {
 
         runtime.thumbnailStripDebounceTask?.cancel()
         runtime.thumbnailStripTask?.cancel()
+        runtime.thumbnailStripPrewarmTask?.cancel()
+        runtime.thumbnailStripPrewarmTask = nil
+        runtime.lastThumbnailStripPrewarmKey = nil
         isThumbnailStripLoading = true
 
         let requests = tilePlan.display
@@ -1052,6 +1098,39 @@ struct ClipToolView: View {
             thumbnailStripSourceVisibleDurationSeconds = 0
             thumbnailStripSourceViewportWidth = 0
             isThumbnailStripLoading = false
+
+            let availableKeys = Set(thumbnailTiles.map(\.cacheKey))
+            let hasMissingDisplayTiles = requests.contains { !availableKeys.contains($0.cacheKey) }
+            if hasMissingDisplayTiles {
+                let retryAttempt = runtime.thumbnailStripRetryAttempts[requestKey, default: 0]
+                if retryAttempt < 2 {
+                    runtime.thumbnailStripRetryAttempts[requestKey] = retryAttempt + 1
+                    runtime.thumbnailStripRetryRequestKey = requestKey
+                    runtime.thumbnailStripRetryTask?.cancel()
+                    runtime.thumbnailStripRetryTask = Task { @MainActor in
+                        let delay = UInt64(250_000_000 * (retryAttempt + 1))
+                        try? await Task.sleep(nanoseconds: delay)
+                        guard !Task.isCancelled,
+                              runtime.lastThumbnailStripRequestKey == requestKey else { return }
+                        runtime.lastThumbnailStripRequestKey = nil
+                        scheduleThumbnailStripGeneration(immediate: true)
+                    }
+                } else {
+                    runtime.lastThumbnailStripRequestKey = nil
+                    runtime.thumbnailStripRetryRequestKey = nil
+                    runtime.thumbnailStripRetryAttempts[requestKey] = nil
+                }
+                return
+            }
+
+            runtime.thumbnailStripRetryAttempts[requestKey] = nil
+            runtime.thumbnailStripRetryRequestKey = nil
+
+            let finalizedTiles = thumbnailTilesMatchingCurrentScale(thumbnailTiles, requests: requests)
+            if finalizedTiles.map(\.cacheKey) != thumbnailTiles.map(\.cacheKey) {
+                thumbnailTiles = finalizedTiles
+                thumbnailTilesRevision &+= 1
+            }
 
             scheduleThumbnailTilePrewarm(
                 requests: tilePlan.prewarm,
@@ -3035,6 +3114,8 @@ struct ClipToolView: View {
             runtime.waveformTask?.cancel()
             runtime.thumbnailStripTask?.cancel()
             runtime.thumbnailStripDebounceTask?.cancel()
+            runtime.thumbnailStripPrewarmTask?.cancel()
+            runtime.thumbnailStripRetryTask?.cancel()
             stopManualViewportPan()
             stopClipBoundaryVisualSmoothing()
             isClipBoundaryDragActive = false

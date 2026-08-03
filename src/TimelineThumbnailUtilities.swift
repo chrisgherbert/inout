@@ -70,15 +70,15 @@ private func makeThumbnailGenerator(
     return generator
 }
 
-private actor AsyncThumbnailCollectionState {
-    private let completion: @Sendable ([CGImage?]) -> Void
+private final class AsyncThumbnailCollectionState: @unchecked Sendable {
+    private let lock = NSLock()
     private var images: [CGImage?]
     private var remaining: Int
     private var indexMap: [String: [Int]]
     private var completed = false
+    private var continuation: CheckedContinuation<[CGImage?], Never>?
 
-    init(requestTimes: [CMTime], completion: @escaping @Sendable ([CGImage?]) -> Void) {
-        self.completion = completion
+    init(requestTimes: [CMTime]) {
         self.images = Array(repeating: nil, count: requestTimes.count)
         self.remaining = requestTimes.count
         var builtIndexMap: [String: [Int]] = [:]
@@ -89,8 +89,24 @@ private actor AsyncThumbnailCollectionState {
         self.indexMap = builtIndexMap
     }
 
+    func installContinuation(_ continuation: CheckedContinuation<[CGImage?], Never>) {
+        lock.lock()
+        if completed {
+            let result = images
+            lock.unlock()
+            continuation.resume(returning: result)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
     func record(requestedTime: CMTime, image: CGImage?) {
-        guard !completed else { return }
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            return
+        }
 
         let key = timelineThumbnailRequestTimeKey(requestedTime)
         if var indices = indexMap[key], !indices.isEmpty {
@@ -102,8 +118,28 @@ private actor AsyncThumbnailCollectionState {
         remaining -= 1
         if remaining <= 0 {
             completed = true
-            completion(images)
+            let continuation = self.continuation
+            self.continuation = nil
+            let result = images
+            lock.unlock()
+            continuation?.resume(returning: result)
+            return
         }
+        lock.unlock()
+    }
+
+    func finish() {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            return
+        }
+        completed = true
+        let continuation = self.continuation
+        self.continuation = nil
+        let result = images
+        lock.unlock()
+        continuation?.resume(returning: result)
     }
 }
 
@@ -128,33 +164,25 @@ private func copyThumbnailImagesAsynchronously(
     shouldCancel: @escaping @Sendable () -> Bool
 ) async -> [CGImage?] {
     guard !requestTimes.isEmpty else { return [] }
+    let requestedValues = requestTimes.map { NSValue(time: $0) }
+    let state = AsyncThumbnailCollectionState(requestTimes: requestTimes)
 
-    let cancellationWatcher = Task.detached(priority: .utility) {
-        while !Task.isCancelled {
+    return await withTaskCancellationHandler {
+        await withCheckedContinuation { continuation in
+            state.installContinuation(continuation)
             if shouldCancel() {
                 generator.cancelAllCGImageGeneration()
-                break
+                state.finish()
+                return
             }
-            try? await Task.sleep(nanoseconds: 30_000_000)
-        }
-    }
 
-    defer {
-        cancellationWatcher.cancel()
-    }
-
-    let requestedValues = requestTimes.map { NSValue(time: $0) }
-
-    return await withCheckedContinuation { continuation in
-        let state = AsyncThumbnailCollectionState(requestTimes: requestTimes) { images in
-            continuation.resume(returning: images)
-        }
-
-        generator.generateCGImagesAsynchronously(forTimes: requestedValues) { requestedTime, image, _, _, _ in
-            Task {
-                await state.record(requestedTime: requestedTime, image: image)
+            generator.generateCGImagesAsynchronously(forTimes: requestedValues) { requestedTime, image, _, _, _ in
+                state.record(requestedTime: requestedTime, image: image)
             }
         }
+    } onCancel: {
+        generator.cancelAllCGImageGeneration()
+        state.finish()
     }
 }
 
