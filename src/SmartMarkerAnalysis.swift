@@ -158,6 +158,7 @@ struct SmartMarkerCustomRecipe: Identifiable, Codable, Equatable, Sendable {
 enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
     case builtIn(SmartMarkerRecipe)
     case custom(SmartMarkerCustomRecipe)
+    case adHoc(String)
 
     static let topicChanges = SmartMarkerAnalysisRecipe.builtIn(.topicChanges)
     static let highlights = SmartMarkerAnalysisRecipe.builtIn(.highlights)
@@ -169,6 +170,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         switch self {
         case .builtIn(let recipe): return "built-in:\(recipe.rawValue)"
         case .custom(let recipe): return "custom:\(recipe.id.uuidString)"
+        case .adHoc(let prompt): return "ad-hoc:\(prompt)"
         }
     }
 
@@ -181,6 +183,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         switch self {
         case .builtIn(let recipe): return recipe.title
         case .custom(let recipe): return recipe.name
+        case .adHoc: return "Ask AI"
         }
     }
 
@@ -188,6 +191,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         switch self {
         case .builtIn(let recipe): return recipe.description
         case .custom(let recipe): return recipe.summary
+        case .adHoc(let prompt): return prompt
         }
     }
 
@@ -195,6 +199,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         switch self {
         case .builtIn(let recipe): return recipe.outputKind
         case .custom(let recipe): return recipe.outputKind
+        case .adHoc: return .text
         }
     }
 
@@ -202,6 +207,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         switch self {
         case .builtIn(let recipe): return recipe.markerCategory
         case .custom(let recipe): return recipe.name
+        case .adHoc: return "Ask AI"
         }
     }
 
@@ -209,6 +215,10 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
     var producesRanges: Bool { outputKind == .ranges }
     var isAdBreaks: Bool { builtInRecipe == .adBreaks }
     var isYouTubeChapters: Bool { builtInRecipe == .youtubeChapters }
+    var isAdHoc: Bool {
+        if case .adHoc = self { return true }
+        return false
+    }
 
     var textMode: SmartMarkerTextMode? {
         switch self {
@@ -217,6 +227,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         case .custom(let recipe):
             guard recipe.outputKind == .text else { return nil }
             return recipe.textMode ?? .document
+        case .adHoc: return .document
         }
     }
 
@@ -227,6 +238,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         case .builtIn(.youtubeChapters): return .entireVideo
         case .builtIn: return .selectedClip
         case .custom(let recipe): return recipe.defaultScope
+        case .adHoc: return .entireVideo
         }
     }
 
@@ -234,6 +246,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         switch self {
         case .builtIn: return .standard
         case .custom(let recipe): return recipe.defaultDensity
+        case .adHoc: return .standard
         }
     }
 
@@ -242,12 +255,15 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         case .builtIn(.youtubeChapters): return .timelineCoverage
         case .builtIn: return .bestResults
         case .custom(let recipe): return recipe.selectionStrategy
+        case .adHoc: return .bestResults
         }
     }
 
     var maximumResults: Int? {
-        guard case .custom(let recipe) = self else { return nil }
-        return recipe.maximumResults
+        switch self {
+        case .custom(let recipe): return recipe.maximumResults
+        case .builtIn, .adHoc: return nil
+        }
     }
 
     var prefersNearbyPauses: Bool {
@@ -255,6 +271,7 @@ enum SmartMarkerAnalysisRecipe: Identifiable, Equatable, Sendable {
         case .builtIn(.adBreaks): return true
         case .builtIn: return false
         case .custom(let recipe): return recipe.prefersNearbyPauses
+        case .adHoc: return false
         }
     }
 }

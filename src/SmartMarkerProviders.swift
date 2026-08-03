@@ -649,6 +649,9 @@ enum SmartMarkerProviderPrompt {
         if case .custom(let customRecipe) = recipe {
             return customRecipe.instructions
         }
+        if case .adHoc(let prompt) = recipe {
+            return prompt
+        }
         switch recipe.builtInRecipe {
         case .topicChanges?:
             return "Find genuine changes in subject or conversational direction. Do not mark routine sentence boundaries."

@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+private enum SmartMarkerSetupMode: String, CaseIterable, Identifiable {
+    case freeform = "Freeform"
+    case presetTasks = "Preset Tasks"
+
+    var id: String { rawValue }
+}
+
 struct SmartMarkerSetupSheet: View {
     let canUseSelectedClip: Bool
     let onCancel: () -> Void
@@ -12,6 +19,9 @@ struct SmartMarkerSetupSheet: View {
     @State private var scope: SmartMarkerScope = .selectedClip
     @State private var density: SmartMarkerDensity = .standard
     @State private var preferNearbyPauses = true
+    @State private var adHocPrompt = ""
+    @State private var adHocScope: SmartMarkerScope = .entireVideo
+    @State private var setupMode: SmartMarkerSetupMode = .freeform
 
     private var availabilityMessage: String? {
         SmartMarkerAnalyzer.availabilityMessage(for: providerID)
@@ -36,66 +46,115 @@ struct SmartMarkerSetupSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("AI Suggestions")
-                    .font(.title2.weight(.semibold))
-                Text("Use \(providerID.title) to analyze the transcript.")
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("AI Suggestions")
+                .font(.title2.weight(.semibold))
+
+            Picker("Suggestion Mode", selection: $setupMode) {
+                ForEach(SmartMarkerSetupMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(maxWidth: .infinity)
+
+            if setupMode == .freeform {
+                freeformContent
+            } else {
+                presetTasksContent
             }
 
-            VStack(alignment: .leading, spacing: 9) {
-                Text("What should In/Out find?")
-                    .font(.headline)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        if !visibleBuiltInRecipes.isEmpty {
-                            Text("Built In")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            ForEach(visibleBuiltInRecipes) {
-                                recipeOption(.builtIn($0))
-                            }
-                        }
-                        if !recipeStore.customRecipes.isEmpty {
-                            Text("Custom")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 4)
-                            ForEach(recipeStore.customRecipes) {
-                                recipeOption(.custom($0))
-                            }
-                        }
-                        if availableRecipes.isEmpty {
-                            Label(
-                                "No analysis options are visible. Show a built-in option or add a custom analysis in Settings.",
-                                systemImage: "eye.slash"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        }
+            Divider()
+            providerFooter
+            actionButtons
+        }
+        .padding(22)
+        .frame(width: 520)
+        .onAppear {
+            if !canUseSelectedClip {
+                scope = .entireVideo
+                adHocScope = .entireVideo
+            }
+            ensureRecipeSelection()
+        }
+        .onChange(of: recipeStore.hiddenBuiltInRecipes) { _, _ in
+            ensureRecipeSelection()
+        }
+        .onChange(of: recipeStore.customRecipes) { _, _ in
+            ensureRecipeSelection()
+        }
+    }
+
+    private var freeformContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Ask a question or request text from this transcript")
+                .font(.headline)
+
+            TextField(
+                "Summarize the strongest arguments in this video",
+                text: $adHocPrompt,
+                axis: .vertical
+            )
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(4...8)
+            .onSubmit(startAdHocAnalysis)
+
+            LabeledContent("Scope") {
+                Picker("Freeform Scope", selection: $adHocScope) {
+                    ForEach(SmartMarkerScope.allCases) { option in
+                        Text(option.title).tag(option)
                     }
                 }
-                .frame(maxHeight: 300)
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 240)
             }
+        }
+    }
+
+    private var presetTasksContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Choose a task")
+                .font(.headline)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if !visibleBuiltInRecipes.isEmpty {
+                        Text("Built In")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(visibleBuiltInRecipes) {
+                            recipeOption(.builtIn($0))
+                        }
+                    }
+                    if !recipeStore.customRecipes.isEmpty {
+                        Text("Custom")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        ForEach(recipeStore.customRecipes) {
+                            recipeOption(.custom($0))
+                        }
+                    }
+                    if availableRecipes.isEmpty {
+                        Label(
+                            "No tasks are visible. Show a built-in task or add a custom task in Settings.",
+                            systemImage: "eye.slash"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .frame(maxHeight: 300)
 
             Divider()
 
             VStack(alignment: .leading, spacing: 12) {
-                LabeledContent("AI provider") {
-                    Picker("AI Provider", selection: $providerID) {
-                        ForEach(SmartMarkerProviderID.allCases) { provider in
-                            Text(provider.title).tag(provider)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 240)
-                }
-
                 LabeledContent("Scope") {
-                    Picker("Scope", selection: $scope) {
+                    Picker("Task Scope", selection: $scope) {
                         ForEach(SmartMarkerScope.allCases) { option in
                             Text(option.title).tag(option)
                         }
@@ -123,67 +182,134 @@ struct SmartMarkerSetupSheet: View {
                     Toggle("Prefer nearby audio pauses", isOn: $preferNearbyPauses)
                 }
             }
+        }
+    }
 
-            if let availabilityMessage {
-                Label(availabilityMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Label(
-                    providerID == .appleIntelligence
-                        ? "Analysis runs privately on this Mac."
-                        : providerID.detail,
-                    systemImage: providerID == .appleIntelligence ? "lock.fill" : "network"
-                )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Button(
-                    recipe.isYouTubeChapters
-                        ? "Create Chapters"
-                        : (recipe.isDocumentText ? "Generate Text" : "Generate Suggestions")
-                ) {
-                    SmartMarkerPreferences.providerID = providerID
-                    onStart(
-                        SmartMarkerAnalysisConfiguration(
-                            providerID: providerID,
-                            modelIdentifier: SmartMarkerPreferences.model(for: providerID),
-                            recipe: recipe,
-                            scope: scope,
-                            density: density,
-                            preferNearbyPauses: preferNearbyPauses
-                        )
-                    )
+    private var providerFooter: some View {
+        HStack(spacing: 8) {
+            Label {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(providerSummary)
+                    if let availabilityMessage {
+                        Text(availabilityMessage)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+            } icon: {
+                Image(systemName: availabilityMessage == nil ? providerIcon : "exclamationmark.triangle.fill")
+            }
+            .font(.caption)
+            .foregroundStyle(availabilityMessage == nil ? Color.secondary : Color(nsColor: .systemOrange))
+            .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 8)
+
+            Menu("Change…") {
+                ForEach(SmartMarkerProviderID.allCases) { provider in
+                    Button {
+                        providerID = provider
+                    } label: {
+                        if provider == providerID {
+                            Label(provider.title, systemImage: "checkmark")
+                        } else {
+                            Text(provider.title)
+                        }
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack {
+            Spacer()
+            Button("Cancel", action: onCancel)
+                .keyboardShortcut(.cancelAction)
+            Button(primaryActionTitle, action: performPrimaryAction)
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(
-                    !isSelectedRecipeAvailable ||
-                        availabilityMessage != nil ||
-                        (scope == .selectedClip && !canUseSelectedClip)
-                )
-            }
+                .disabled(!canPerformPrimaryAction)
         }
-        .padding(22)
-        .frame(width: 520)
-        .onAppear {
-            if !canUseSelectedClip {
-                scope = .entireVideo
-            }
-            ensureRecipeSelection()
+    }
+
+    private var providerSummary: String {
+        guard let model = SmartMarkerPreferences.model(for: providerID), !model.isEmpty else {
+            return "Using \(providerID.title)"
         }
-        .onChange(of: recipeStore.hiddenBuiltInRecipes) { _, _ in
-            ensureRecipeSelection()
+        return "Using \(providerID.title) · \(model)"
+    }
+
+    private var providerIcon: String {
+        providerID == .appleIntelligence ? "lock.fill" : "network"
+    }
+
+    private var primaryActionTitle: String {
+        if setupMode == .freeform {
+            return "Ask AI"
         }
-        .onChange(of: recipeStore.customRecipes) { _, _ in
-            ensureRecipeSelection()
+        if recipe.isYouTubeChapters {
+            return "Create Chapters"
         }
+        return recipe.isDocumentText ? "Generate Text" : "Generate Suggestions"
+    }
+
+    private var canPerformPrimaryAction: Bool {
+        if setupMode == .freeform {
+            return canStartAdHocAnalysis
+        }
+        return isSelectedRecipeAvailable &&
+            availabilityMessage == nil &&
+            (scope != .selectedClip || canUseSelectedClip)
+    }
+
+    private func performPrimaryAction() {
+        if setupMode == .freeform {
+            startAdHocAnalysis()
+        } else {
+            startPresetTask()
+        }
+    }
+
+    private func startPresetTask() {
+        guard canPerformPrimaryAction else { return }
+        SmartMarkerPreferences.providerID = providerID
+        onStart(
+            SmartMarkerAnalysisConfiguration(
+                providerID: providerID,
+                modelIdentifier: SmartMarkerPreferences.model(for: providerID),
+                recipe: recipe,
+                scope: scope,
+                density: density,
+                preferNearbyPauses: preferNearbyPauses
+            )
+        )
+    }
+
+    private var normalizedAdHocPrompt: String {
+        adHocPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canStartAdHocAnalysis: Bool {
+        !normalizedAdHocPrompt.isEmpty &&
+            availabilityMessage == nil &&
+            (adHocScope != .selectedClip || canUseSelectedClip)
+    }
+
+    private func startAdHocAnalysis() {
+        guard canStartAdHocAnalysis else { return }
+        SmartMarkerPreferences.providerID = providerID
+        onStart(
+            SmartMarkerAnalysisConfiguration(
+                providerID: providerID,
+                modelIdentifier: SmartMarkerPreferences.model(for: providerID),
+                recipe: .adHoc(normalizedAdHocPrompt),
+                scope: adHocScope,
+                density: .standard,
+                preferNearbyPauses: false
+            )
+        )
     }
 
     private func recipeOption(_ option: SmartMarkerAnalysisRecipe) -> some View {
@@ -462,7 +588,7 @@ struct SmartMarkerReviewView: View {
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(tab.configuration.recipe.title)
+                    Text(tab.title)
                         .font(.headline)
                     if tabs.count == 1 {
                         Button {
@@ -481,6 +607,13 @@ struct SmartMarkerReviewView: View {
                 Text("\(resultCount) · \(tab.configuration.providerID.title)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                if tab.configuration.recipe.isAdHoc {
+                    Text(tab.configuration.recipe.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .help(tab.configuration.recipe.description)
+                }
             }
 
             Spacer(minLength: 12)

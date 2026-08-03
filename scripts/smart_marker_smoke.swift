@@ -102,6 +102,19 @@ struct SmartMarkerSmokeTest {
             SmartMarkerProviderPrompt.task(for: customAnalysisRecipe) ==
                 customRecipe.instructions
         )
+        let adHocPrompt = "Summarize the strongest arguments and unresolved questions."
+        let adHocRecipe = SmartMarkerAnalysisRecipe.adHoc(adHocPrompt)
+        precondition(adHocRecipe.title == "Ask AI")
+        precondition(adHocRecipe.outputKind == .text)
+        precondition(adHocRecipe.isDocumentText)
+        precondition(adHocRecipe.defaultScope == .entireVideo)
+        precondition(SmartMarkerProviderPrompt.task(for: adHocRecipe) == adHocPrompt)
+        precondition(
+            SmartMarkerProviderPrompt.documentPrompt(
+                transcript: "[0] Transcript text.",
+                recipe: adHocRecipe
+            ).contains(adHocPrompt)
+        )
         var descriptionRecipe = SmartMarkerCustomRecipe.newRecipe()
         precondition(descriptionRecipe.name.isEmpty)
         precondition(descriptionRecipe.summary.isEmpty)
