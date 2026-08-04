@@ -153,6 +153,24 @@ struct CheckBlackFramesApp: App {
                 }
                 .appKeyboardShortcut(AppShortcutCatalog.openMedia)
 
+                Menu("Open Recent Transcript") {
+                    if let entries = focusedModel?.transcriptHistoryEntries, !entries.isEmpty {
+                        ForEach(entries.prefix(10)) { entry in
+                            Button {
+                                focusedModel?.openTranscriptHistoryEntry(entry)
+                            } label: {
+                                Label(
+                                    entry.fileName,
+                                    systemImage: entry.fileIsAvailable ? "doc.text" : "questionmark.folder"
+                                )
+                            }
+                        }
+                    } else {
+                        Text("No Saved Transcripts")
+                    }
+                }
+                .disabled(focusedModel?.transcriptHistoryEntries.isEmpty != false)
+
                 Button {
                     focusedModel?.presentURLImportSheet()
                 } label: {

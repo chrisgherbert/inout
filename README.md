@@ -83,6 +83,7 @@ Focused transcript export validation:
 
 ```bash
 ./scripts/transcript_export_smoke.sh
+./scripts/transcript_library_smoke.sh
 ./scripts/sparkle_smoke.sh
 ```
 

@@ -153,6 +153,34 @@ struct PreferencesView: View {
             }
             Divider()
 
+            settingsSection("Transcript History") {
+                settingsRow("Keep transcripts") {
+                    valueMenuPicker("Keep Transcripts", selection: $model.transcriptRetentionPolicy) {
+                        ForEach(TranscriptRetentionPolicy.allCases) { policy in
+                            Text(policy.displayName).tag(policy)
+                        }
+                    }
+                }
+
+                settingsRow("Storage") {
+                    HStack(spacing: 10) {
+                        Text(formatFileSize(model.transcriptHistoryStorageBytes))
+                            .font(.system(.body, design: .monospaced))
+                        Button("Clear History…") {
+                            model.clearTranscriptHistory()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(model.transcriptHistoryEntries.isEmpty)
+                    }
+                }
+
+                Text("Transcripts are stored locally. Original media files are never copied into In/Out’s storage. Unpinned history is limited to 50 transcripts and 500 MB.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Divider()
+
             settingsSection("Estimated Size Badge") {
                 settingsRow("Warning threshold") {
                     Stepper(value: $model.estimatedSizeWarningThresholdGB, in: 0.04...20.0, step: 0.01) {

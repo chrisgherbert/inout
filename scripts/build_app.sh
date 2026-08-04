@@ -376,6 +376,7 @@ swiftc \
   -framework Foundation \
   -framework Security \
   -framework Sparkle \
+  -lsqlite3 \
   -Xlinker -rpath \
   -Xlinker @executable_path/../Frameworks \
   -Xlinker -weak_framework \

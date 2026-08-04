@@ -2887,6 +2887,8 @@ struct ClipToolView: View {
                 get: { model.urlDownloadBrowserCookiesSource },
                 set: { model.urlDownloadBrowserCookiesSource = $0 }
             ),
+            recentTranscripts: model.transcriptHistoryEntries,
+            transcriptHistoryStorageBytes: model.transcriptHistoryStorageBytes,
             reduceTransparency: reduceTransparency,
             isURLDownloadEnabled: model.canRequestURLDownload,
             onChooseFile: {
@@ -2909,8 +2911,26 @@ struct ClipToolView: View {
             },
             onHandleDrop: { providers in
                 model.handleDrop(providers: providers)
+            },
+            onOpenRecentTranscript: { entry in
+                model.openTranscriptHistoryEntry(entry)
+            },
+            onShowRecentTranscriptInFinder: { entry in
+                model.showTranscriptHistoryEntryInFinder(entry)
+            },
+            onLocateRecentTranscript: { entry in
+                model.locateTranscriptHistoryEntry(entry)
+            },
+            onToggleRecentTranscriptPin: { entry in
+                model.setTranscriptHistoryEntryPinned(entry, pinned: !entry.isPinned)
+            },
+            onRemoveRecentTranscript: { entry in
+                model.removeTranscriptHistoryEntry(entry)
             }
         )
+        .onAppear {
+            model.refreshTranscriptHistory()
+        }
     }
 
     private var clipboardURLString: String? {

@@ -259,6 +259,8 @@ struct ClipEmptySourceView: View {
     @Binding var customURLDownloadDirectoryPath: String
     @Binding var urlDownloadAuthenticationMode: URLDownloadAuthenticationMode
     @Binding var urlDownloadBrowserCookiesSource: URLDownloadBrowserCookiesSource
+    let recentTranscripts: [TranscriptLibraryEntry]
+    let transcriptHistoryStorageBytes: Int64
 
     let reduceTransparency: Bool
     let isURLDownloadEnabled: Bool
@@ -266,6 +268,11 @@ struct ClipEmptySourceView: View {
     let onDownload: () -> Void
     let onChooseCustomFolder: () -> Void
     let onHandleDrop: ([NSItemProvider]) -> Bool
+    let onOpenRecentTranscript: (TranscriptLibraryEntry) -> Void
+    let onShowRecentTranscriptInFinder: (TranscriptLibraryEntry) -> Void
+    let onLocateRecentTranscript: (TranscriptLibraryEntry) -> Void
+    let onToggleRecentTranscriptPin: (TranscriptLibraryEntry) -> Void
+    let onRemoveRecentTranscript: (TranscriptLibraryEntry) -> Void
 
     var body: some View {
         VStack(alignment: .center, spacing: 22) {
@@ -337,10 +344,128 @@ struct ClipEmptySourceView: View {
                 onChooseCustomFolder: onChooseCustomFolder
             )
             .frame(maxWidth: .infinity)
+
+            if !recentTranscripts.isEmpty {
+                RecentTranscriptHistoryView(
+                    entries: recentTranscripts,
+                    storageBytes: transcriptHistoryStorageBytes,
+                    onOpen: onOpenRecentTranscript,
+                    onShowInFinder: onShowRecentTranscriptInFinder,
+                    onLocate: onLocateRecentTranscript,
+                    onTogglePin: onToggleRecentTranscriptPin,
+                    onRemove: onRemoveRecentTranscript
+                )
+            }
         }
         .frame(maxWidth: 980)
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
+private struct RecentTranscriptHistoryView: View {
+    let entries: [TranscriptLibraryEntry]
+    let storageBytes: Int64
+    let onOpen: (TranscriptLibraryEntry) -> Void
+    let onShowInFinder: (TranscriptLibraryEntry) -> Void
+    let onLocate: (TranscriptLibraryEntry) -> Void
+    let onTogglePin: (TranscriptLibraryEntry) -> Void
+    let onRemove: (TranscriptLibraryEntry) -> Void
+
+    private func accessedDescription(for date: Date) -> String {
+        if Calendar.current.isDateInToday(date) { return "Today" }
+        if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Recent Transcripts")
+                    .font(.headline)
+                Spacer()
+                Text("\(formatFileSize(storageBytes)) stored locally")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(entries.prefix(8).enumerated()), id: \.element.id) { index, entry in
+                    if index > 0 { Divider() }
+                    recentTranscriptRow(entry)
+                }
+            }
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+            )
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func recentTranscriptRow(_ entry: TranscriptLibraryEntry) -> some View {
+        Button {
+            onOpen(entry)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: entry.fileIsAvailable ? "doc.text" : "questionmark.folder")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(entry.fileIsAvailable ? Color.accentColor : Color.secondary)
+                    .frame(width: 22)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.fileName)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(entry.fileIsAvailable ? accessedDescription(for: entry.lastAccessedAt) : "File Not Found")
+                        Text("•")
+                        Text(formatSeconds(entry.duration))
+                        Text("•")
+                        Text("\(entry.segmentCount) segments")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(entry.fileIsAvailable ? Color.secondary : Color.orange)
+                }
+
+                Spacer(minLength: 8)
+
+                if entry.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(entry.fileIsAvailable ? "Open" : "Locate…")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(entry.isPinned ? "Unpin" : "Pin") {
+                onTogglePin(entry)
+            }
+            if entry.fileIsAvailable {
+                Button("Show in Finder") {
+                    onShowInFinder(entry)
+                }
+            } else {
+                Button("Locate…") {
+                    onLocate(entry)
+                }
+            }
+            Divider()
+            Button("Remove from History", role: .destructive) {
+                onRemove(entry)
+            }
+        }
     }
 }
 

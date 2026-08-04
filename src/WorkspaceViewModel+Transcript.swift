@@ -227,6 +227,7 @@ extension WorkspaceViewModel {
     func generateTranscript() {
         guard let url = sourceURL else { return }
         guard !hasCachedTranscript else { return }
+        guard !isCheckingTranscriptLibrary else { return }
         guard hasAudioTrack else {
             transcriptStatusText = "No audio track available for transcript."
             return
@@ -466,6 +467,7 @@ extension WorkspaceViewModel {
         }
         analyzeStatusText = transcriptStatusText
         uiMessage = transcriptStatusText
+        saveTranscriptToLibrary(transcript)
     }
 
     func clearTranscriptGenerationState(statusText: String, analyzeStatus: String? = nil) {

@@ -159,6 +159,17 @@ struct HelpDocumentationView: View {
                     note: "Wording and timing can move slightly while transcription is still in progress."
                 ),
                 HelpSection(
+                    title: "Reopen saved transcripts",
+                    paragraphs: [
+                        "Completed transcripts are stored locally without copying the original media. Opening the same unchanged file restores its transcript automatically."
+                    ],
+                    bullets: [
+                        "Use Recent Transcripts on the opening screen or File > Open Recent Transcript to reopen media with saved transcript data.",
+                        "Pin an entry to prevent automatic removal. Missing files can be located again from the entry’s contextual menu.",
+                        "Settings > General controls transcript retention and provides Clear History. Modified media is treated as a different file and is transcribed again."
+                    ]
+                ),
+                HelpSection(
                     title: "Read and navigate",
                     bullets: [
                         "Use View to switch between Compact Lines and Paragraphs, show or hide timecodes, and change text size.",
@@ -242,7 +253,7 @@ struct HelpDocumentationView: View {
                         "Detect black frames finds sustained sections where most of the image is black.",
                         "Detect possible bad edits checks for brief visual interruptions, suspiciously short shots, frozen video, abrupt audio discontinuities, clipped audio at edit points, timing gaps, decode problems, and mismatched stream endings.",
                         "Detect silent audio gaps finds silence longer than the duration shown beside the option.",
-                        "Detect profanity uses Whisper transcription to locate potentially profane words."
+                        "Detect profanity uses the media transcript to locate potentially profane words."
                     ]
                 ),
                 HelpSection(

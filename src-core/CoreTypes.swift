@@ -111,7 +111,7 @@ public struct TranscriptWordTiming: Sendable {
     }
 }
 
-public struct TranscriptSegment: Identifiable {
+public struct TranscriptSegment: Identifiable, Sendable {
     public let id: UUID
     public let start: Double
     public let end: Double

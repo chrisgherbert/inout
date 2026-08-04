@@ -491,9 +491,7 @@ extension WorkspaceViewModel {
             current.status = .done
             analysis = current
             if includedProfanity, let transcript = output.transcriptSegments {
-                transcriptSegments = transcript
-                hasCachedTranscript = true
-                transcriptStatusText = transcript.isEmpty ? "Transcript generated (no speech detected)." : "Transcript generated (\(transcript.count) segment(s))."
+                cacheGeneratedTranscript(transcript)
             }
             if current.segments.isEmpty && current.badEditIssues.isEmpty && current.silentSegments.isEmpty && current.profanityHits.isEmpty {
                 var noneParts: [String] = []

@@ -109,6 +109,8 @@ if [[ "$SKIP_SMOKE" -eq 0 ]]; then
   "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
   echo "Running Sparkle updater smoke test..."
   "$ROOT_DIR/scripts/sparkle_smoke.sh" "$APP_PATH"
+  echo "Running transcript library smoke test..."
+  "$ROOT_DIR/scripts/transcript_library_smoke.sh"
 fi
 
 echo "Checking signing identity availability..."

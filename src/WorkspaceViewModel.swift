@@ -63,6 +63,7 @@ final class WorkspaceViewModel: ObservableObject {
         static let transcriptDisplayMode = "prefs.transcriptDisplayMode"
         static let transcriptShowsTimecodes = "prefs.transcriptShowsTimecodes"
         static let transcriptTextSize = "prefs.transcriptTextSize"
+        static let transcriptRetentionPolicy = "prefs.transcriptRetentionPolicy"
     }
 
     @Published var selectedTool: WorkspaceTool = .clip
@@ -88,6 +89,15 @@ final class WorkspaceViewModel: ObservableObject {
     }
     @Published var hasCachedTranscript = false {
         didSet { sourcePresentation.hasCachedTranscript = hasCachedTranscript }
+    }
+    @Published var isCheckingTranscriptLibrary = false
+    @Published var transcriptHistoryEntries: [TranscriptLibraryEntry] = []
+    @Published var transcriptHistoryStorageBytes: Int64 = 0
+    @Published var transcriptRetentionPolicy: TranscriptRetentionPolicy = .ninetyDays {
+        didSet {
+            UserDefaults.standard.set(transcriptRetentionPolicy.rawValue, forKey: DefaultsKey.transcriptRetentionPolicy)
+            refreshTranscriptHistory()
+        }
     }
     @Published var isGeneratingTranscript = false {
         didSet { sourcePresentation.isGeneratingTranscript = isGeneratingTranscript }
@@ -440,6 +450,8 @@ final class WorkspaceViewModel: ObservableObject {
     var clipBoundaryHighlightClearTask: Task<Void, Never>?
     var transcriptPreviewFlushTask: Task<Void, Never>?
     var benchmarkTranscriptStressTask: Task<Void, Never>?
+    var transcriptLibraryRestoreTask: Task<Void, Never>?
+    var transcriptLibrarySaveTask: Task<Void, Never>?
     var transcriptGenerationRelay: TranscriptGenerationRelay?
     let cancelFlag = CancellationFlag()
     var pendingTranscriptPreviewSegments: [TranscriptSegment] = []
@@ -533,6 +545,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         loadPreferences()
+        refreshTranscriptHistory()
         refreshExternalToolAvailabilityCache()
         refreshDownloaderStatus()
         if let mediaPath = Self.commandLineMediaPath() {
@@ -559,6 +572,8 @@ final class WorkspaceViewModel: ObservableObject {
         clipBoundaryHighlightClearTask?.cancel()
         transcriptPreviewFlushTask?.cancel()
         benchmarkTranscriptStressTask?.cancel()
+        transcriptLibraryRestoreTask?.cancel()
+        transcriptLibrarySaveTask?.cancel()
     }
 
     private func updateDockProgressIndicator() {
@@ -722,6 +737,10 @@ final class WorkspaceViewModel: ObservableObject {
         if let rawTranscriptTextSize = defaults.string(forKey: DefaultsKey.transcriptTextSize),
            let size = TranscriptTextSize(rawValue: rawTranscriptTextSize) {
             transcriptTextSize = size
+        }
+        if let rawRetention = defaults.string(forKey: DefaultsKey.transcriptRetentionPolicy),
+           let retention = TranscriptRetentionPolicy(rawValue: rawRetention) {
+            transcriptRetentionPolicy = retention
         }
 
         if let rawCaptionStyle = defaults.string(forKey: DefaultsKey.burnInCaptionStyle),
@@ -931,6 +950,7 @@ final class WorkspaceViewModel: ObservableObject {
             && !isAnalyzing
             && !isExporting
             && !isGeneratingTranscript
+            && !isCheckingTranscriptLibrary
             && !hasCachedTranscript
     }
 

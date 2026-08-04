@@ -434,6 +434,8 @@ extension WorkspaceViewModel {
         }
 
         clearSourceScopedCachesAndQueues()
+        transcriptLibraryRestoreTask?.cancel()
+        isCheckingTranscriptLibrary = false
 
         sourceURL = url
         sourceSessionID = UUID()
@@ -448,6 +450,9 @@ extension WorkspaceViewModel {
             transcriptStatus: hasAudioTrack ? "No transcript generated yet." : "No audio track available for transcript.",
             uiMessage: "Loaded \(url.lastPathComponent)"
         )
+        if hasAudioTrack {
+            restoreTranscriptFromLibrary(for: url, sourceSessionID: sourceSessionID)
+        }
         if PlayheadBenchmarkConfig.shared.enabled {
             PlayheadDiagnostics.shared.writeProgress(stage: "set_source_complete", scenario: nil)
         }
@@ -469,6 +474,8 @@ extension WorkspaceViewModel {
             stopCurrentActivity()
         }
         clearSourceScopedCachesAndQueues()
+        transcriptLibraryRestoreTask?.cancel()
+        isCheckingTranscriptLibrary = false
         sourceURL = nil
         sourceSessionID = UUID()
         analysis = nil
