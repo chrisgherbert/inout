@@ -40,10 +40,6 @@ final class WorkspaceViewModel: ObservableObject {
         static let jumpIntervalSeconds = "prefs.jumpIntervalSeconds"
         static let completionSound = "prefs.completionSound"
         static let appearance = "prefs.appearance"
-        static let analyzeBlackFrames = "prefs.analyzeBlackFrames"
-        static let analyzeBadEdits = "prefs.analyzeBadEdits"
-        static let analyzeAudioSilence = "prefs.analyzeAudioSilence"
-        static let analyzeProfanity = "prefs.analyzeProfanity"
         static let silenceMinDurationSeconds = "prefs.silenceMinDurationSeconds"
         static let profanityWords = "prefs.profanityWords"
         static let frameSaveLocationMode = "prefs.frameSaveLocationMode"
@@ -69,6 +65,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var selectedTool: WorkspaceTool = .clip
     let sourcePresentation = SourcePresentationModel()
     let clipTimelinePresentation = ClipTimelinePresentationModel()
+    let analysisCheckPreferences = AnalysisCheckPreferencesModel()
     @Published var sourceURL: URL? {
         didSet { sourcePresentation.sourceURL = sourceURL }
     }
@@ -305,15 +302,13 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var isTestingGeminiConnection = false
     @Published var geminiConnectionStatusText = ""
     @Published var geminiConnectionSucceeded = false
-    @Published var analyzeBlackFrames = false {
-        didSet {
-            UserDefaults.standard.set(analyzeBlackFrames, forKey: DefaultsKey.analyzeBlackFrames)
-        }
+    var analyzeBlackFrames: Bool {
+        get { analysisCheckPreferences.blackFrames }
+        set { analysisCheckPreferences.blackFrames = newValue }
     }
-    @Published var analyzeBadEdits = false {
-        didSet {
-            UserDefaults.standard.set(analyzeBadEdits, forKey: DefaultsKey.analyzeBadEdits)
-        }
+    var analyzeBadEdits: Bool {
+        get { analysisCheckPreferences.badEdits }
+        set { analysisCheckPreferences.badEdits = newValue }
     }
     @Published var silenceMinDurationSeconds: Double = defaultMinSilenceDurationSeconds {
         didSet {
@@ -325,15 +320,13 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(clamped, forKey: DefaultsKey.silenceMinDurationSeconds)
         }
     }
-    @Published var analyzeAudioSilence = false {
-        didSet {
-            UserDefaults.standard.set(analyzeAudioSilence, forKey: DefaultsKey.analyzeAudioSilence)
-        }
+    var analyzeAudioSilence: Bool {
+        get { analysisCheckPreferences.audioSilence }
+        set { analysisCheckPreferences.audioSilence = newValue }
     }
-    @Published var analyzeProfanity = false {
-        didSet {
-            UserDefaults.standard.set(analyzeProfanity, forKey: DefaultsKey.analyzeProfanity)
-        }
+    var analyzeProfanity: Bool {
+        get { analysisCheckPreferences.profanity }
+        set { analysisCheckPreferences.profanity = newValue }
     }
     @Published var profanityWordsText: String = defaultProfanityWordsStorageString {
         didSet {
@@ -660,10 +653,6 @@ final class WorkspaceViewModel: ObservableObject {
            let savedAppearance = AppAppearance(rawValue: rawAppearance) {
             appearance = savedAppearance
         }
-        analyzeBlackFrames = defaults.bool(forKey: DefaultsKey.analyzeBlackFrames)
-        analyzeBadEdits = defaults.bool(forKey: DefaultsKey.analyzeBadEdits)
-        analyzeAudioSilence = defaults.bool(forKey: DefaultsKey.analyzeAudioSilence)
-        analyzeProfanity = defaults.bool(forKey: DefaultsKey.analyzeProfanity)
         let warningGB = defaults.double(forKey: DefaultsKey.estimatedSizeWarningThresholdGB)
         if warningGB > 0 {
             estimatedSizeWarningThresholdGB = min(max(0.04, warningGB), 20.0)

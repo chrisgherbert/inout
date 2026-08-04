@@ -2,6 +2,39 @@ import Foundation
 import SwiftUI
 
 @MainActor
+final class AnalysisCheckPreferencesModel: ObservableObject {
+    private enum DefaultsKey {
+        static let blackFrames = "prefs.analyzeBlackFrames"
+        static let badEdits = "prefs.analyzeBadEdits"
+        static let audioSilence = "prefs.analyzeAudioSilence"
+        static let profanity = "prefs.analyzeProfanity"
+    }
+
+    private let defaults: UserDefaults
+
+    @Published var blackFrames: Bool {
+        didSet { defaults.set(blackFrames, forKey: DefaultsKey.blackFrames) }
+    }
+    @Published var badEdits: Bool {
+        didSet { defaults.set(badEdits, forKey: DefaultsKey.badEdits) }
+    }
+    @Published var audioSilence: Bool {
+        didSet { defaults.set(audioSilence, forKey: DefaultsKey.audioSilence) }
+    }
+    @Published var profanity: Bool {
+        didSet { defaults.set(profanity, forKey: DefaultsKey.profanity) }
+    }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        blackFrames = defaults.bool(forKey: DefaultsKey.blackFrames)
+        badEdits = defaults.bool(forKey: DefaultsKey.badEdits)
+        audioSilence = defaults.bool(forKey: DefaultsKey.audioSilence)
+        profanity = defaults.bool(forKey: DefaultsKey.profanity)
+    }
+}
+
+@MainActor
 final class SourcePresentationModel: ObservableObject {
     @Published var sourceURL: URL?
     @Published var sourceSessionID = UUID()
