@@ -12,24 +12,27 @@ APP_NAME="In-Out.app"
 APP_PATH="$DIST_DIR/$APP_NAME"
 NOTARIZED_DMG="$DIST_DIR/In-Out-macOS.dmg"
 NOTES_PATH="$DIST_DIR/release-notes.md"
+RELEASE_NOTES_DIR="$ROOT_DIR/release-notes"
 APPCAST_PATH="$DIST_DIR/appcast.xml"
 SPARKLE_KEY_ACCOUNT="com.bulwark.BulwarkVideoTools"
 
 usage() {
   cat <<USAGE
-Usage: $(basename "$0") [--version X.Y.Z] [--build-number N] [--skip-notarize]
+Usage: $(basename "$0") [--version X.Y.Z] [--build-number N] [--notes-file PATH] [--skip-notarize]
 
 Creates/updates a GitHub release and uploads notarized macOS artifacts.
 
 Examples:
   $(basename "$0")
   $(basename "$0") --version 1.3.0
+  $(basename "$0") --version 1.3.0 --notes-file release-notes/v1.3.0.md
   $(basename "$0") --version 1.3.1 --build-number 202603041030
 USAGE
 }
 
 VERSION=""
 BUILD_NUMBER=""
+RELEASE_NOTES_SOURCE=""
 SKIP_NOTARIZE=0
 
 while [[ $# -gt 0 ]]; do
@@ -40,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --build-number)
       BUILD_NUMBER="${2:-}"
+      shift 2
+      ;;
+    --notes-file)
+      RELEASE_NOTES_SOURCE="${2:-}"
       shift 2
       ;;
     --skip-notarize)
@@ -112,6 +119,17 @@ if [[ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/$CURRENT_BRANCH")" ]];
 fi
 
 TAG="v$VERSION"
+if [[ -z "$RELEASE_NOTES_SOURCE" ]]; then
+  RELEASE_NOTES_SOURCE="$RELEASE_NOTES_DIR/$TAG.md"
+elif [[ "$RELEASE_NOTES_SOURCE" != /* ]]; then
+  RELEASE_NOTES_SOURCE="$ROOT_DIR/$RELEASE_NOTES_SOURCE"
+fi
+
+if ! "$ROOT_DIR/scripts/release_notes_smoke.sh" "$RELEASE_NOTES_SOURCE"; then
+  echo "Create $RELEASE_NOTES_DIR/$TAG.md or pass --notes-file PATH."
+  exit 1
+fi
+
 VERSIONED_DMG="$DIST_DIR/In-Out-macOS-$TAG.dmg"
 SHA_PATH="$VERSIONED_DMG.sha256"
 RUNTIME_ARCHIVE="$DIST_DIR/In-Out-python-runtime.tar.gz"
@@ -147,19 +165,7 @@ fi
 cp "$NOTARIZED_DMG" "$VERSIONED_DMG"
 shasum -a 256 "$VERSIONED_DMG" > "$SHA_PATH"
 
-cat > "$NOTES_PATH" <<EOF
-In/Out $TAG
-
-Artifacts:
-- $(basename "$VERSIONED_DMG")
-- $(basename "$SHA_PATH")
-- $(basename "$RUNTIME_ARCHIVE")
-- $(basename "$RUNTIME_SHA_PATH")
-
-Build metadata:
-- CFBundleShortVersionString: $VERSION
-- CFBundleVersion: $BUILD_NUMBER
-EOF
+cp "$RELEASE_NOTES_SOURCE" "$NOTES_PATH"
 
 SPARKLE_DIR="$($ROOT_DIR/scripts/fetch_sparkle.sh)"
 APPCAST_INPUT_DIR="$DIST_DIR/sparkle-appcast-input"
@@ -268,6 +274,7 @@ publish_staged_release() {
 }
 
 if gh release view "$TAG" >/dev/null 2>&1; then
+  gh release edit "$TAG" --notes-file "$NOTES_PATH"
   IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
   if [[ "$IS_DRAFT" == "true" ]]; then
     echo "Resuming staged draft release $TAG..."

@@ -121,6 +121,10 @@ Optional:
 ./scripts/github_release.sh --version X.Y.Z
 ```
 
+Add user-facing notes at `release-notes/vX.Y.Z.md` before running the release
+script. These notes appear in both the GitHub release and Sparkle's update
+window. Use `--notes-file PATH` to select another Markdown file.
+
 Release artifacts:
 - notarized installer DMG for users
 - signed Sparkle appcast for automatic in-place updates
