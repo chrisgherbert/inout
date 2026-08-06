@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import InOutCore
 import QuartzCore
 
 let transcriptTimeColumnPreferredWidth: CGFloat = 102
@@ -124,14 +125,23 @@ struct TranscriptDisplayRows {
 
 func makeTranscriptDisplayRows(
     from segments: [TranscriptSegment],
-    mode: TranscriptDisplayMode = .compact
+    mode: TranscriptDisplayMode = .compact,
+    timecodeStyle: TimecodeDisplayStyle = .precise,
+    frameRate: Double? = nil
 ) -> [TranscriptDisplayRow] {
-    makeTranscriptDisplayRowsWithLookup(from: segments, mode: mode).rows
+    makeTranscriptDisplayRowsWithLookup(
+        from: segments,
+        mode: mode,
+        timecodeStyle: timecodeStyle,
+        frameRate: frameRate
+    ).rows
 }
 
 func makeTranscriptDisplayRowsWithLookup(
     from segments: [TranscriptSegment],
-    mode: TranscriptDisplayMode = .compact
+    mode: TranscriptDisplayMode = .compact,
+    timecodeStyle: TimecodeDisplayStyle = .precise,
+    frameRate: Double? = nil
 ) -> TranscriptDisplayRows {
     var rows: [TranscriptDisplayRow] = []
     rows.reserveCapacity(segments.count)
@@ -156,7 +166,7 @@ func makeTranscriptDisplayRowsWithLookup(
                 id: segment.id,
                 start: segment.start,
                 end: segment.end,
-                startLabel: formatSeconds(segment.start),
+                startLabel: InOutCore.formatDisplayTimecode(segment.start, style: timecodeStyle, frameRate: frameRate),
                 text: text,
                 normalizedText: normalizedTranscriptSearchText(text)
             )
@@ -166,11 +176,17 @@ func makeTranscriptDisplayRowsWithLookup(
 
     let compactRows = TranscriptDisplayRows(rows: rows)
     guard mode == .paragraphs else { return compactRows }
-    return makeParagraphTranscriptDisplayRows(from: segments)
+    return makeParagraphTranscriptDisplayRows(
+        from: segments,
+        timecodeStyle: timecodeStyle,
+        frameRate: frameRate
+    )
 }
 
 private func makeParagraphTranscriptDisplayRows(
-    from segments: [TranscriptSegment]
+    from segments: [TranscriptSegment],
+    timecodeStyle: TimecodeDisplayStyle,
+    frameRate: Double?
 ) -> TranscriptDisplayRows {
     var words: [TranscriptTimedWordUnit] = []
     var segmentOrderByID: [UUID: Int] = [:]
@@ -220,7 +236,7 @@ private func makeParagraphTranscriptDisplayRows(
                 id: rowID,
                 start: paragraph.start,
                 end: paragraph.end,
-                startLabel: formatSeconds(paragraph.start),
+                startLabel: InOutCore.formatDisplayTimecode(paragraph.start, style: timecodeStyle, frameRate: frameRate),
                 text: text,
                 normalizedText: normalizedTranscriptSearchText(text)
             )

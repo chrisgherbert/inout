@@ -82,6 +82,8 @@ private struct ClipPlayerStageSection: View {
     let canShowClipTranscriptSidebar: Bool
     let clipTranscriptSidebarWidth: CGFloat
     let transcriptSegments: [TranscriptSegment]
+    let timecodeDisplayStyle: TimecodeDisplayStyle
+    let timecodeFrameRate: Double?
     let transcriptStatusText: String
     let canGenerateTranscript: Bool
     let isGeneratingTranscript: Bool
@@ -196,6 +198,8 @@ private struct ClipPlayerStageSection: View {
 
                     EquatableView(content:
                         ClipTranscriptSidebarView(
+                            timecodeDisplayStyle: timecodeDisplayStyle,
+                            timecodeFrameRate: timecodeFrameRate,
                             playbackPresentation: transcriptPlaybackPresentation,
                             transcriptSegments: transcriptSegments,
                             transcriptStatusText: transcriptStatusText,
@@ -286,6 +290,8 @@ extension ClipPlayerStageSection: Equatable {
         lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
         lhs.transcriptSegments.first?.id == rhs.transcriptSegments.first?.id &&
         lhs.transcriptSegments.last?.id == rhs.transcriptSegments.last?.id &&
+        lhs.timecodeDisplayStyle == rhs.timecodeDisplayStyle &&
+        lhs.timecodeFrameRate == rhs.timecodeFrameRate &&
         lhs.transcriptStatusText == rhs.transcriptStatusText &&
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
@@ -319,6 +325,8 @@ struct ClipToolView: View {
     let isCompactLayout: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.undoManager) private var undoManager
+    @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
+    @Environment(\.timecodeFrameRate) private var timecodeFrameRate
 
     @StateObject private var runtime = ClipToolRuntimeState()
     @StateObject private var smartMarkers = SmartMarkerPresentationModel()
@@ -1335,7 +1343,9 @@ struct ClipToolView: View {
     ) {
         let displayRows = makeTranscriptDisplayRowsWithLookup(
             from: segments,
-            mode: mode ?? model.transcriptDisplayMode
+            mode: mode ?? model.transcriptDisplayMode,
+            timecodeStyle: timecodeDisplayStyle,
+            frameRate: timecodeFrameRate
         )
         runtime.transcriptPlaybackPresentation.configure(
             displayRows: displayRows.rows
@@ -1749,7 +1759,11 @@ struct ClipToolView: View {
     }
 
     private func copyPlayheadTimecode() {
-        let timecode = formatSeconds(playheadSeconds)
+        let timecode = formatDisplayTimecode(
+            playheadSeconds,
+            style: timecodeDisplayStyle,
+            frameRate: timecodeFrameRate
+        )
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(timecode, forType: .string)
         withAnimation(.easeOut(duration: 0.12)) {
@@ -2384,6 +2398,8 @@ struct ClipToolView: View {
                 canShowClipTranscriptSidebar: canShowClipTranscriptSidebar,
                 clipTranscriptSidebarWidth: clipTranscriptSidebarWidth,
                 transcriptSegments: sourcePresentation.transcriptSegments,
+                timecodeDisplayStyle: timecodeDisplayStyle,
+                timecodeFrameRate: timecodeFrameRate,
                 transcriptStatusText: sourcePresentation.transcriptStatusText,
                 canGenerateTranscript: model.canGenerateTranscript,
                 isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
@@ -3030,6 +3046,14 @@ struct ClipToolView: View {
         }
         .onChange(of: model.transcriptDisplayMode) { mode in
             refreshClipTranscriptLookup(sourcePresentation.transcriptSegments, mode: mode)
+        }
+        .onChange(of: timecodeDisplayStyle) { _ in
+            model.syncClipTextFields()
+            refreshClipTranscriptLookup(sourcePresentation.transcriptSegments)
+        }
+        .onChange(of: timecodeFrameRate) { _ in
+            model.syncClipTextFields()
+            refreshClipTranscriptLookup(sourcePresentation.transcriptSegments)
         }
 
         let step3 = step2.onChange(of: model.clipEncodingMode) { mode in

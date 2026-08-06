@@ -70,10 +70,10 @@ struct SegmentTimelineView: View {
 
             if hasVisibleLane {
                 HStack {
-                    Text("00:00:00.000")
+                    DisplayTimecodeText(seconds: 0)
                         .padding(.leading, 72)
                     Spacer()
-                    Text(formatSeconds(duration))
+                    DisplayTimecodeText(seconds: duration)
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -111,6 +111,8 @@ struct DetailView: View {
     let isCompactLayout: Bool
     @ObservedObject var model: WorkspaceViewModel
     @ObservedObject var activity: ActivityPresentationModel
+    @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
+    @Environment(\.timecodeFrameRate) private var timecodeFrameRate
 
     @State private var player = AVPlayer()
     @State private var isPlaying = false
@@ -138,6 +140,34 @@ struct DetailView: View {
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
+    }
+
+    private func displayTimecode(_ seconds: Double) -> String {
+        formatDisplayTimecode(seconds, style: timecodeDisplayStyle, frameRate: timecodeFrameRate)
+    }
+
+    private var formattedBlackList: String {
+        file.segments.map {
+            "\(displayTimecode($0.start)) → \(displayTimecode($0.end)) (\(String(format: "%.3f", $0.duration))s)"
+        }.joined(separator: "\n")
+    }
+
+    private var formattedSilentList: String {
+        file.silentSegments.map {
+            "\(displayTimecode($0.start)) → \(displayTimecode($0.end)) (\(String(format: "%.3f", $0.duration))s)"
+        }.joined(separator: "\n")
+    }
+
+    private var formattedProfanityList: String {
+        file.profanityHits.map {
+            "\(displayTimecode($0.start)) → \(displayTimecode($0.end)) (\($0.word))"
+        }.joined(separator: "\n")
+    }
+
+    private var formattedBadEditList: String {
+        file.badEditIssues.map {
+            "\(displayTimecode($0.start)) -> \(displayTimecode($0.end))  \($0.title): \($0.detail)"
+        }.joined(separator: "\n")
     }
 
     private func jump(by seconds: Double) {
@@ -194,7 +224,7 @@ struct DetailView: View {
                     Spacer()
                     if showCopyButtons {
                         Button("Copy Findings") {
-                            copyToClipboard(file.formattedBadEditList)
+                            copyToClipboard(formattedBadEditList)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -215,7 +245,7 @@ struct DetailView: View {
                                     Image(systemName: issue.confidence == .high ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
                                         .foregroundStyle(issue.confidence == .high ? Color.orange : Color.secondary)
                                         .frame(width: 16)
-                                    Text(formatSeconds(issue.start))
+                                    DisplayTimecodeText(seconds: issue.start)
                                         .font(.system(.body, design: .monospaced))
                                         .frame(width: 112, alignment: .leading)
                                     VStack(alignment: .leading, spacing: 2) {
@@ -269,7 +299,7 @@ struct DetailView: View {
                     Spacer()
                     if showCopyButtons {
                         Button("Copy Black List") {
-                            copyToClipboard(file.formattedList)
+                            copyToClipboard(formattedBlackList)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -287,12 +317,12 @@ struct DetailView: View {
                         LazyVStack(spacing: 4) {
                             ForEach(file.segments) { segment in
                                 HStack {
-                                    Text(formatSeconds(segment.start))
+                                    DisplayTimecodeText(seconds: segment.start)
                                         .font(.system(.body, design: .monospaced))
                                         .frame(width: 130, alignment: .leading)
                                     Text("→")
                                         .foregroundStyle(.secondary)
-                                    Text(formatSeconds(segment.end))
+                                    DisplayTimecodeText(seconds: segment.end)
                                         .font(.system(.body, design: .monospaced))
                                         .frame(width: 130, alignment: .leading)
                                     Spacer()
@@ -339,7 +369,7 @@ struct DetailView: View {
                     Spacer()
                     if showCopyButtons {
                         Button("Copy Silence List") {
-                            copyToClipboard(file.formattedSilentList)
+                            copyToClipboard(formattedSilentList)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -378,7 +408,7 @@ struct DetailView: View {
                     Spacer()
                     if showCopyButtons {
                         Button("Copy Profanity List") {
-                            copyToClipboard(file.formattedProfanityList)
+                            copyToClipboard(formattedProfanityList)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -617,12 +647,12 @@ private struct SilentGapResultRow: View {
 
     var body: some View {
         HStack {
-            Text(formatSeconds(segment.start))
+            DisplayTimecodeText(seconds: segment.start)
                 .font(.system(.body, design: .monospaced))
                 .frame(width: 130, alignment: .leading)
             Text("→")
                 .foregroundStyle(.secondary)
-            Text(formatSeconds(segment.end))
+            DisplayTimecodeText(seconds: segment.end)
                 .font(.system(.body, design: .monospaced))
                 .frame(width: 130, alignment: .leading)
             Spacer()
@@ -666,12 +696,12 @@ private struct ProfanityHitResultRow: View {
 
     var body: some View {
         HStack {
-            Text(formatSeconds(hit.start))
+            DisplayTimecodeText(seconds: hit.start)
                 .font(.system(.body, design: .monospaced))
                 .frame(width: 130, alignment: .leading)
             Text("→")
                 .foregroundStyle(.secondary)
-            Text(formatSeconds(hit.end))
+            DisplayTimecodeText(seconds: hit.end)
                 .font(.system(.body, design: .monospaced))
                 .frame(width: 130, alignment: .leading)
             Spacer()

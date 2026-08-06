@@ -4,6 +4,7 @@ import AVFoundation
 
 struct ClipSelectionPanel: View, Equatable {
     @State private var isTimecodeRowHovered = false
+    @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
     let player: AVPlayer
     let sourceSessionID: UUID
     let clipStartSeconds: Double
@@ -182,7 +183,7 @@ struct ClipSelectionPanel: View, Equatable {
                         Text("In")
                             .foregroundStyle(.secondary)
                             .frame(width: 18, alignment: .leading)
-                        TextField("00:00:00.000", text: $clipStartText)
+                        TextField(timecodeDisplayStyle.example, text: $clipStartText)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 140)
@@ -200,7 +201,7 @@ struct ClipSelectionPanel: View, Equatable {
                         Text("Out")
                             .foregroundStyle(.secondary)
                             .frame(width: 24, alignment: .leading)
-                        TextField("00:00:00.000", text: $clipEndText)
+                        TextField(timecodeDisplayStyle.example, text: $clipEndText)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 140)
@@ -217,7 +218,7 @@ struct ClipSelectionPanel: View, Equatable {
                         Text("In")
                             .foregroundStyle(.secondary)
                             .frame(width: 18, alignment: .leading)
-                        TextField("00:00:00.000", text: $clipStartText)
+                        TextField(timecodeDisplayStyle.example, text: $clipStartText)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onSubmit { onCommitClipStartText() }
@@ -230,7 +231,7 @@ struct ClipSelectionPanel: View, Equatable {
                         Text("Out")
                             .foregroundStyle(.secondary)
                             .frame(width: 24, alignment: .leading)
-                        TextField("00:00:00.000", text: $clipEndText)
+                        TextField(timecodeDisplayStyle.example, text: $clipEndText)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onSubmit { onCommitClipEndText() }

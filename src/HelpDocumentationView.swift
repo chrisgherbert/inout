@@ -172,7 +172,8 @@ struct HelpDocumentationView: View {
                 HelpSection(
                     title: "Read and navigate",
                     bullets: [
-                        "Use View to switch between Compact Lines and Paragraphs, show or hide timecodes, and change text size.",
+                        "Use the transcript View popover to switch between Compact Lines and Paragraphs, show or hide timecodes, and change text size.",
+                        "Choose View > Timecode Style to change timecodes throughout the app, including colon- or period-separated frames, total seconds, and absolute frame numbers. The same setting is available under General in Settings.",
                         "Search for a word or phrase, then use the previous and next controls to move through matches.",
                         "Click a transcript row to move the playhead. Double-click a row to begin playback there.",
                         "During playback, the transcript follows the active row. Hiding the sidebar leaves the transcript available in the current window."

@@ -16,6 +16,24 @@ func formatSeconds(_ value: Double) -> String {
     InOutCore.formatSeconds(value)
 }
 
+func formatDisplayTimecode(
+    _ value: Double,
+    style: TimecodeDisplayStyle,
+    frameRate: Double? = nil
+) -> String {
+    InOutCore.formatDisplayTimecode(value, style: style, frameRate: frameRate)
+}
+
+struct DisplayTimecodeText: View {
+    let seconds: Double
+    @Environment(\.timecodeDisplayStyle) private var style
+    @Environment(\.timecodeFrameRate) private var frameRate
+
+    var body: some View {
+        Text(formatDisplayTimecode(seconds, style: style, frameRate: frameRate))
+    }
+}
+
 func formatBitrate(_ bps: Double?) -> String {
     guard let bps, bps > 0 else { return "—" }
     let kbps = bps / 1000.0
@@ -117,31 +135,12 @@ func adaptiveContainerFill(
     reduceTransparency ? AnyShapeStyle(fallback) : AnyShapeStyle(material)
 }
 
-func parseTimecode(_ value: String) -> Double? {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-
-    let parts = trimmed.split(separator: ":")
-    guard !parts.isEmpty && parts.count <= 3 else { return nil }
-
-    func parseSeconds(_ token: Substring) -> Double? {
-        let normalized = token.replacingOccurrences(of: ",", with: ".")
-        return Double(normalized)
-    }
-
-    switch parts.count {
-    case 1:
-        guard let s = parseSeconds(parts[0]) else { return nil }
-        return s
-    case 2:
-        guard let m = Double(parts[0]), let s = parseSeconds(parts[1]) else { return nil }
-        return (m * 60.0) + s
-    case 3:
-        guard let h = Double(parts[0]), let m = Double(parts[1]), let s = parseSeconds(parts[2]) else { return nil }
-        return (h * 3600.0) + (m * 60.0) + s
-    default:
-        return nil
-    }
+func parseTimecode(
+    _ value: String,
+    style: TimecodeDisplayStyle? = nil,
+    frameRate: Double? = nil
+) -> Double? {
+    InOutCore.parseTimecode(value, style: style, frameRate: frameRate)
 }
 
 func fourCCString(_ value: FourCharCode) -> String {

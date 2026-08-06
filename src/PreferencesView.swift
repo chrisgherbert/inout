@@ -43,6 +43,7 @@ final class PreferencesNavigator: ObservableObject {
 
 struct PreferencesView: View {
     @ObservedObject var model: WorkspaceViewModel
+    @ObservedObject private var timecodePreferences = TimecodeDisplayPreferences.shared
     @State private var profanityEntry = ""
     @State private var openAIAPIKeyEntry = ""
     @State private var claudeAPIKeyEntry = ""
@@ -128,6 +129,21 @@ struct PreferencesView: View {
                         }
                     }
                 }
+            }
+            Divider()
+
+            settingsSection("Timecodes") {
+                settingsRow("Display style") {
+                    valueMenuPicker("Timecode Display Style", selection: $timecodePreferences.style) {
+                        ForEach(TimecodeDisplayStyle.allCases) { style in
+                            Text(style.menuTitle).tag(style)
+                        }
+                    }
+                }
+
+                Text("Frame-based formats use the source frame rate and fall back to Hours:Minutes:Seconds.Milliseconds when no video frame rate is available. Semicolon drop-frame timecode is not currently supported. Timeline ruler labels and transcript export formats are unchanged.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Divider()
 

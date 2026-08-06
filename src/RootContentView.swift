@@ -48,6 +48,7 @@ struct WindowAccessor: NSViewRepresentable {
 
 struct ContentView: View {
     @StateObject private var model: WorkspaceViewModel
+    @ObservedObject private var timecodePreferences = TimecodeDisplayPreferences.shared
     @ObservedObject private var externalOpenBridge = ExternalFileOpenBridge.shared
     @AppStorage("onboarding.urlDownloadSetupCompleted") private var urlDownloadSetupCompleted = false
     @AppStorage("onboarding.urlDownloadSetupDismissed") private var urlDownloadSetupDismissed = false
@@ -128,6 +129,8 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(model.appearance.colorScheme)
+        .environment(\.timecodeDisplayStyle, timecodePreferences.style)
+        .environment(\.timecodeFrameRate, model.sourceInfo?.frameRate)
         .frame(minWidth: 980, minHeight: 700)
         .background(
             WindowAccessor { window in

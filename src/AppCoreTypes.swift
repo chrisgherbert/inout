@@ -405,6 +405,45 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     }
 }
 
+typealias TimecodeDisplayStyle = InOutCore.TimecodeDisplayStyle
+
+@MainActor
+final class TimecodeDisplayPreferences: ObservableObject {
+    static let shared = TimecodeDisplayPreferences()
+    static let defaultsKey = "prefs.timecodeDisplayStyle"
+
+    @Published var style: TimecodeDisplayStyle {
+        didSet {
+            UserDefaults.standard.set(style.rawValue, forKey: Self.defaultsKey)
+        }
+    }
+
+    private init() {
+        let stored = UserDefaults.standard.string(forKey: Self.defaultsKey)
+        style = stored.flatMap(TimecodeDisplayStyle.init(rawValue:)) ?? .precise
+    }
+}
+
+private struct TimecodeDisplayStyleEnvironmentKey: EnvironmentKey {
+    static let defaultValue = TimecodeDisplayStyle.precise
+}
+
+private struct TimecodeFrameRateEnvironmentKey: EnvironmentKey {
+    static let defaultValue: Double? = nil
+}
+
+extension EnvironmentValues {
+    var timecodeDisplayStyle: TimecodeDisplayStyle {
+        get { self[TimecodeDisplayStyleEnvironmentKey.self] }
+        set { self[TimecodeDisplayStyleEnvironmentKey.self] = newValue }
+    }
+
+    var timecodeFrameRate: Double? {
+        get { self[TimecodeFrameRateEnvironmentKey.self] }
+        set { self[TimecodeFrameRateEnvironmentKey.self] = newValue }
+    }
+}
+
 enum FrameSaveLocationMode: String, CaseIterable, Identifiable {
     case askEachTime = "Ask Each Time"
     case sourceFolder = "Source Folder"

@@ -40,6 +40,8 @@ final class ClipTranscriptPlaybackPresentation {
 }
 
 struct ClipTranscriptSidebarView: View, Equatable {
+    let timecodeDisplayStyle: TimecodeDisplayStyle
+    let timecodeFrameRate: Double?
     let playbackPresentation: ClipTranscriptPlaybackPresentation
     let transcriptSegments: [TranscriptSegment]
     let transcriptStatusText: String
@@ -100,6 +102,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
         lhs.transcriptSegments.first?.id == rhs.transcriptSegments.first?.id &&
         lhs.transcriptSegments.last?.id == rhs.transcriptSegments.last?.id &&
+        lhs.timecodeDisplayStyle == rhs.timecodeDisplayStyle &&
+        lhs.timecodeFrameRate == rhs.timecodeFrameRate &&
         lhs.transcriptStatusText == rhs.transcriptStatusText &&
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
@@ -120,7 +124,12 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 
     private func makeTranscriptRows() -> [TranscriptDisplayRow] {
-        makeTranscriptDisplayRows(from: transcriptSegments, mode: activeTranscriptDisplayMode)
+        makeTranscriptDisplayRows(
+            from: transcriptSegments,
+            mode: activeTranscriptDisplayMode,
+            timecodeStyle: timecodeDisplayStyle,
+            frameRate: timecodeFrameRate
+        )
     }
 
     private var activeTranscriptDisplayMode: TranscriptDisplayMode {
@@ -536,6 +545,12 @@ struct ClipTranscriptSidebarView: View, Equatable {
             refreshTranscriptRows()
         }
         .onChange(of: activeTranscriptDisplayMode) { _ in
+            refreshTranscriptRows()
+        }
+        .onChange(of: timecodeDisplayStyle) { _ in
+            refreshTranscriptRows()
+        }
+        .onChange(of: timecodeFrameRate) { _ in
             refreshTranscriptRows()
         }
         .onChange(of: transcriptDisplayMode) { mode in

@@ -5,6 +5,14 @@ import InOutCore
 import UniformTypeIdentifiers
 
 extension WorkspaceViewModel {
+    private func formattedDisplayTimecode(_ seconds: Double) -> String {
+        formatDisplayTimecode(
+            seconds,
+            style: TimecodeDisplayPreferences.shared.style,
+            frameRate: sourceInfo?.frameRate
+        )
+    }
+
     func resetProfanityWordsToDefaults() {
         profanityWordsText = defaultProfanityWordsStorageString
     }
@@ -35,13 +43,13 @@ extension WorkspaceViewModel {
         if clipEndSeconds < clipStartSeconds {
             clipEndSeconds = clipStartSeconds
         }
-        clipStartText = formatSeconds(clipStartSeconds)
-        clipEndText = formatSeconds(clipEndSeconds)
+        clipStartText = formattedDisplayTimecode(clipStartSeconds)
+        clipEndText = formattedDisplayTimecode(clipEndSeconds)
     }
 
     func syncClipTextFields() {
-        clipStartText = formatSeconds(clipStartSeconds)
-        clipEndText = formatSeconds(clipEndSeconds)
+        clipStartText = formattedDisplayTimecode(clipStartSeconds)
+        clipEndText = formattedDisplayTimecode(clipEndSeconds)
     }
 
     private func setClipRangeWithUndo(
@@ -132,16 +140,24 @@ extension WorkspaceViewModel {
     }
 
     func commitClipStartText(undoManager: UndoManager? = nil) {
-        guard let parsed = parseTimecode(clipStartText) else {
-            clipStartText = formatSeconds(clipStartSeconds)
+        guard let parsed = parseTimecode(
+            clipStartText,
+            style: TimecodeDisplayPreferences.shared.style,
+            frameRate: sourceInfo?.frameRate
+        ) else {
+            clipStartText = formattedDisplayTimecode(clipStartSeconds)
             return
         }
         setClipStart(parsed, undoManager: undoManager)
     }
 
     func commitClipEndText(undoManager: UndoManager? = nil) {
-        guard let parsed = parseTimecode(clipEndText) else {
-            clipEndText = formatSeconds(clipEndSeconds)
+        guard let parsed = parseTimecode(
+            clipEndText,
+            style: TimecodeDisplayPreferences.shared.style,
+            frameRate: sourceInfo?.frameRate
+        ) else {
+            clipEndText = formattedDisplayTimecode(clipEndSeconds)
             return
         }
         setClipEnd(parsed, undoManager: undoManager)

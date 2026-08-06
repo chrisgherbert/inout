@@ -394,6 +394,8 @@ struct SmartMarkerReviewView: View {
     let onUndoRefinement: (UUID) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
+    @Environment(\.timecodeFrameRate) private var timecodeFrameRate
     @State private var copiedSuggestionID: UUID?
     @State private var copiedAllTabID: UUID?
     @State private var refinementDraft = ""
@@ -915,9 +917,23 @@ struct SmartMarkerReviewView: View {
 
     private func timecodeText(for suggestion: SmartMarkerSuggestion) -> String {
         guard let endSeconds = suggestion.endSeconds else {
-            return formatSeconds(suggestion.seconds)
+            return formatDisplayTimecode(
+                suggestion.seconds,
+                style: timecodeDisplayStyle,
+                frameRate: timecodeFrameRate
+            )
         }
-        return "\(formatSeconds(suggestion.seconds)) → \(formatSeconds(endSeconds))"
+        let start = formatDisplayTimecode(
+            suggestion.seconds,
+            style: timecodeDisplayStyle,
+            frameRate: timecodeFrameRate
+        )
+        let end = formatDisplayTimecode(
+            endSeconds,
+            style: timecodeDisplayStyle,
+            frameRate: timecodeFrameRate
+        )
+        return "\(start) → \(end)"
     }
 
     private func copyText(
@@ -974,10 +990,10 @@ private struct SmartMarkerSuggestionRow: View {
                         }
                     } else if let endSeconds = suggestion.endSeconds {
                         HStack(spacing: 5) {
-                            Text(formatSeconds(suggestion.seconds))
+                            DisplayTimecodeText(seconds: suggestion.seconds)
                             Image(systemName: "arrow.right")
                                 .font(.caption2)
-                            Text(formatSeconds(endSeconds))
+                            DisplayTimecodeText(seconds: endSeconds)
                             Text(compactDuration(endSeconds - suggestion.seconds))
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
@@ -993,7 +1009,7 @@ private struct SmartMarkerSuggestionRow: View {
                             .lineLimit(1)
                     } else {
                         HStack(spacing: 7) {
-                            Text(formatSeconds(suggestion.seconds))
+                            DisplayTimecodeText(seconds: suggestion.seconds)
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                             Text(suggestion.label)

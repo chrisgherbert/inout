@@ -59,6 +59,8 @@ final class WaveformRasterHostView: NSView {
     var totalDurationSeconds: Double = 0
     var visibleStartSeconds: Double = 0
     var visibleEndSeconds: Double = 1
+    var timecodeDisplayStyle: TimecodeDisplayStyle = .precise
+    var timecodeFrameRate: Double?
     var showsThumbnailStrip = false
     var thumbnailStripHeight: CGFloat = 0
     var suggestionLaneCount = 0
@@ -1363,6 +1365,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
+    let timecodeDisplayStyle: TimecodeDisplayStyle
+    let timecodeFrameRate: Double?
     let isDarkAppearance: Bool
     let playheadSeconds: Double
     let playheadJumpFromSeconds: Double
@@ -1409,6 +1413,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         abs(lhs.totalDurationSeconds - rhs.totalDurationSeconds) < 0.0001 &&
         abs(lhs.visibleStartSeconds - rhs.visibleStartSeconds) < 0.0001 &&
         abs(lhs.visibleEndSeconds - rhs.visibleEndSeconds) < 0.0001 &&
+        lhs.timecodeDisplayStyle == rhs.timecodeDisplayStyle &&
+        lhs.timecodeFrameRate == rhs.timecodeFrameRate &&
         lhs.isDarkAppearance == rhs.isDarkAppearance &&
         abs(lhs.playheadSeconds - rhs.playheadSeconds) < 0.0001 &&
         abs(lhs.playheadJumpFromSeconds - rhs.playheadJumpFromSeconds) < 0.0001 &&
@@ -1472,6 +1478,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         nsView.totalDurationSeconds = totalDurationSeconds
         nsView.visibleStartSeconds = visibleStartSeconds
         nsView.visibleEndSeconds = visibleEndSeconds
+        nsView.timecodeDisplayStyle = timecodeDisplayStyle
+        nsView.timecodeFrameRate = timecodeFrameRate
         nsView.modelPlayheadSeconds = playheadSeconds
         nsView.isDarkAppearance = isDarkAppearance
         nsView.highlightedClipBoundary = highlightedClipBoundary
@@ -1515,6 +1523,8 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
         staticTimelineHasher.combine(Int((totalDurationSeconds * 1000).rounded()))
         staticTimelineHasher.combine(Int((visibleStartSeconds * 1000).rounded()))
         staticTimelineHasher.combine(Int((visibleEndSeconds * 1000).rounded()))
+        staticTimelineHasher.combine(timecodeDisplayStyle)
+        staticTimelineHasher.combine(timecodeFrameRate)
         staticTimelineHasher.combine(Int((clipStartSeconds * 1000).rounded()))
         staticTimelineHasher.combine(Int((clipEndSeconds * 1000).rounded()))
         staticTimelineHasher.combine(Int((zoomBucket * 1000).rounded()))
@@ -1900,7 +1910,17 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                         max(0, min(timelineRect.width, snapToPixel(xPosition(for: $0))))
                     }
                     let rangeDescription = marker.endSeconds.map {
-                        "\(formatSeconds(marker.seconds)) → \(formatSeconds($0))"
+                        let start = formatDisplayTimecode(
+                            marker.seconds,
+                            style: timecodeDisplayStyle,
+                            frameRate: timecodeFrameRate
+                        )
+                        let end = formatDisplayTimecode(
+                            $0,
+                            style: timecodeDisplayStyle,
+                            frameRate: timecodeFrameRate
+                        )
+                        return "\(start) → \(end)"
                     }
                     let toolTip = [
                         rangeDescription,

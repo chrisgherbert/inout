@@ -131,7 +131,12 @@ extension WorkspaceViewModel {
         addCaptureTimelineMarker(at: seconds)
         let didChange = previousMarkers != captureTimelineMarkers
         if didChange {
-            uiMessage = "Marker added at \(formatSeconds(seconds))"
+            let timecode = formatDisplayTimecode(
+                seconds,
+                style: TimecodeDisplayPreferences.shared.style,
+                frameRate: sourceInfo?.frameRate
+            )
+            uiMessage = "Marker added at \(timecode)"
             if let undoManager {
                 undoManager.registerUndo(withTarget: self) { target in
                     target.restoreMarkersWithUndo(

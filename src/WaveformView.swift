@@ -4,6 +4,8 @@ import SwiftUI
 struct WaveformView: View {
     let player: AVPlayer
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
+    @Environment(\.timecodeFrameRate) private var timecodeFrameRate
     let sourceSessionID: UUID
     let samples: [Double]
     let zoomLevel: Double
@@ -60,6 +62,8 @@ struct WaveformView: View {
             totalDurationSeconds: totalDurationSeconds,
             visibleStartSeconds: visibleStartSeconds,
             visibleEndSeconds: visibleEndSeconds,
+            timecodeDisplayStyle: timecodeDisplayStyle,
+            timecodeFrameRate: timecodeFrameRate,
             isDarkAppearance: colorScheme == .dark,
             playheadSeconds: visualPlayheadSeconds,
             playheadJumpFromSeconds: playheadJumpFromSeconds,
@@ -110,7 +114,7 @@ struct WaveformView: View {
             onHostViewAvailable: onHostViewAvailable
         )
         .overlay(alignment: .bottomLeading) {
-            Text(formatSeconds(visibleStartSeconds))
+            DisplayTimecodeText(seconds: visibleStartSeconds)
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(Color.white.opacity(0.9))
                 .padding(.horizontal, 7)
@@ -128,7 +132,7 @@ struct WaveformView: View {
                 .allowsHitTesting(false)
         }
         .overlay(alignment: .bottomTrailing) {
-            Text(formatSeconds(visibleEndSeconds))
+            DisplayTimecodeText(seconds: visibleEndSeconds)
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(Color.white.opacity(0.9))
                 .padding(.horizontal, 7)

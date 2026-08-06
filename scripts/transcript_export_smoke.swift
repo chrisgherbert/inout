@@ -53,6 +53,29 @@ struct TranscriptExportSmokeTest {
             )
         ]
 
+        let transcriptDisplayExpectations: [(TimecodeDisplayStyle, String)] = [
+            (.precise, "00:00:01.250"),
+            (.standard, "00:00:01"),
+            (.compact, "0:01"),
+            (.frames, "00:00:01:06"),
+            (.minuteFrames, "00:01:06"),
+            (.periodFrames, "00:00:01.06"),
+            (.minutePeriodFrames, "00:01.06"),
+            (.totalSeconds, "1.250"),
+            (.frameNumber, "30")
+        ]
+        for (style, expectedLabel) in transcriptDisplayExpectations {
+            let rows = makeTranscriptDisplayRows(
+                from: segments,
+                timecodeStyle: style,
+                frameRate: 24
+            )
+            precondition(
+                rows.first?.startLabel == expectedLabel,
+                "Transcript display should use \(style.menuTitle): \(rows.first?.startLabel ?? "nil")"
+            )
+        }
+
         let timedText = content(
             segments,
             format: .text,

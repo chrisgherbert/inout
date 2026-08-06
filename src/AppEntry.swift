@@ -49,6 +49,7 @@ struct CheckBlackFramesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.workspaceModel) private var focusedModel
+    @ObservedObject private var timecodePreferences = TimecodeDisplayPreferences.shared
     @AppStorage("prefs.appearance") private var appearanceRawValue = AppAppearance.dark.rawValue
 
     private var appearanceColorScheme: ColorScheme? {
@@ -292,6 +293,14 @@ struct CheckBlackFramesApp: App {
                 }
                 .appKeyboardShortcut(AppShortcutCatalog.fitTimeline)
                 .disabled(focusedModel?.selectedTool != .clip || focusedModel?.sourceURL == nil)
+
+                Divider()
+
+                Picker("Timecode Style", selection: $timecodePreferences.style) {
+                    ForEach(TimecodeDisplayStyle.allCases) { style in
+                        Text(style.menuTitle).tag(style)
+                    }
+                }
             }
 
             CommandGroup(replacing: .help) {

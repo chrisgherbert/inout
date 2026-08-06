@@ -2,6 +2,8 @@ import AVFoundation
 import SwiftUI
 
 struct ClipPlayerUtilityRow: View {
+    @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
+    @Environment(\.timecodeFrameRate) private var timecodeFrameRate
     let hasVideoTrack: Bool
     let playheadSeconds: Double
     let totalDurationSeconds: Double
@@ -126,14 +128,14 @@ struct ClipPlayerUtilityRow: View {
                 Button("Copy Timecode", action: onCopyPlayheadTimecode)
             }
 
-            Text(formatSeconds(playheadSeconds))
+            Text(formatDisplayTimecode(playheadSeconds, style: timecodeDisplayStyle, frameRate: timecodeFrameRate))
                 .font(.caption.monospacedDigit())
                 .fontWeight(.semibold)
                 .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.primary)
             Text("/")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-            Text(formatSeconds(totalDurationSeconds))
+            Text(formatDisplayTimecode(totalDurationSeconds, style: timecodeDisplayStyle, frameRate: timecodeFrameRate))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
