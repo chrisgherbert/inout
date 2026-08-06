@@ -36,46 +36,18 @@ struct SmartMarkerRecipeManagementView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                VStack(spacing: 0) {
+                List {
                     ForEach(store.customRecipes) { recipe in
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(recipe.name)
-                                Text(recipe.summary)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: 8)
-                            outputBadge(recipe.outputKind)
-                            Button {
-                                editorRecipe = recipe
-                            } label: {
-                                Image(systemName: "pencil")
-                            }
-                            .buttonStyle(.plain)
-                            .help("Edit \(recipe.name)")
-                            Button {
-                                store.duplicate(recipe)
-                            } label: {
-                                Image(systemName: "plus.square.on.square")
-                            }
-                            .buttonStyle(.plain)
-                            .help("Duplicate \(recipe.name)")
-                            Button(role: .destructive) {
-                                store.delete(recipe.id)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.plain)
-                            .help("Delete \(recipe.name)")
-                        }
-                        .padding(.vertical, 7)
-                        if recipe.id != store.customRecipes.last?.id {
-                            Divider()
-                        }
+                        customRecipeRow(recipe)
                     }
+                    .onMove(perform: store.moveCustomRecipes)
                 }
+                .listStyle(.plain)
+                .frame(height: customRecipeListHeight)
+
+                Text("Drag custom analyses to change their order in AI Suggestions.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if !store.errorText.isEmpty {
@@ -94,6 +66,47 @@ struct SmartMarkerRecipeManagementView: View {
                 }
             )
         }
+    }
+
+    private var customRecipeListHeight: CGFloat {
+        min(320, max(52, CGFloat(store.customRecipes.count) * 52))
+    }
+
+    private func customRecipeRow(_ recipe: SmartMarkerCustomRecipe) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(recipe.name)
+                Text(recipe.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            outputBadge(recipe.outputKind)
+            Button {
+                editorRecipe = recipe
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .buttonStyle(.plain)
+            .help("Edit \(recipe.name)")
+            Button {
+                store.duplicate(recipe)
+            } label: {
+                Image(systemName: "plus.square.on.square")
+            }
+            .buttonStyle(.plain)
+            .help("Duplicate \(recipe.name)")
+            Button(role: .destructive) {
+                store.delete(recipe.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
+            .help("Delete \(recipe.name)")
+        }
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
     }
 
     private func builtInRecipeRow(_ recipe: SmartMarkerRecipe) -> some View {

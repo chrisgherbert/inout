@@ -29,9 +29,6 @@ final class SmartMarkerRecipeStore: ObservableObject {
         } else {
             customRecipes.append(normalized)
         }
-        customRecipes.sort {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
         persist()
     }
 
@@ -44,6 +41,25 @@ final class SmartMarkerRecipeStore: ObservableObject {
 
     func delete(_ id: UUID) {
         customRecipes.removeAll { $0.id == id }
+        persist()
+    }
+
+    func moveCustomRecipes(fromOffsets: IndexSet, toOffset: Int) {
+        let sourceIndexes = fromOffsets.filter(customRecipes.indices.contains).sorted()
+        guard !sourceIndexes.isEmpty else { return }
+
+        let movingRecipes = sourceIndexes.map { customRecipes[$0] }
+        let sourceIndexSet = Set(sourceIndexes)
+        var remainingRecipes = customRecipes.enumerated().compactMap { index, recipe in
+            sourceIndexSet.contains(index) ? nil : recipe
+        }
+        let removedBeforeDestination = sourceIndexes.lazy.filter { $0 < toOffset }.count
+        let insertionIndex = min(
+            remainingRecipes.count,
+            max(0, toOffset - removedBeforeDestination)
+        )
+        remainingRecipes.insert(contentsOf: movingRecipes, at: insertionIndex)
+        customRecipes = remainingRecipes
         persist()
     }
 
@@ -68,9 +84,7 @@ final class SmartMarkerRecipeStore: ObservableObject {
             guard file.version == 1 else {
                 throw CocoaError(.fileReadCorruptFile)
             }
-            customRecipes = file.recipes.map(\.normalized).sorted {
-                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
+            customRecipes = file.recipes.map(\.normalized)
             hiddenBuiltInRecipes = Set(
                 (file.hiddenBuiltInRecipeIDs ?? []).compactMap(SmartMarkerRecipe.init(rawValue:))
             )

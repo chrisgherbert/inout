@@ -1025,11 +1025,15 @@ struct SmartMarkerSmokeTest {
             precondition(
                 recipeStore.customRecipes.contains { $0.name == "Fact-Check Candidates Copy" }
             )
+            let originalOrder = recipeStore.customRecipes.map(\.id)
+            recipeStore.moveCustomRecipes(fromOffsets: IndexSet(integer: 1), toOffset: 0)
+            precondition(recipeStore.customRecipes.map(\.id) == Array(originalOrder.reversed()))
             recipeStore.setHidden(true, for: .highlights)
             precondition(recipeStore.isHidden(.highlights))
             precondition(!recipeStore.isHidden(.topicChanges))
             let reloadedStore = SmartMarkerRecipeStore(fileURL: storeURL)
             precondition(reloadedStore.customRecipes.count == 2)
+            precondition(reloadedStore.customRecipes.map(\.id) == Array(originalOrder.reversed()))
             precondition(reloadedStore.isHidden(.highlights))
             reloadedStore.setHidden(false, for: .highlights)
             precondition(!reloadedStore.isHidden(.highlights))
