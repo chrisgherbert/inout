@@ -82,7 +82,7 @@ private struct ClipPlayerStageSection: View {
     let canShowClipTranscriptSidebar: Bool
     let clipTranscriptSidebarWidth: CGFloat
     let transcriptSegments: [TranscriptSegment]
-    let timecodeDisplayStyle: TimecodeDisplayStyle
+    let timecodeDisplayStyle: TimecodeFormatConfiguration
     let timecodeFrameRate: Double?
     let transcriptStatusText: String
     let canGenerateTranscript: Bool

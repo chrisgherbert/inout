@@ -40,7 +40,7 @@ final class ClipTranscriptPlaybackPresentation {
 }
 
 struct ClipTranscriptSidebarView: View, Equatable {
-    let timecodeDisplayStyle: TimecodeDisplayStyle
+    let timecodeDisplayStyle: TimecodeFormatConfiguration
     let timecodeFrameRate: Double?
     let playbackPresentation: ClipTranscriptPlaybackPresentation
     let transcriptSegments: [TranscriptSegment]

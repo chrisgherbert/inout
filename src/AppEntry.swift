@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct CheckBlackFramesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @FocusedValue(\.workspaceModel) private var focusedModel
     @ObservedObject private var timecodePreferences = TimecodeDisplayPreferences.shared
     @AppStorage("prefs.appearance") private var appearanceRawValue = AppAppearance.dark.rawValue
@@ -296,10 +297,28 @@ struct CheckBlackFramesApp: App {
 
                 Divider()
 
-                Picker("Timecode Style", selection: $timecodePreferences.style) {
-                    ForEach(TimecodeDisplayStyle.allCases) { style in
-                        Text(style.menuTitle).tag(style)
+                Picker("Timecode Format", selection: $timecodePreferences.selectedPresetID) {
+                    if !timecodePreferences.visibleBuiltInPresets.isEmpty {
+                        Section("Built In") {
+                            ForEach(timecodePreferences.visibleBuiltInPresets) { preset in
+                                Text(preset.menuTitle).tag(preset.id)
+                            }
+                        }
                     }
+                    if !timecodePreferences.customPresetOptions.isEmpty {
+                        Section("Custom") {
+                            ForEach(timecodePreferences.customPresetOptions) { preset in
+                                Text(preset.menuTitle).tag(preset.id)
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                Button("Manage Timecode Presets…") {
+                    PreferencesNavigator.shared.request(.timecodes)
+                    openSettings()
                 }
             }
 

@@ -67,7 +67,7 @@ struct TranscriptExportSmokeTest {
         for (style, expectedLabel) in transcriptDisplayExpectations {
             let rows = makeTranscriptDisplayRows(
                 from: segments,
-                timecodeStyle: style,
+                timecodeStyle: style.format,
                 frameRate: 24
             )
             precondition(
@@ -75,6 +75,22 @@ struct TranscriptExportSmokeTest {
                 "Transcript display should use \(style.menuTitle): \(rows.first?.startLabel ?? "nil")"
             )
         }
+        let customTranscriptFormat = TimecodeFormatConfiguration(
+            layout: .totalMinutes,
+            precision: .frames,
+            timeSeparator: .hyphen,
+            subsecondSeparator: .period,
+            padsFirstComponent: false
+        )
+        let customTranscriptRows = makeTranscriptDisplayRows(
+            from: segments,
+            timecodeStyle: customTranscriptFormat,
+            frameRate: 24
+        )
+        precondition(
+            customTranscriptRows.first?.startLabel == "0-01.06",
+            "Transcript display must accept custom timecode configurations"
+        )
 
         let timedText = content(
             segments,

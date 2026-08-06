@@ -129,7 +129,7 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(model.appearance.colorScheme)
-        .environment(\.timecodeDisplayStyle, timecodePreferences.style)
+        .environment(\.timecodeDisplayStyle, timecodePreferences.format)
         .environment(\.timecodeFrameRate, model.sourceInfo?.frameRate)
         .frame(minWidth: 980, minHeight: 700)
         .background(

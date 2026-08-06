@@ -438,9 +438,11 @@ extension WorkspaceViewModel {
                     return
                 }
 
-                if line.hasPrefix("out_time="),
-                   let seconds = parseTimecode(String(line.dropFirst("out_time=".count))) {
-                    progressBatcher.enqueue(seconds / safeDuration)
+                if line.hasPrefix("out_time=") {
+                    let rawTimecode = String(line.dropFirst(9))
+                    if let seconds = InOutCore.parseTimecode(rawTimecode) {
+                        progressBatcher.enqueue(seconds / safeDuration)
+                    }
                 }
             }
 

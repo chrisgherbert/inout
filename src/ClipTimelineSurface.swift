@@ -59,7 +59,7 @@ final class WaveformRasterHostView: NSView {
     var totalDurationSeconds: Double = 0
     var visibleStartSeconds: Double = 0
     var visibleEndSeconds: Double = 1
-    var timecodeDisplayStyle: TimecodeDisplayStyle = .precise
+    var timecodeDisplayStyle: TimecodeFormatConfiguration = TimecodeDisplayStyle.precise.format
     var timecodeFrameRate: Double?
     var showsThumbnailStrip = false
     var thumbnailStripHeight: CGFloat = 0
@@ -1365,7 +1365,7 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
     let totalDurationSeconds: Double
     let visibleStartSeconds: Double
     let visibleEndSeconds: Double
-    let timecodeDisplayStyle: TimecodeDisplayStyle
+    let timecodeDisplayStyle: TimecodeFormatConfiguration
     let timecodeFrameRate: Double?
     let isDarkAppearance: Bool
     let playheadSeconds: Double

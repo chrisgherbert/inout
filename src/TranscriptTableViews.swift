@@ -126,7 +126,7 @@ struct TranscriptDisplayRows {
 func makeTranscriptDisplayRows(
     from segments: [TranscriptSegment],
     mode: TranscriptDisplayMode = .compact,
-    timecodeStyle: TimecodeDisplayStyle = .precise,
+    timecodeStyle: TimecodeFormatConfiguration = TimecodeDisplayStyle.precise.format,
     frameRate: Double? = nil
 ) -> [TranscriptDisplayRow] {
     makeTranscriptDisplayRowsWithLookup(
@@ -140,7 +140,7 @@ func makeTranscriptDisplayRows(
 func makeTranscriptDisplayRowsWithLookup(
     from segments: [TranscriptSegment],
     mode: TranscriptDisplayMode = .compact,
-    timecodeStyle: TimecodeDisplayStyle = .precise,
+    timecodeStyle: TimecodeFormatConfiguration = TimecodeDisplayStyle.precise.format,
     frameRate: Double? = nil
 ) -> TranscriptDisplayRows {
     var rows: [TranscriptDisplayRow] = []
@@ -166,7 +166,7 @@ func makeTranscriptDisplayRowsWithLookup(
                 id: segment.id,
                 start: segment.start,
                 end: segment.end,
-                startLabel: InOutCore.formatDisplayTimecode(segment.start, style: timecodeStyle, frameRate: frameRate),
+                startLabel: InOutCore.formatDisplayTimecode(segment.start, format: timecodeStyle, frameRate: frameRate),
                 text: text,
                 normalizedText: normalizedTranscriptSearchText(text)
             )
@@ -185,7 +185,7 @@ func makeTranscriptDisplayRowsWithLookup(
 
 private func makeParagraphTranscriptDisplayRows(
     from segments: [TranscriptSegment],
-    timecodeStyle: TimecodeDisplayStyle,
+    timecodeStyle: TimecodeFormatConfiguration,
     frameRate: Double?
 ) -> TranscriptDisplayRows {
     var words: [TranscriptTimedWordUnit] = []
@@ -236,7 +236,7 @@ private func makeParagraphTranscriptDisplayRows(
                 id: rowID,
                 start: paragraph.start,
                 end: paragraph.end,
-                startLabel: InOutCore.formatDisplayTimecode(paragraph.start, style: timecodeStyle, frameRate: frameRate),
+                startLabel: InOutCore.formatDisplayTimecode(paragraph.start, format: timecodeStyle, frameRate: frameRate),
                 text: text,
                 normalizedText: normalizedTranscriptSearchText(text)
             )

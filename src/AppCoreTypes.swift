@@ -406,26 +406,13 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 }
 
 typealias TimecodeDisplayStyle = InOutCore.TimecodeDisplayStyle
-
-@MainActor
-final class TimecodeDisplayPreferences: ObservableObject {
-    static let shared = TimecodeDisplayPreferences()
-    static let defaultsKey = "prefs.timecodeDisplayStyle"
-
-    @Published var style: TimecodeDisplayStyle {
-        didSet {
-            UserDefaults.standard.set(style.rawValue, forKey: Self.defaultsKey)
-        }
-    }
-
-    private init() {
-        let stored = UserDefaults.standard.string(forKey: Self.defaultsKey)
-        style = stored.flatMap(TimecodeDisplayStyle.init(rawValue:)) ?? .precise
-    }
-}
+typealias TimecodeFormatConfiguration = InOutCore.TimecodeFormatConfiguration
+typealias TimecodeDisplayLayout = InOutCore.TimecodeDisplayLayout
+typealias TimecodeDisplayPrecision = InOutCore.TimecodeDisplayPrecision
+typealias TimecodeSeparator = InOutCore.TimecodeSeparator
 
 private struct TimecodeDisplayStyleEnvironmentKey: EnvironmentKey {
-    static let defaultValue = TimecodeDisplayStyle.precise
+    static let defaultValue = TimecodeDisplayStyle.precise.format
 }
 
 private struct TimecodeFrameRateEnvironmentKey: EnvironmentKey {
@@ -433,7 +420,7 @@ private struct TimecodeFrameRateEnvironmentKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    var timecodeDisplayStyle: TimecodeDisplayStyle {
+    var timecodeDisplayStyle: TimecodeFormatConfiguration {
         get { self[TimecodeDisplayStyleEnvironmentKey.self] }
         set { self[TimecodeDisplayStyleEnvironmentKey.self] = newValue }
     }

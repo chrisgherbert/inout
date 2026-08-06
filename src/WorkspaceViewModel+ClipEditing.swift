@@ -8,7 +8,7 @@ extension WorkspaceViewModel {
     private func formattedDisplayTimecode(_ seconds: Double) -> String {
         formatDisplayTimecode(
             seconds,
-            style: TimecodeDisplayPreferences.shared.style,
+            style: TimecodeDisplayPreferences.shared.format,
             frameRate: sourceInfo?.frameRate
         )
     }
@@ -142,7 +142,7 @@ extension WorkspaceViewModel {
     func commitClipStartText(undoManager: UndoManager? = nil) {
         guard let parsed = parseTimecode(
             clipStartText,
-            style: TimecodeDisplayPreferences.shared.style,
+            style: TimecodeDisplayPreferences.shared.format,
             frameRate: sourceInfo?.frameRate
         ) else {
             clipStartText = formattedDisplayTimecode(clipStartSeconds)
@@ -154,7 +154,7 @@ extension WorkspaceViewModel {
     func commitClipEndText(undoManager: UndoManager? = nil) {
         guard let parsed = parseTimecode(
             clipEndText,
-            style: TimecodeDisplayPreferences.shared.style,
+            style: TimecodeDisplayPreferences.shared.format,
             frameRate: sourceInfo?.frameRate
         ) else {
             clipEndText = formattedDisplayTimecode(clipEndSeconds)

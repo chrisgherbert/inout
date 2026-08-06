@@ -18,10 +18,10 @@ func formatSeconds(_ value: Double) -> String {
 
 func formatDisplayTimecode(
     _ value: Double,
-    style: TimecodeDisplayStyle,
+    style: TimecodeFormatConfiguration,
     frameRate: Double? = nil
 ) -> String {
-    InOutCore.formatDisplayTimecode(value, style: style, frameRate: frameRate)
+    InOutCore.formatDisplayTimecode(value, format: style, frameRate: frameRate)
 }
 
 struct DisplayTimecodeText: View {
@@ -137,10 +137,13 @@ func adaptiveContainerFill(
 
 func parseTimecode(
     _ value: String,
-    style: TimecodeDisplayStyle? = nil,
+    style: TimecodeFormatConfiguration? = nil,
     frameRate: Double? = nil
 ) -> Double? {
-    InOutCore.parseTimecode(value, style: style, frameRate: frameRate)
+    if let style {
+        return InOutCore.parseTimecode(value, format: style, frameRate: frameRate)
+    }
+    return InOutCore.parseTimecode(value, frameRate: frameRate)
 }
 
 func fourCCString(_ value: FourCharCode) -> String {

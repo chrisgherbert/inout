@@ -66,4 +66,40 @@ guard parseTimecode("01:23.24", style: .minutePeriodFrames, frameRate: 24) == ni
     exit(1)
 }
 
+let customMinuteFrames = TimecodeFormatConfiguration(
+    layout: .totalMinutes,
+    precision: .frames,
+    timeSeparator: .hyphen,
+    subsecondSeparator: .period,
+    padsFirstComponent: false
+)
+expect(
+    formatDisplayTimecode(83.5, format: customMinuteFrames, frameRate: 24),
+    "1-23.12",
+    "custom minute frame format"
+)
+expectClose(
+    parseTimecode("1-23.12", format: customMinuteFrames, frameRate: 24),
+    83.5,
+    "custom minute frame parse"
+)
+
+let customClockMilliseconds = TimecodeFormatConfiguration(
+    layout: .clock,
+    precision: .milliseconds,
+    timeSeparator: .period,
+    subsecondSeparator: .comma,
+    padsFirstComponent: false
+)
+expect(
+    formatDisplayTimecode(3_723.5, format: customClockMilliseconds),
+    "1.02.03,500",
+    "custom clock millisecond format"
+)
+expectClose(
+    parseTimecode("1.02.03,500", format: customClockMilliseconds),
+    3_723.5,
+    "custom clock millisecond parse"
+)
+
 print("Timecode display smoke test passed.")

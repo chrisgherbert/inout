@@ -3,6 +3,7 @@ import AppKit
 
 enum PreferencesPane: String, CaseIterable, Identifiable {
     case general = "General"
+    case timecodes = "Timecodes"
     case tools = "Tools"
     case ai = "AI"
     case analyze = "Analyze"
@@ -14,6 +15,7 @@ enum PreferencesPane: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .general: return "gearshape"
+        case .timecodes: return "timer"
         case .tools: return "wrench.and.screwdriver"
         case .ai: return "sparkles"
         case .analyze: return "waveform.path.ecg"
@@ -132,21 +134,6 @@ struct PreferencesView: View {
             }
             Divider()
 
-            settingsSection("Timecodes") {
-                settingsRow("Display style") {
-                    valueMenuPicker("Timecode Display Style", selection: $timecodePreferences.style) {
-                        ForEach(TimecodeDisplayStyle.allCases) { style in
-                            Text(style.menuTitle).tag(style)
-                        }
-                    }
-                }
-
-                Text("Frame-based formats use the source frame rate and fall back to Hours:Minutes:Seconds.Milliseconds when no video frame rate is available. Semicolon drop-frame timecode is not currently supported. Timeline ruler labels and transcript export formats are unchanged.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Divider()
-
             settingsSection("Notifications") {
                 settingsRow("Completion sound") {
                     HStack(spacing: 8) {
@@ -213,6 +200,15 @@ struct PreferencesView: View {
                     }
                     .frame(width: 240, alignment: .leading)
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var timecodesPane: some View {
+        paneScroll {
+            settingsSection("Timecode Presets") {
+                TimecodePresetManagementView(store: timecodePreferences)
             }
         }
     }
@@ -846,6 +842,12 @@ struct PreferencesView: View {
                 .tag(PreferencesPane.general)
                 .tabItem {
                     Label(PreferencesPane.general.rawValue, systemImage: PreferencesPane.general.symbol)
+                }
+
+            timecodesPane
+                .tag(PreferencesPane.timecodes)
+                .tabItem {
+                    Label(PreferencesPane.timecodes.rawValue, systemImage: PreferencesPane.timecodes.symbol)
                 }
 
             toolsPane
