@@ -134,7 +134,8 @@ extension WorkspaceViewModel {
             let timecode = formatDisplayTimecode(
                 seconds,
                 style: TimecodeDisplayPreferences.shared.format,
-                frameRate: sourceInfo?.frameRate
+                frameRate: sourceInfo?.frameRate,
+                mediaDuration: sourceDurationSeconds
             )
             uiMessage = "Marker added at \(timecode)"
             if let undoManager {

@@ -12,7 +12,7 @@ public enum TimecodeDisplayLayout: String, Codable, CaseIterable, Identifiable, 
     public var title: String {
         switch self {
         case .clock: return "Hours, Minutes, Seconds"
-        case .adaptiveClock: return "Short Time"
+        case .adaptiveClock: return "Automatic Hours (Legacy)"
         case .totalMinutes: return "Total Minutes, Seconds"
         case .totalSeconds: return "Total Seconds"
         case .frameNumber: return "Absolute Frame Number"
@@ -60,23 +60,64 @@ public struct TimecodeFormatConfiguration: Codable, Equatable, Hashable, Sendabl
     public var timeSeparator: TimecodeSeparator
     public var subsecondSeparator: TimecodeSeparator
     public var padsFirstComponent: Bool
+    public var includesHoursForShortMedia: Bool
 
     public init(
         layout: TimecodeDisplayLayout,
         precision: TimecodeDisplayPrecision,
         timeSeparator: TimecodeSeparator = .colon,
         subsecondSeparator: TimecodeSeparator = .period,
-        padsFirstComponent: Bool = true
+        padsFirstComponent: Bool = true,
+        includesHoursForShortMedia: Bool = true
     ) {
         self.layout = layout
         self.precision = layout == .frameNumber ? .frames : precision
         self.timeSeparator = timeSeparator
         self.subsecondSeparator = subsecondSeparator
         self.padsFirstComponent = padsFirstComponent
+        self.includesHoursForShortMedia = includesHoursForShortMedia
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case layout
+        case precision
+        case timeSeparator
+        case subsecondSeparator
+        case padsFirstComponent
+        case includesHoursForShortMedia
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedLayout = try container.decode(TimecodeDisplayLayout.self, forKey: .layout)
+        layout = decodedLayout
+        precision = try container.decode(TimecodeDisplayPrecision.self, forKey: .precision)
+        timeSeparator = try container.decode(TimecodeSeparator.self, forKey: .timeSeparator)
+        subsecondSeparator = try container.decode(TimecodeSeparator.self, forKey: .subsecondSeparator)
+        padsFirstComponent = try container.decode(Bool.self, forKey: .padsFirstComponent)
+        includesHoursForShortMedia = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .includesHoursForShortMedia
+        ) ?? (decodedLayout != .adaptiveClock)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalized = normalized
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalized.layout, forKey: .layout)
+        try container.encode(normalized.precision, forKey: .precision)
+        try container.encode(normalized.timeSeparator, forKey: .timeSeparator)
+        try container.encode(normalized.subsecondSeparator, forKey: .subsecondSeparator)
+        try container.encode(normalized.padsFirstComponent, forKey: .padsFirstComponent)
+        try container.encode(normalized.includesHoursForShortMedia, forKey: .includesHoursForShortMedia)
     }
 
     public var normalized: TimecodeFormatConfiguration {
         var result = self
+        if result.layout == .adaptiveClock {
+            result.layout = .clock
+            result.includesHoursForShortMedia = false
+        }
         if result.layout == .frameNumber {
             result.precision = .frames
             result.padsFirstComponent = false
@@ -85,41 +126,41 @@ public struct TimecodeFormatConfiguration: Codable, Equatable, Hashable, Sendabl
     }
 
     public var notation: String {
-        let separator = timeSeparator.rawValue
-        let base: String
-        switch layout {
+        let format = normalized
+        let separator = format.timeSeparator.rawValue
+        let first = format.padsFirstComponent ? "MM" : "M"
+        let hour = format.padsFirstComponent ? "HH" : "H"
+        let decorate: (String) -> String = { base in
+            switch format.precision {
+            case .seconds:
+                return base
+            case .milliseconds:
+                return "\(base)\(format.subsecondSeparator.rawValue)mmm"
+            case .frames:
+                return "\(base)\(format.subsecondSeparator.rawValue)FF"
+            }
+        }
+        switch format.layout {
         case .clock:
-            base = "HH\(separator)MM\(separator)SS"
+            let long = decorate("\(hour)\(separator)MM\(separator)SS")
+            if format.includesHoursForShortMedia {
+                return long
+            } else {
+                return "\(decorate("\(first)\(separator)SS")) under 1 hr / \(long)"
+            }
         case .adaptiveClock:
-            let short = "M\(separator)SS"
-            let long = "H\(separator)MM\(separator)SS"
-            base = "\(short) / \(long)"
+            preconditionFailure("Legacy adaptive layouts normalize to clock layouts")
         case .totalMinutes:
-            base = "MM\(separator)SS"
+            return decorate("\(first)\(separator)SS")
         case .totalSeconds:
-            base = "SS"
+            return decorate("SS")
         case .frameNumber:
             return "Frames"
-        }
-
-        switch precision {
-        case .seconds:
-            return base
-        case .milliseconds:
-            return base
-                .split(separator: " ", omittingEmptySubsequences: false)
-                .map { $0.hasSuffix("SS") ? "\($0)\(subsecondSeparator.rawValue)mmm" : String($0) }
-                .joined(separator: " ")
-        case .frames:
-            return base
-                .split(separator: " ", omittingEmptySubsequences: false)
-                .map { $0.hasSuffix("SS") ? "\($0)\(subsecondSeparator.rawValue)FF" : String($0) }
-                .joined(separator: " ")
         }
     }
 
     public var example: String {
-        formatDisplayTimecode(83.5, format: self, frameRate: 24)
+        formatDisplayTimecode(83.5, format: self, frameRate: 24, mediaDuration: 1_800)
     }
 }
 
@@ -158,9 +199,10 @@ public enum TimecodeDisplayStyle: String, CaseIterable, Identifiable, Codable, S
             return TimecodeFormatConfiguration(layout: .clock, precision: .seconds)
         case .compact:
             return TimecodeFormatConfiguration(
-                layout: .adaptiveClock,
+                layout: .clock,
                 precision: .seconds,
-                padsFirstComponent: false
+                padsFirstComponent: false,
+                includesHoursForShortMedia: false
             )
         case .frames:
             return TimecodeFormatConfiguration(
@@ -210,15 +252,22 @@ public func formatSeconds(_ value: Double) -> String {
 public func formatDisplayTimecode(
     _ value: Double,
     style: TimecodeDisplayStyle,
-    frameRate: Double? = nil
+    frameRate: Double? = nil,
+    mediaDuration: Double? = nil
 ) -> String {
-    formatDisplayTimecode(value, format: style.format, frameRate: frameRate)
+    formatDisplayTimecode(
+        value,
+        format: style.format,
+        frameRate: frameRate,
+        mediaDuration: mediaDuration
+    )
 }
 
 public func formatDisplayTimecode(
     _ value: Double,
     format requestedFormat: TimecodeFormatConfiguration,
-    frameRate: Double? = nil
+    frameRate: Double? = nil,
+    mediaDuration: Double? = nil
 ) -> String {
     let safe = max(0, value.isFinite ? value : 0)
     let format = requestedFormat.normalized
@@ -262,11 +311,19 @@ public func formatDisplayTimecode(
     let base: String
     switch format.layout {
     case .clock:
-        base = [
-            firstComponent(wholeSeconds / 3_600, padded: format.padsFirstComponent),
-            String(format: "%02d", (wholeSeconds / 60) % 60),
-            String(format: "%02d", wholeSeconds % 60)
-        ].joined(separator: separator)
+        let duration = mediaDuration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? safe
+        if format.includesHoursForShortMedia || duration >= 3_600 {
+            base = [
+                firstComponent(wholeSeconds / 3_600, padded: format.padsFirstComponent),
+                String(format: "%02d", (wholeSeconds / 60) % 60),
+                String(format: "%02d", wholeSeconds % 60)
+            ].joined(separator: separator)
+        } else {
+            base = [
+                firstComponent(wholeSeconds / 60, padded: format.padsFirstComponent),
+                String(format: "%02d", wholeSeconds % 60)
+            ].joined(separator: separator)
+        }
     case .adaptiveClock:
         let hours = wholeSeconds / 3_600
         if hours > 0 {
@@ -297,7 +354,8 @@ public func formatDisplayTimecode(
 public func parseTimecode(
     _ value: String,
     format: TimecodeFormatConfiguration,
-    frameRate: Double? = nil
+    frameRate: Double? = nil,
+    mediaDuration: Double? = nil
 ) -> Double? {
     let format = format.normalized
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -333,11 +391,20 @@ public func parseTimecode(
     let wholeSeconds: Double
     switch format.layout {
     case .clock:
-        guard parts.count == 3,
-              let hours = nonnegativeInteger(parts[0]),
-              let minutes = boundedTimeComponent(parts[1]),
-              let seconds = boundedTimeComponent(parts[2]) else { return nil }
-        wholeSeconds = Double((hours * 3_600) + (minutes * 60) + seconds)
+        let duration = mediaDuration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        let expectsHours = format.includesHoursForShortMedia || duration.map { $0 >= 3_600 } == true
+        if expectsHours || (duration == nil && parts.count == 3) {
+            guard parts.count == 3,
+                  let hours = nonnegativeInteger(parts[0]),
+                  let minutes = boundedTimeComponent(parts[1]),
+                  let seconds = boundedTimeComponent(parts[2]) else { return nil }
+            wholeSeconds = Double((hours * 3_600) + (minutes * 60) + seconds)
+        } else {
+            guard parts.count == 2,
+                  let minutes = nonnegativeInteger(parts[0]),
+                  let seconds = boundedTimeComponent(parts[1]) else { return nil }
+            wholeSeconds = Double((minutes * 60) + seconds)
+        }
     case .adaptiveClock:
         if parts.count == 2,
            let minutes = nonnegativeInteger(parts[0]),
@@ -369,10 +436,16 @@ public func parseTimecode(
 public func parseTimecode(
     _ value: String,
     style: TimecodeDisplayStyle? = nil,
-    frameRate: Double? = nil
+    frameRate: Double? = nil,
+    mediaDuration: Double? = nil
 ) -> Double? {
     if let style {
-        return parseTimecode(value, format: style.format, frameRate: frameRate)
+        return parseTimecode(
+            value,
+            format: style.format,
+            frameRate: frameRate,
+            mediaDuration: mediaDuration
+        )
     }
 
     let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)

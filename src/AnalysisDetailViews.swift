@@ -113,6 +113,7 @@ struct DetailView: View {
     @ObservedObject var activity: ActivityPresentationModel
     @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
     @Environment(\.timecodeFrameRate) private var timecodeFrameRate
+    @Environment(\.timecodeMediaDuration) private var timecodeMediaDuration
 
     @State private var player = AVPlayer()
     @State private var isPlaying = false
@@ -143,7 +144,12 @@ struct DetailView: View {
     }
 
     private func displayTimecode(_ seconds: Double) -> String {
-        formatDisplayTimecode(seconds, style: timecodeDisplayStyle, frameRate: timecodeFrameRate)
+        formatDisplayTimecode(
+            seconds,
+            style: timecodeDisplayStyle,
+            frameRate: timecodeFrameRate,
+            mediaDuration: timecodeMediaDuration
+        )
     }
 
     private var formattedBlackList: String {

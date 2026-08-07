@@ -68,7 +68,8 @@ struct TranscriptExportSmokeTest {
             let rows = makeTranscriptDisplayRows(
                 from: segments,
                 timecodeStyle: style.format,
-                frameRate: 24
+                frameRate: 24,
+                mediaDuration: 1_800
             )
             precondition(
                 rows.first?.startLabel == expectedLabel,
@@ -90,6 +91,21 @@ struct TranscriptExportSmokeTest {
         precondition(
             customTranscriptRows.first?.startLabel == "0-01.06",
             "Transcript display must accept custom timecode configurations"
+        )
+
+        let durationAwareFormat = TimecodeFormatConfiguration(
+            layout: .clock,
+            precision: .seconds,
+            includesHoursForShortMedia: false
+        )
+        let longMediaRows = makeTranscriptDisplayRows(
+            from: segments,
+            timecodeStyle: durationAwareFormat,
+            mediaDuration: 4_000
+        )
+        precondition(
+            longMediaRows.first?.startLabel == "00:00:01",
+            "Transcript timecodes must use the full media duration when deciding whether to show hours"
         )
 
         let timedText = content(

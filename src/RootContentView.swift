@@ -131,6 +131,7 @@ struct ContentView: View {
         .preferredColorScheme(model.appearance.colorScheme)
         .environment(\.timecodeDisplayStyle, timecodePreferences.format)
         .environment(\.timecodeFrameRate, model.sourceInfo?.frameRate)
+        .environment(\.timecodeMediaDuration, model.sourceDurationSeconds)
         .frame(minWidth: 980, minHeight: 700)
         .background(
             WindowAccessor { window in

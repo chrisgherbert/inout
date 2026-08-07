@@ -128,14 +128,24 @@ struct ClipPlayerUtilityRow: View {
                 Button("Copy Timecode", action: onCopyPlayheadTimecode)
             }
 
-            Text(formatDisplayTimecode(playheadSeconds, style: timecodeDisplayStyle, frameRate: timecodeFrameRate))
+            Text(formatDisplayTimecode(
+                playheadSeconds,
+                style: timecodeDisplayStyle,
+                frameRate: timecodeFrameRate,
+                mediaDuration: totalDurationSeconds
+            ))
                 .font(.caption.monospacedDigit())
                 .fontWeight(.semibold)
                 .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.primary)
             Text("/")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-            Text(formatDisplayTimecode(totalDurationSeconds, style: timecodeDisplayStyle, frameRate: timecodeFrameRate))
+            Text(formatDisplayTimecode(
+                totalDurationSeconds,
+                style: timecodeDisplayStyle,
+                frameRate: timecodeFrameRate,
+                mediaDuration: totalDurationSeconds
+            ))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }

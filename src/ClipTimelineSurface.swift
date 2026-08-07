@@ -1913,12 +1913,14 @@ struct WaveformRasterLayerView: NSViewRepresentable, Equatable {
                         let start = formatDisplayTimecode(
                             marker.seconds,
                             style: timecodeDisplayStyle,
-                            frameRate: timecodeFrameRate
+                            frameRate: timecodeFrameRate,
+                            mediaDuration: totalDurationSeconds
                         )
                         let end = formatDisplayTimecode(
                             $0,
                             style: timecodeDisplayStyle,
-                            frameRate: timecodeFrameRate
+                            frameRate: timecodeFrameRate,
+                            mediaDuration: totalDurationSeconds
                         )
                         return "\(start) → \(end)"
                     }

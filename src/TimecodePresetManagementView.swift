@@ -220,9 +220,16 @@ private struct TimecodePresetEditor: View {
                 TextField("Name", text: $draft.name, prompt: Text("Platform or workflow name"))
 
                 Picker("Layout", selection: $draft.format.layout) {
-                    ForEach(TimecodeDisplayLayout.allCases) { layout in
+                    ForEach(editableLayouts) { layout in
                         Text(layout.title).tag(layout)
                     }
+                }
+
+                if draft.format.layout == .clock {
+                    Toggle(
+                        "Include hours for media under one hour",
+                        isOn: $draft.format.includesHoursForShortMedia
+                    )
                 }
 
                 Picker("Precision", selection: $draft.format.precision) {
@@ -264,9 +271,15 @@ private struct TimecodePresetEditor: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Preview")
                     .font(.headline)
-                previewRow("Short", seconds: 8.5)
-                previewRow("Medium", seconds: 754.625)
-                previewRow("Over one hour", seconds: 4_325.25)
+                Text("Example position: 5 minutes, 25 seconds")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if conditionallyOmitsHours {
+                    previewRow("Media under one hour", mediaDuration: 1_800)
+                    previewRow("Media one hour or longer", mediaDuration: 4_500)
+                } else {
+                    previewRow("Formatted timecode", mediaDuration: 1_800)
+                }
                 Text("Frame previews use 24 fps. In media, frame formats use the source frame rate.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -296,12 +309,21 @@ private struct TimecodePresetEditor: View {
         return TimecodeDisplayPrecision.allCases
     }
 
+    private var editableLayouts: [TimecodeDisplayLayout] {
+        TimecodeDisplayLayout.allCases.filter { $0 != .adaptiveClock }
+    }
+
     private var usesTimeSeparator: Bool {
         [.clock, .adaptiveClock, .totalMinutes].contains(draft.format.layout)
     }
 
     private var usesSubsecondSeparator: Bool {
         draft.format.layout != .frameNumber && draft.format.precision != .seconds
+    }
+
+    private var conditionallyOmitsHours: Bool {
+        let format = draft.format.normalized
+        return format.layout == .clock && !format.includesHoursForShortMedia
     }
 
     private var timeSeparators: [TimecodeSeparator] {
@@ -318,12 +340,17 @@ private struct TimecodePresetEditor: View {
         draft.format.precision == .frames ? "Frame separator" : "Decimal separator"
     }
 
-    private func previewRow(_ label: String, seconds: Double) -> some View {
+    private func previewRow(_ label: String, mediaDuration: Double) -> some View {
         HStack {
             Text(label)
                 .foregroundStyle(.secondary)
             Spacer()
-            Text(formatDisplayTimecode(seconds, style: draft.format, frameRate: 24))
+            Text(formatDisplayTimecode(
+                325.25,
+                style: draft.format,
+                frameRate: 24,
+                mediaDuration: mediaDuration
+            ))
                 .font(.body.monospacedDigit())
         }
     }

@@ -9,7 +9,8 @@ extension WorkspaceViewModel {
         formatDisplayTimecode(
             seconds,
             style: TimecodeDisplayPreferences.shared.format,
-            frameRate: sourceInfo?.frameRate
+            frameRate: sourceInfo?.frameRate,
+            mediaDuration: sourceDurationSeconds
         )
     }
 
@@ -143,7 +144,8 @@ extension WorkspaceViewModel {
         guard let parsed = parseTimecode(
             clipStartText,
             style: TimecodeDisplayPreferences.shared.format,
-            frameRate: sourceInfo?.frameRate
+            frameRate: sourceInfo?.frameRate,
+            mediaDuration: sourceDurationSeconds
         ) else {
             clipStartText = formattedDisplayTimecode(clipStartSeconds)
             return
@@ -155,7 +157,8 @@ extension WorkspaceViewModel {
         guard let parsed = parseTimecode(
             clipEndText,
             style: TimecodeDisplayPreferences.shared.format,
-            frameRate: sourceInfo?.frameRate
+            frameRate: sourceInfo?.frameRate,
+            mediaDuration: sourceDurationSeconds
         ) else {
             clipEndText = formattedDisplayTimecode(clipEndSeconds)
             return

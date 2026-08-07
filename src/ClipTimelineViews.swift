@@ -84,6 +84,7 @@ private struct ClipPlayerStageSection: View {
     let transcriptSegments: [TranscriptSegment]
     let timecodeDisplayStyle: TimecodeFormatConfiguration
     let timecodeFrameRate: Double?
+    let timecodeMediaDuration: Double?
     let transcriptStatusText: String
     let canGenerateTranscript: Bool
     let isGeneratingTranscript: Bool
@@ -200,6 +201,7 @@ private struct ClipPlayerStageSection: View {
                         ClipTranscriptSidebarView(
                             timecodeDisplayStyle: timecodeDisplayStyle,
                             timecodeFrameRate: timecodeFrameRate,
+                            timecodeMediaDuration: timecodeMediaDuration,
                             playbackPresentation: transcriptPlaybackPresentation,
                             transcriptSegments: transcriptSegments,
                             transcriptStatusText: transcriptStatusText,
@@ -292,6 +294,7 @@ extension ClipPlayerStageSection: Equatable {
         lhs.transcriptSegments.last?.id == rhs.transcriptSegments.last?.id &&
         lhs.timecodeDisplayStyle == rhs.timecodeDisplayStyle &&
         lhs.timecodeFrameRate == rhs.timecodeFrameRate &&
+        lhs.timecodeMediaDuration == rhs.timecodeMediaDuration &&
         lhs.transcriptStatusText == rhs.transcriptStatusText &&
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
@@ -327,6 +330,7 @@ struct ClipToolView: View {
     @Environment(\.undoManager) private var undoManager
     @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
     @Environment(\.timecodeFrameRate) private var timecodeFrameRate
+    @Environment(\.timecodeMediaDuration) private var timecodeMediaDuration
 
     @StateObject private var runtime = ClipToolRuntimeState()
     @StateObject private var smartMarkers = SmartMarkerPresentationModel()
@@ -1345,7 +1349,8 @@ struct ClipToolView: View {
             from: segments,
             mode: mode ?? model.transcriptDisplayMode,
             timecodeStyle: timecodeDisplayStyle,
-            frameRate: timecodeFrameRate
+            frameRate: timecodeFrameRate,
+            mediaDuration: timecodeMediaDuration
         )
         runtime.transcriptPlaybackPresentation.configure(
             displayRows: displayRows.rows
@@ -1762,7 +1767,8 @@ struct ClipToolView: View {
         let timecode = formatDisplayTimecode(
             playheadSeconds,
             style: timecodeDisplayStyle,
-            frameRate: timecodeFrameRate
+            frameRate: timecodeFrameRate,
+            mediaDuration: timecodeMediaDuration
         )
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(timecode, forType: .string)
@@ -2400,6 +2406,7 @@ struct ClipToolView: View {
                 transcriptSegments: sourcePresentation.transcriptSegments,
                 timecodeDisplayStyle: timecodeDisplayStyle,
                 timecodeFrameRate: timecodeFrameRate,
+                timecodeMediaDuration: timecodeMediaDuration,
                 transcriptStatusText: sourcePresentation.transcriptStatusText,
                 canGenerateTranscript: model.canGenerateTranscript,
                 isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
@@ -3052,6 +3059,10 @@ struct ClipToolView: View {
             refreshClipTranscriptLookup(sourcePresentation.transcriptSegments)
         }
         .onChange(of: timecodeFrameRate) { _ in
+            model.syncClipTextFields()
+            refreshClipTranscriptLookup(sourcePresentation.transcriptSegments)
+        }
+        .onChange(of: timecodeMediaDuration) { _ in
             model.syncClipTextFields()
             refreshClipTranscriptLookup(sourcePresentation.transcriptSegments)
         }

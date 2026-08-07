@@ -19,18 +19,30 @@ func formatSeconds(_ value: Double) -> String {
 func formatDisplayTimecode(
     _ value: Double,
     style: TimecodeFormatConfiguration,
-    frameRate: Double? = nil
+    frameRate: Double? = nil,
+    mediaDuration: Double? = nil
 ) -> String {
-    InOutCore.formatDisplayTimecode(value, format: style, frameRate: frameRate)
+    InOutCore.formatDisplayTimecode(
+        value,
+        format: style,
+        frameRate: frameRate,
+        mediaDuration: mediaDuration
+    )
 }
 
 struct DisplayTimecodeText: View {
     let seconds: Double
     @Environment(\.timecodeDisplayStyle) private var style
     @Environment(\.timecodeFrameRate) private var frameRate
+    @Environment(\.timecodeMediaDuration) private var mediaDuration
 
     var body: some View {
-        Text(formatDisplayTimecode(seconds, style: style, frameRate: frameRate))
+        Text(formatDisplayTimecode(
+            seconds,
+            style: style,
+            frameRate: frameRate,
+            mediaDuration: mediaDuration
+        ))
     }
 }
 
@@ -138,10 +150,16 @@ func adaptiveContainerFill(
 func parseTimecode(
     _ value: String,
     style: TimecodeFormatConfiguration? = nil,
-    frameRate: Double? = nil
+    frameRate: Double? = nil,
+    mediaDuration: Double? = nil
 ) -> Double? {
     if let style {
-        return InOutCore.parseTimecode(value, format: style, frameRate: frameRate)
+        return InOutCore.parseTimecode(
+            value,
+            format: style,
+            frameRate: frameRate,
+            mediaDuration: mediaDuration
+        )
     }
     return InOutCore.parseTimecode(value, frameRate: frameRate)
 }

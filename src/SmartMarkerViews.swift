@@ -396,6 +396,7 @@ struct SmartMarkerReviewView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
     @Environment(\.timecodeFrameRate) private var timecodeFrameRate
+    @Environment(\.timecodeMediaDuration) private var timecodeMediaDuration
     @State private var copiedSuggestionID: UUID?
     @State private var copiedAllTabID: UUID?
     @State private var refinementDraft = ""
@@ -920,18 +921,21 @@ struct SmartMarkerReviewView: View {
             return formatDisplayTimecode(
                 suggestion.seconds,
                 style: timecodeDisplayStyle,
-                frameRate: timecodeFrameRate
+                frameRate: timecodeFrameRate,
+                mediaDuration: timecodeMediaDuration
             )
         }
         let start = formatDisplayTimecode(
             suggestion.seconds,
             style: timecodeDisplayStyle,
-            frameRate: timecodeFrameRate
+            frameRate: timecodeFrameRate,
+            mediaDuration: timecodeMediaDuration
         )
         let end = formatDisplayTimecode(
             endSeconds,
             style: timecodeDisplayStyle,
-            frameRate: timecodeFrameRate
+            frameRate: timecodeFrameRate,
+            mediaDuration: timecodeMediaDuration
         )
         return "\(start) → \(end)"
     }

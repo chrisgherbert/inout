@@ -5,6 +5,7 @@ import AVFoundation
 struct ClipSelectionPanel: View, Equatable {
     @State private var isTimecodeRowHovered = false
     @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
+    @Environment(\.timecodeFrameRate) private var timecodeFrameRate
     let player: AVPlayer
     let sourceSessionID: UUID
     let clipStartSeconds: Double
@@ -103,6 +104,15 @@ struct ClipSelectionPanel: View, Equatable {
         lhs.quickExportFlashToken == rhs.quickExportFlashToken
     }
 
+    private var timecodePlaceholder: String {
+        formatDisplayTimecode(
+            83.5,
+            style: timecodeDisplayStyle,
+            frameRate: timecodeFrameRate,
+            mediaDuration: totalDurationSeconds
+        )
+    }
+
     var body: some View {
         let _ = PlayheadDiagnostics.shared.noteSelectionPanelBodyEvaluation()
         VStack(alignment: .leading, spacing: 10) {
@@ -183,7 +193,7 @@ struct ClipSelectionPanel: View, Equatable {
                         Text("In")
                             .foregroundStyle(.secondary)
                             .frame(width: 18, alignment: .leading)
-                        TextField(timecodeDisplayStyle.example, text: $clipStartText)
+                        TextField(timecodePlaceholder, text: $clipStartText)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 140)
@@ -201,7 +211,7 @@ struct ClipSelectionPanel: View, Equatable {
                         Text("Out")
                             .foregroundStyle(.secondary)
                             .frame(width: 24, alignment: .leading)
-                        TextField(timecodeDisplayStyle.example, text: $clipEndText)
+                        TextField(timecodePlaceholder, text: $clipEndText)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 140)
@@ -218,7 +228,7 @@ struct ClipSelectionPanel: View, Equatable {
                         Text("In")
                             .foregroundStyle(.secondary)
                             .frame(width: 18, alignment: .leading)
-                        TextField(timecodeDisplayStyle.example, text: $clipStartText)
+                        TextField(timecodePlaceholder, text: $clipStartText)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onSubmit { onCommitClipStartText() }
@@ -231,7 +241,7 @@ struct ClipSelectionPanel: View, Equatable {
                         Text("Out")
                             .foregroundStyle(.secondary)
                             .frame(width: 24, alignment: .leading)
-                        TextField(timecodeDisplayStyle.example, text: $clipEndText)
+                        TextField(timecodePlaceholder, text: $clipEndText)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onSubmit { onCommitClipEndText() }

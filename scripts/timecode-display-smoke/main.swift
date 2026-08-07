@@ -16,14 +16,13 @@ private func expectClose(_ actual: Double?, _ expected: Double, _ label: String)
 
 expect(TimecodeDisplayStyle.precise.menuTitle, "Hours:Minutes:Seconds.Milliseconds (HH:MM:SS.mmm)", "precise label")
 expect(TimecodeDisplayStyle.standard.menuTitle, "Hours:Minutes:Seconds (HH:MM:SS)", "whole-second label")
-expect(TimecodeDisplayStyle.compact.menuTitle, "Minutes:Seconds or Hours:Minutes:Seconds (M:SS / H:MM:SS)", "short-form label")
+expect(TimecodeDisplayStyle.compact.menuTitle, "Minutes:Seconds or Hours:Minutes:Seconds (M:SS under 1 hr / H:MM:SS)", "short-form label")
 expect(TimecodeDisplayStyle.frames.menuTitle, "Hours:Minutes:Seconds:Frames (HH:MM:SS:FF)", "hour frame label")
 expect(TimecodeDisplayStyle.minuteFrames.menuTitle, "Minutes:Seconds:Frames (MM:SS:FF)", "minute frame label")
 expect(TimecodeDisplayStyle.periodFrames.menuTitle, "Hours:Minutes:Seconds.Frames (HH:MM:SS.FF)", "period hour frame label")
 expect(TimecodeDisplayStyle.minutePeriodFrames.menuTitle, "Minutes:Seconds.Frames (MM:SS.FF)", "period minute frame label")
 expect(TimecodeDisplayStyle.totalSeconds.menuTitle, "Total Seconds.Milliseconds (SS.mmm)", "total seconds label")
 expect(TimecodeDisplayStyle.frameNumber.menuTitle, "Absolute Frame Number (Frames)", "frame number label")
-
 expect(formatDisplayTimecode(83.456, style: .precise), "00:01:23.456", "precise")
 expect(formatDisplayTimecode(59.9996, style: .precise), "00:01:00.000", "precise rollover")
 expect(formatDisplayTimecode(83.999, style: .standard), "00:01:23", "standard")
@@ -101,5 +100,39 @@ expectClose(
     3_723.5,
     "custom clock millisecond parse"
 )
+
+let durationAwareClock = TimecodeFormatConfiguration(
+    layout: .clock,
+    precision: .seconds,
+    includesHoursForShortMedia: false
+)
+expect(
+    formatDisplayTimecode(323, format: durationAwareClock, mediaDuration: 3_599),
+    "05:23",
+    "short media omits hours"
+)
+expect(
+    formatDisplayTimecode(323, format: durationAwareClock, mediaDuration: 3_601),
+    "00:05:23",
+    "long media includes hours at an early timestamp"
+)
+expectClose(
+    parseTimecode("05:23", format: durationAwareClock, mediaDuration: 3_599),
+    323,
+    "short media parse"
+)
+expectClose(
+    parseTimecode("00:05:23", format: durationAwareClock, mediaDuration: 3_601),
+    323,
+    "long media parse"
+)
+
+let legacyAdaptiveJSON = #"{"layout":"adaptiveClock","precision":"seconds","timeSeparator":":","subsecondSeparator":".","padsFirstComponent":false}"#.data(using: .utf8)!
+let migratedAdaptive = try! JSONDecoder().decode(TimecodeFormatConfiguration.self, from: legacyAdaptiveJSON).normalized
+guard migratedAdaptive.layout == .clock,
+      !migratedAdaptive.includesHoursForShortMedia else {
+    fputs("legacy adaptive preset did not migrate\n", stderr)
+    exit(1)
+}
 
 print("Timecode display smoke test passed.")

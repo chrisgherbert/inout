@@ -419,6 +419,10 @@ private struct TimecodeFrameRateEnvironmentKey: EnvironmentKey {
     static let defaultValue: Double? = nil
 }
 
+private struct TimecodeMediaDurationEnvironmentKey: EnvironmentKey {
+    static let defaultValue: Double? = nil
+}
+
 extension EnvironmentValues {
     var timecodeDisplayStyle: TimecodeFormatConfiguration {
         get { self[TimecodeDisplayStyleEnvironmentKey.self] }
@@ -428,6 +432,11 @@ extension EnvironmentValues {
     var timecodeFrameRate: Double? {
         get { self[TimecodeFrameRateEnvironmentKey.self] }
         set { self[TimecodeFrameRateEnvironmentKey.self] = newValue }
+    }
+
+    var timecodeMediaDuration: Double? {
+        get { self[TimecodeMediaDurationEnvironmentKey.self] }
+        set { self[TimecodeMediaDurationEnvironmentKey.self] = newValue }
     }
 }
 

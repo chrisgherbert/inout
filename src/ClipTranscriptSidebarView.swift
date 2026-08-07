@@ -42,6 +42,7 @@ final class ClipTranscriptPlaybackPresentation {
 struct ClipTranscriptSidebarView: View, Equatable {
     let timecodeDisplayStyle: TimecodeFormatConfiguration
     let timecodeFrameRate: Double?
+    let timecodeMediaDuration: Double?
     let playbackPresentation: ClipTranscriptPlaybackPresentation
     let transcriptSegments: [TranscriptSegment]
     let transcriptStatusText: String
@@ -104,6 +105,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.transcriptSegments.last?.id == rhs.transcriptSegments.last?.id &&
         lhs.timecodeDisplayStyle == rhs.timecodeDisplayStyle &&
         lhs.timecodeFrameRate == rhs.timecodeFrameRate &&
+        lhs.timecodeMediaDuration == rhs.timecodeMediaDuration &&
         lhs.transcriptStatusText == rhs.transcriptStatusText &&
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
@@ -128,7 +130,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
             from: transcriptSegments,
             mode: activeTranscriptDisplayMode,
             timecodeStyle: timecodeDisplayStyle,
-            frameRate: timecodeFrameRate
+            frameRate: timecodeFrameRate,
+            mediaDuration: timecodeMediaDuration
         )
     }
 
@@ -551,6 +554,9 @@ struct ClipTranscriptSidebarView: View, Equatable {
             refreshTranscriptRows()
         }
         .onChange(of: timecodeFrameRate) { _ in
+            refreshTranscriptRows()
+        }
+        .onChange(of: timecodeMediaDuration) { _ in
             refreshTranscriptRows()
         }
         .onChange(of: transcriptDisplayMode) { mode in
