@@ -36,6 +36,13 @@ extension WorkspaceViewModel {
             clampClipRange()
         }
         let config = configOverride ?? queuedClipExportConfigSnapshot()
+        let captionTranscriptSnapshot: [TranscriptSegment]? = {
+            guard config.clipAdvancedBurnInCaptions,
+                  hasCachedTranscript,
+                  (sourceInfo?.audioStreamCount ?? 1) <= 1,
+                  transcriptHasWordTimings(transcriptSegments) else { return nil }
+            return transcriptSegments
+        }()
         let exportDuration = max(0, config.clipEndSeconds - config.clipStartSeconds)
         let exportName = config.isFullSourceConversion
             ? (config.clipEncodingMode == .audioOnly ? "Audio export" : "Video export")
@@ -104,6 +111,7 @@ extension WorkspaceViewModel {
         isExporting = true
         lastActivityState = .running
         exportCancellationRequested = false
+        exportCancelFlag.reset()
         exportProgress = 0
         clearActivityConsole()
         appendActivityConsole("\(exportName) started", source: "export")
@@ -499,12 +507,12 @@ extension WorkspaceViewModel {
                     } else if let stageError {
                         encodeError = stageError
                     } else {
-                        let captionPrep = await self.prepareWhisperBurnInCaptions(
+                        let captionPrep = await self.prepareParakeetBurnInCaptions(
                             sourceURL: stagedBaseURL,
-                            ffmpegURL: ffmpegURL,
-                            coarseSeekSeconds: 0.0,
-                            fineSeekSeconds: 0.0,
-                            durationSeconds: clipDuration
+                            durationSeconds: clipDuration,
+                            cachedTranscriptSegments: captionTranscriptSnapshot,
+                            cachedTranscriptStartSeconds: config.clipStartSeconds,
+                            cachedTranscriptEndSeconds: config.clipEndSeconds
                         )
 
                         if self.exportCancellationRequested {
@@ -546,7 +554,7 @@ extension WorkspaceViewModel {
                                     arguments: burnArgs,
                                     durationSeconds: clipDuration,
                                     statusPrefix: "Encoding captioned clip",
-                                    progressRange: 0.55...1.0
+                                    progressRange: 0.65...1.0
                                 )
                             }
                         } else {
@@ -609,16 +617,16 @@ extension WorkspaceViewModel {
         let tempDirectory: URL
     }
 
-    private func prepareWhisperBurnInCaptions(
+    private func prepareParakeetBurnInCaptions(
         sourceURL: URL,
-        ffmpegURL: URL,
-        coarseSeekSeconds: Double,
-        fineSeekSeconds: Double,
-        durationSeconds: Double
+        durationSeconds: Double,
+        cachedTranscriptSegments: [TranscriptSegment]?,
+        cachedTranscriptStartSeconds: Double,
+        cachedTranscriptEndSeconds: Double
     ) async -> (preparation: BurnInCaptionPreparation?, error: String?) {
-        guard let whisperURL = findWhisperExecutable(),
-              let whisperModelURL = findWhisperModel() else {
-            return (nil, "Whisper resources are not bundled. Rebuild the app with bundled whisper-cli and model.")
+        guard findParakeetTranscriberExecutable() != nil,
+              findParakeetModelDirectory() != nil else {
+            return (nil, "Parakeet resources are not bundled. Rebuild the app with the Parakeet helper and model.")
         }
 
         let tempDirectory = FileManager.default.temporaryDirectory
@@ -629,92 +637,87 @@ extension WorkspaceViewModel {
             return (nil, "Unable to create temporary caption directory: \(error.localizedDescription)")
         }
 
-        let wavURL = tempDirectory.appendingPathComponent("caption-audio.wav")
-        let outputPrefix = tempDirectory.appendingPathComponent("caption-track")
         let srtURL = tempDirectory.appendingPathComponent("caption-track.srt")
-        // Keep caption-audio extraction time-origin identical to advanced clip export:
-        // -ss <coarse pre-roll> -i <source> -ss <fine offset> -t <duration>
-        // This prevents fixed subtitle offsets (captions consistently early/late).
-        let coarseSeek = String(format: "%.6f", max(0.0, coarseSeekSeconds))
-        let fineSeek = String(format: "%.6f", max(0.0, fineSeekSeconds))
-        let duration = String(format: "%.3f", max(0.001, durationSeconds))
-
-        let extractError = await runFFmpegProcessWithProgress(
-            executableURL: ffmpegURL,
-            arguments: [
-                "-y",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-ss", coarseSeek,
-                "-i", sourceURL.path,
-                "-ss", fineSeek,
-                "-t", duration,
-                "-vn",
-                "-ac", "1",
-                "-ar", "16000",
-                "-f", "wav",
-                wavURL.path
-            ]
-            ,
-            durationSeconds: max(0.001, durationSeconds),
-            statusPrefix: "Generating captions",
-            progressRange: 0.10...0.35
-        )
-        if exportCancellationRequested {
-            return (nil, "Cancelled")
-        }
-        if let extractError {
-            return (nil, "Caption audio extraction failed: \(extractError)")
-        }
-
-        let whisperArgs = [
-            "-m", whisperModelURL.path,
-            "-f", wavURL.path,
-            "-of", outputPrefix.path,
-            "-osrt",
-            "-pp"
-        ]
-        let whisperError = await runWhisperProcessWithProgress(
-            executableURL: whisperURL,
-            arguments: whisperArgs,
-            statusPrefix: "Generating captions",
-            progressRange: 0.35...0.55
-        )
-        if exportCancellationRequested {
-            return (nil, "Cancelled")
-        }
-
-        if whisperError != nil {
-            // Retry with CPU-safe flags; some runtime combinations fail on first accelerated attempt.
-            let retryError = await runWhisperProcessWithProgress(
-                executableURL: whisperURL,
-                arguments: [
-                    "-ng",
-                    "-nfa"
-                ] + whisperArgs,
-                statusPrefix: "Generating captions",
-                progressRange: 0.35...0.55
+        let transcript: [TranscriptSegment]
+        let sourceStart: Double
+        let sourceEnd: Double
+        if let cachedTranscriptSegments {
+            transcript = cachedTranscriptSegments
+            sourceStart = cachedTranscriptStartSeconds
+            sourceEnd = cachedTranscriptEndSeconds
+            exportProgress = max(exportProgress, 0.65)
+            exportStatusText = "Formatting cached transcript for captions…"
+        } else {
+            let cancelFlag = exportCancelFlag
+            let captureConsoleOutput = showActivityConsole
+            let relay = TranscriptGenerationRelay(
+                disableBatching: false,
+                captureConsoleOutput: captureConsoleOutput,
+                progressSink: { [weak self] progress in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isExporting else { return }
+                        let clamped = min(1.0, max(0.0, progress))
+                        self.exportProgress = 0.50 + (clamped * 0.15)
+                        self.exportStatusText = "Generating captions… \(Int((clamped * 100).rounded()))%"
+                    }
+                },
+                segmentSink: { _ in },
+                consoleSink: { [weak self] chunk in
+                    Task { @MainActor [weak self] in
+                        self?.appendActivityConsoleChunk(chunk)
+                    }
+                },
+                phaseSink: { [weak self] phase in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isExporting else { return }
+                        self.exportStatusText = "Generating captions: \(phase)…"
+                    }
+                }
             )
-            if exportCancellationRequested {
+            let result = await Task.detached(priority: .userInitiated) {
+                transcribeAudioWithParakeet(
+                    file: sourceURL,
+                    shouldCancel: {
+                        cancelFlag.isCancelled()
+                    },
+                    progressHandler: { progress in
+                        relay.enqueueProgress(progress)
+                    },
+                    progressPhaseHandler: { phase in
+                        relay.enqueuePhase(phase)
+                    },
+                    onConsoleOutput: { line, source in
+                        relay.enqueueConsole(line: line, source: source)
+                    }
+                )
+            }.value
+            relay.flushNow()
+
+            switch result {
+            case .success(let generatedTranscript):
+                transcript = generatedTranscript
+                sourceStart = 0
+                sourceEnd = durationSeconds
+            case .failure(.cancelled):
                 return (nil, "Cancelled")
-            }
-            if let retryError {
-                return (nil, "Whisper transcription failed: \(retryError)")
+            case .failure(.failed(let reason)):
+                return (nil, "Parakeet transcription failed: \(reason)")
             }
         }
 
-        guard FileManager.default.fileExists(atPath: srtURL.path) else {
-            return (nil, "Whisper did not produce subtitle output.")
+        let cues = makeBurnInCaptionCues(
+            from: transcript,
+            sourceStart: sourceStart,
+            sourceEnd: sourceEnd
+        )
+        guard !cues.isEmpty else {
+            return (nil, "Parakeet produced no timed caption cues.")
         }
 
         do {
-            let rawSRT = try String(contentsOf: srtURL, encoding: .utf8)
-            let cueCount = rawSRT.components(separatedBy: .newlines).filter { $0.contains("-->") }.count
-            guard cueCount > 0 else {
-                return (nil, "Whisper produced subtitle file with 0 cues.")
-            }
+            try burnInCaptionSRT(from: cues).write(to: srtURL, atomically: true, encoding: .utf8)
         } catch {
-            return (nil, "Unable to validate subtitle file: \(error.localizedDescription)")
+            return (nil, "Unable to write subtitle file: \(error.localizedDescription)")
         }
 
         return (BurnInCaptionPreparation(srtURL: srtURL, tempDirectory: tempDirectory), nil)

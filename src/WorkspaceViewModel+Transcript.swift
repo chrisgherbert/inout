@@ -357,7 +357,7 @@ extension WorkspaceViewModel {
             _ = beginDirectJobTracking(
                 fileName: fileName,
                 summary: "Generate Transcript",
-                subtitle: "Whisper"
+                subtitle: "Parakeet"
             )
         }
 

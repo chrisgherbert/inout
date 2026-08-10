@@ -10,12 +10,12 @@ Usage: $(basename "$0") [--refresh-tools] [--verify-tools] [--run]
 
 Fast local iteration build:
   - Uses quick build mode
-  - Preserves bundled ffmpeg/yt-dlp/whisper/model by default
+  - Preserves bundled ffmpeg, yt-dlp, and Parakeet resources by default
   - Skips signing/notarization/release
 
 Options:
-  --refresh-tools  Re-copy bundled ffmpeg/ffprobe/yt-dlp/whisper/model into app resources
-  --verify-tools   Run dependency audits on bundled ffmpeg/ffprobe + whisper in dist app
+  --refresh-tools  Re-copy bundled ffmpeg/ffprobe/yt-dlp/Parakeet resources
+  --verify-tools   Run dependency audits on bundled ffmpeg/ffprobe/yt-dlp
   --run            Launch built app after successful build
 USAGE
 }
@@ -49,7 +49,6 @@ if [[ "$VERIFY_TOOLS" -eq 1 ]]; then
   ./scripts/ffmpeg_dependency_audit.sh "$APP_PATH/Contents/Resources/ffmpeg"
   ./scripts/ffmpeg_dependency_audit.sh "$APP_PATH/Contents/Resources/ffprobe"
   ./scripts/ytdlp_portability_audit.sh "$APP_PATH/Contents/Resources/yt-dlp"
-  ./scripts/whisper_dependency_audit.sh "$APP_PATH"
   if [[ ! -x "$APP_PATH/Contents/Resources/yt-dlp" ]]; then
     echo "Missing bundled yt-dlp: $APP_PATH/Contents/Resources/yt-dlp"
     exit 1

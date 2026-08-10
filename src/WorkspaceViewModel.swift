@@ -454,6 +454,7 @@ final class WorkspaceViewModel: ObservableObject {
     var activeClipExportRunToken: UUID?
     private var willTerminateObserver: NSObjectProtocol?
     var exportCancellationRequested = false
+    let exportCancelFlag = CancellationFlag()
     private var notificationAuthRequested = false
     var originalModeDefaultBitrateMbps: Double = 4.0
     struct QueuedClipExportConfig {
@@ -508,9 +509,6 @@ final class WorkspaceViewModel: ObservableObject {
     var cachedFFprobeAvailable = false
     var cachedYTDLPAvailable = false
     var cachedDenoAvailable = false
-    var cachedWhisperCLIAvailable = false
-    var cachedWhisperModelAvailable = false
-    var cachedWhisperAvailable = false
     var cachedParakeetHelperAvailable = false
     var cachedParakeetModelAvailable = false
     var cachedParakeetAvailable = false
@@ -776,10 +774,6 @@ final class WorkspaceViewModel: ObservableObject {
         analyzeProfanity && hasAudioTrack
     }
 
-    var whisperTranscriptionAvailable: Bool {
-        cachedWhisperAvailable
-    }
-
     var parakeetTranscriptionAvailable: Bool {
         cachedParakeetAvailable
     }
@@ -802,14 +796,6 @@ final class WorkspaceViewModel: ObservableObject {
 
     var denoRuntimeAvailable: Bool {
         cachedDenoAvailable
-    }
-
-    var whisperCLIAvailable: Bool {
-        cachedWhisperCLIAvailable
-    }
-
-    var whisperModelAvailable: Bool {
-        cachedWhisperModelAvailable
     }
 
     var parakeetHelperAvailable: Bool {

@@ -166,10 +166,10 @@ struct AdvancedVideoExportOptions: View {
             )
 
             HStack(spacing: 10) {
-                Toggle("Auto-generate and burn captions (Whisper)", isOn: $model.clipAdvancedBurnInCaptions)
+                Toggle("Auto-generate and burn captions", isOn: $model.clipAdvancedBurnInCaptions)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
-                    .disabled(!model.whisperTranscriptionAvailable)
+                    .disabled(!model.parakeetTranscriptionAvailable)
 
                 if model.clipAdvancedBurnInCaptions {
                     Picker("Caption style", selection: $model.clipAdvancedCaptionStyle) {
@@ -181,15 +181,15 @@ struct AdvancedVideoExportOptions: View {
                     .pickerStyle(.menu)
                     .controlSize(.mini)
                     .frame(width: 168, alignment: .leading)
-                    .disabled(!model.whisperTranscriptionAvailable)
+                    .disabled(!model.parakeetTranscriptionAvailable)
                     .help("Caption style for this export.")
                 }
 
                 Spacer(minLength: 0)
             }
 
-            if !model.whisperTranscriptionAvailable {
-                Text("Whisper binary/model not available in app bundle.")
+            if !model.parakeetTranscriptionAvailable {
+                Text("Parakeet helper/model not available in app bundle.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

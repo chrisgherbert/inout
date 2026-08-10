@@ -5,6 +5,7 @@ extension WorkspaceViewModel {
         guard isExporting else { return }
         let queueJobID = activeQueuedJobID
         exportCancellationRequested = true
+        exportCancelFlag.cancel()
         activeClipExportRunToken = nil
         activeExportSession?.cancelExport()
         if let process = activeProcess, process.isRunning {

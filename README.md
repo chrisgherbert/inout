@@ -56,7 +56,7 @@ Simple clipping, converting, and QA testing of video/audio files on macOS.
   - `ffmpeg`
   - `ffprobe`
   - `yt-dlp`
-  - `whisper-cli` + model
+  - Parakeet transcription helper + model
   - managed Python runtime release asset for downloader support
 
 ### Local Build
@@ -77,7 +77,7 @@ Build output:
 Behavior:
 - quick compile path
 - no signing/notarization/release
-- keeps bundled ffmpeg/whisper/model unchanged by default
+- keeps bundled ffmpeg and Parakeet resources unchanged by default
 
 Focused transcript export validation:
 

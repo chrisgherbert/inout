@@ -177,90 +177,6 @@ should_refresh_bundle_item() {
   return 1
 }
 
-copy_whisper_runtime_libs() {
-  local whisper_cli_path="$1"
-  local whisper_root
-  whisper_root="$(cd "$(dirname "$whisper_cli_path")/.." && pwd)"
-  local -a search_dirs=(
-    "$whisper_root/src"
-    "$whisper_root/ggml/src"
-    "$whisper_root/ggml/src/ggml-blas"
-    "$whisper_root/ggml/src/ggml-metal"
-  )
-
-  local deps
-  deps="$(
-    otool -L "$whisper_cli_path" \
-      | awk '/@rpath\/.*\.dylib/ { print $1 }' \
-      | sed 's#^@rpath/##'
-  )"
-
-  if [[ -z "$deps" ]]; then
-    echo "No @rpath whisper runtime dependencies found."
-    return 0
-  fi
-
-  while IFS= read -r dep; do
-    [[ -z "$dep" ]] && continue
-    local src_path=""
-    local dir
-    for dir in "${search_dirs[@]}"; do
-      if [[ -e "$dir/$dep" ]]; then
-        src_path="$dir/$dep"
-        break
-      fi
-    done
-
-    if [[ -z "$src_path" ]]; then
-      echo "ERROR: could not locate whisper runtime dependency: $dep"
-      exit 1
-    fi
-
-    local src_real
-    src_real="$(python3 - "$src_path" <<'PY'
-import os,sys
-print(os.path.realpath(sys.argv[1]))
-PY
-)"
-    local real_base
-    real_base="$(basename "$src_real")"
-
-    cp "$src_real" "$APP_RESOURCES/$real_base"
-    chmod +x "$APP_RESOURCES/$real_base"
-
-    if [[ "$dep" != "$real_base" ]]; then
-      ln -sf "$real_base" "$APP_RESOURCES/$dep"
-    fi
-  done <<< "$deps"
-
-  # Ensure whisper-cli resolves @rpath from app resources, not build-machine paths.
-  if ! otool -l "$APP_RESOURCES/whisper-cli" | grep -q "path @executable_path "; then
-    install_name_tool -add_rpath "@executable_path" "$APP_RESOURCES/whisper-cli" || true
-  fi
-
-  # Remove absolute build-dir rpaths from whisper-cli.
-  local rpaths
-  rpaths="$(otool -l "$APP_RESOURCES/whisper-cli" | awk '/path / { print $2 }' | grep '^/' || true)"
-  while IFS= read -r rp; do
-    [[ -z "$rp" ]] && continue
-    install_name_tool -delete_rpath "$rp" "$APP_RESOURCES/whisper-cli" || true
-  done <<< "$rpaths"
-
-  # For each bundled whisper dylib, ensure @rpath is resolvable locally and strip absolute rpaths.
-  local lib
-  for lib in "$APP_RESOURCES"/libwhisper*.dylib "$APP_RESOURCES"/libggml*.dylib; do
-    [[ -e "$lib" ]] || continue
-    if ! otool -l "$lib" | grep -q "path @loader_path "; then
-      install_name_tool -add_rpath "@loader_path" "$lib" || true
-    fi
-    local lib_rpaths
-    lib_rpaths="$(otool -l "$lib" | awk '/path / { print $2 }' | grep '^/' || true)"
-    while IFS= read -r rp; do
-      [[ -z "$rp" ]] && continue
-      install_name_tool -delete_rpath "$rp" "$lib" || true
-    done <<< "$lib_rpaths"
-  done
-}
 
 BUILD_MODE="${1:-dev}"
 QUICK_BUILD=0
@@ -293,6 +209,9 @@ mkdir -p "$SWIFTC_TMP_DIR"
 mkdir -p "$SWIFTC_OBJECTS_DIR" "$SWIFTC_DEPS_DIR" "$SWIFTC_DIAGNOSTICS_DIR" "$SWIFTC_MODULE_DIR"
 mkdir -p "$CORE_OBJECTS_DIR" "$CORE_DEPS_DIR" "$CORE_DIAGNOSTICS_DIR" "$CORE_MODULE_DIR"
 export TMPDIR="$SWIFTC_TMP_DIR/"
+# Remove incremental artifacts left by the transcription source rename.
+find "$CORE_OBJECTS_DIR" "$CORE_DEPS_DIR" "$CORE_DIAGNOSTICS_DIR" \
+  -maxdepth 1 -name 'WhisperTranscription-*' -delete
 # Remove legacy app bundle names to avoid launching stale builds by accident.
 rm -rf "$LEGACY_APP_1" "$LEGACY_APP_2"
 if [[ "$PRESERVE_APP_BUNDLE" -eq 0 ]]; then
@@ -300,6 +219,11 @@ if [[ "$PRESERVE_APP_BUNDLE" -eq 0 ]]; then
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES" "$APP_FRAMEWORKS"
 mkdir -p "$ROOT_DIR/assets"
+
+# Quick builds preserve the app bundle, so explicitly remove obsolete Whisper resources.
+find "$APP_RESOURCES" -maxdepth 1 \
+  \( -name 'whisper-cli' -o -name 'profanity-model.bin' -o -name 'libwhisper*.dylib' -o -name 'libggml*.dylib' \) \
+  -delete
 
 SWIFT_SOURCES=("$SRC_DIR"/*.swift)
 CORE_SOURCES=()
@@ -730,95 +654,6 @@ if [[ -n "$YTDLP_SOURCE" && -x "$YTDLP_SOURCE" ]]; then
   fi
 else
   echo "yt-dlp not bundled (set BUNDLED_YTDLP_PATH to include one)."
-fi
-
-WHISPER_SOURCE="${BUNDLED_WHISPER_PATH:-}"
-WHISPER_VENDOR_ROOT="$ROOT_DIR/vendor/whisper.cpp"
-WHISPER_BUILD_ROOT="$ROOT_DIR/.build/whisper.cpp"
-WHISPER_BUILD_NOCOREML="$WHISPER_BUILD_ROOT/build-bvt-nocoreml"
-WHISPER_BUILD_DEFAULT="$WHISPER_BUILD_ROOT/build"
-
-if [[ -d "$WHISPER_VENDOR_ROOT" ]]; then
-  mkdir -p "$WHISPER_BUILD_ROOT"
-  if [[ -d "$WHISPER_VENDOR_ROOT/build-bvt-nocoreml" && ! -e "$WHISPER_BUILD_NOCOREML" ]]; then
-    mv "$WHISPER_VENDOR_ROOT/build-bvt-nocoreml" "$WHISPER_BUILD_NOCOREML"
-  fi
-  if [[ -d "$WHISPER_VENDOR_ROOT/build" && ! -e "$WHISPER_BUILD_DEFAULT" ]]; then
-    mv "$WHISPER_VENDOR_ROOT/build" "$WHISPER_BUILD_DEFAULT"
-  fi
-fi
-
-if [[ -z "$WHISPER_SOURCE" ]]; then
-  local_vendor_nocoreml="$WHISPER_BUILD_NOCOREML/bin/whisper-cli"
-  if [[ -x "$local_vendor_nocoreml" ]]; then
-    WHISPER_SOURCE="$local_vendor_nocoreml"
-  elif [[ "$QUICK_BUILD" -eq 0 && -d "$WHISPER_VENDOR_ROOT" ]] && command -v cmake >/dev/null 2>&1; then
-    echo "Building local no-CoreML whisper-cli for app bundling..."
-    cmake -S "$WHISPER_VENDOR_ROOT" -B "$WHISPER_BUILD_NOCOREML" -DWHISPER_COREML=OFF >/dev/null 2>&1 || true
-    cmake --build "$WHISPER_BUILD_NOCOREML" -j >/dev/null 2>&1 || true
-    if [[ -x "$local_vendor_nocoreml" ]]; then
-      WHISPER_SOURCE="$local_vendor_nocoreml"
-    fi
-  fi
-fi
-if [[ -z "$WHISPER_SOURCE" ]]; then
-  local_vendor_whisper="$WHISPER_BUILD_DEFAULT/bin/whisper-cli"
-  if [[ -x "$local_vendor_whisper" ]]; then
-    WHISPER_SOURCE="$local_vendor_whisper"
-  fi
-fi
-if [[ -z "$WHISPER_SOURCE" ]]; then
-  if [[ -n "${PATH:-}" ]]; then
-    IFS=: read -rA path_entries <<< "$PATH"
-    for entry in "${path_entries[@]}"; do
-      candidate="${entry}/whisper-cli"
-      if [[ -x "$candidate" ]]; then
-        WHISPER_SOURCE="$candidate"
-        break
-      fi
-    done
-  fi
-fi
-
-if [[ -n "$WHISPER_SOURCE" && -x "$WHISPER_SOURCE" ]]; then
-  if should_refresh_bundle_item "$WHISPER_SOURCE" "$APP_RESOURCES/whisper-cli"; then
-    cp "$WHISPER_SOURCE" "$APP_RESOURCES/whisper-cli"
-    chmod +x "$APP_RESOURCES/whisper-cli"
-    copy_whisper_runtime_libs "$WHISPER_SOURCE"
-    echo "Bundled whisper-cli: $WHISPER_SOURCE"
-  else
-    echo "Keeping existing bundled whisper-cli/runtime libs."
-  fi
-else
-  echo "whisper-cli not bundled (set BUNDLED_WHISPER_PATH to include one)."
-fi
-
-WHISPER_MODEL_SOURCE="${BUNDLED_WHISPER_MODEL_PATH:-}"
-if [[ -n "$WHISPER_MODEL_SOURCE" && -f "$WHISPER_MODEL_SOURCE" ]]; then
-  if should_refresh_bundle_item "$WHISPER_MODEL_SOURCE" "$APP_RESOURCES/profanity-model.bin"; then
-    cp "$WHISPER_MODEL_SOURCE" "$APP_RESOURCES/profanity-model.bin"
-    echo "Bundled Whisper model: $WHISPER_MODEL_SOURCE"
-  else
-    echo "Keeping existing bundled Whisper model."
-  fi
-else
-  local_vendor_model=""
-  if [[ -f "$ROOT_DIR/vendor/models/ggml-tiny.en.bin" ]]; then
-    local_vendor_model="$ROOT_DIR/vendor/models/ggml-tiny.en.bin"
-  else
-    local_vendor_model="$(ls "$ROOT_DIR"/vendor/models/ggml-*.bin 2>/dev/null | head -n 1 || true)"
-  fi
-
-if [[ -n "$local_vendor_model" && -f "$local_vendor_model" ]]; then
-    if should_refresh_bundle_item "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"; then
-      cp "$local_vendor_model" "$APP_RESOURCES/profanity-model.bin"
-      echo "Bundled Whisper model: $local_vendor_model"
-    else
-      echo "Keeping existing bundled Whisper model."
-    fi
-  else
-    echo "Whisper model not bundled (set BUNDLED_WHISPER_MODEL_PATH or place a model in $ROOT_DIR/vendor/models)."
-  fi
 fi
 
 PARAKEET_HELPER_SOURCE="${BUNDLED_PARAKEET_HELPER_PATH:-}"

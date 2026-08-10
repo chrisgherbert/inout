@@ -116,7 +116,7 @@ public func runDetection(
 
     if detectProfanity {
         let usingCachedTranscript = (cachedTranscriptSegments != nil)
-        onStatusUpdate(usingCachedTranscript ? "Scanning transcript for profanity" : "Transcribing audio for profanity")
+        onStatusUpdate(usingCachedTranscript ? "Scanning transcript for profanity" : "Creating Parakeet transcript for profanity")
         let profanityBase = technicalDetectorCount > 0 ? technicalProgressSpan : 0.0
         let profanitySpan = technicalDetectorCount > 0 ? (0.99 - technicalProgressSpan) : 0.99
         if let cachedTranscriptSegments {
@@ -125,7 +125,7 @@ public func runDetection(
             profanityHits.forEach { onProfanityDetected($0) }
             progressHandler(min(0.99, profanityBase + profanitySpan))
         } else {
-            let transcriptResult = transcribeAudioWithWhisper(
+            let transcriptResult = transcribeAudioWithParakeet(
                 file: file,
                 shouldCancel: {
                     shouldCancel()
@@ -133,6 +133,9 @@ public func runDetection(
                 progressHandler: { profanityProgress in
                     let clamped = min(1, max(0, profanityProgress))
                     progressHandler(min(0.99, profanityBase + (clamped * profanitySpan)))
+                },
+                progressPhaseHandler: { phase in
+                    onStatusUpdate(phase)
                 },
                 onConsoleOutput: onConsoleOutput
             )

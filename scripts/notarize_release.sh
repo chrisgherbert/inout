@@ -98,7 +98,6 @@ if [[ "$SKIP_SMOKE" -eq 0 ]]; then
   "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$APP_PATH/Contents/Resources/ffmpeg"
   "$ROOT_DIR/scripts/ffmpeg_dependency_audit.sh" "$APP_PATH/Contents/Resources/ffprobe"
   "$ROOT_DIR/scripts/ytdlp_portability_audit.sh" "$APP_PATH/Contents/Resources/yt-dlp"
-  "$ROOT_DIR/scripts/whisper_dependency_audit.sh" "$APP_PATH"
   if [[ ! -x "$APP_PATH/Contents/Resources/yt-dlp" ]]; then
     echo "Missing bundled yt-dlp: $APP_PATH/Contents/Resources/yt-dlp"
     exit 1
@@ -107,6 +106,10 @@ if [[ "$SKIP_SMOKE" -eq 0 ]]; then
   "$APP_PATH/Contents/Resources/yt-dlp" --ignore-config --version >/dev/null
   echo "Running bundled ffmpeg smoke tests..."
   "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
+  echo "Running Parakeet caption smoke test..."
+  "$ROOT_DIR/scripts/parakeet_caption_integration_smoke.sh" "$APP_PATH"
+  echo "Running caption formatting smoke test..."
+  "$ROOT_DIR/scripts/caption_formatting_smoke.sh"
   echo "Running Sparkle updater smoke test..."
   "$ROOT_DIR/scripts/sparkle_smoke.sh" "$APP_PATH"
   echo "Running transcript library smoke test..."
@@ -124,7 +127,7 @@ if ! security find-identity -v -p codesigning | grep -F "$DEV_ID_APP" >/dev/null
 fi
 
 echo "Signing nested binaries..."
-for binary in "$APP_PATH/Contents/Resources/ffmpeg" "$APP_PATH/Contents/Resources/ffprobe" "$APP_PATH/Contents/Resources/whisper-cli" "$APP_PATH/Contents/Resources/parakeet-transcriber" "$APP_PATH"/Contents/Resources/libwhisper*.dylib "$APP_PATH"/Contents/Resources/libggml*.dylib; do
+for binary in "$APP_PATH/Contents/Resources/ffmpeg" "$APP_PATH/Contents/Resources/ffprobe" "$APP_PATH/Contents/Resources/parakeet-transcriber"; do
   if [[ -f "$binary" ]]; then
     codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$binary"
   else

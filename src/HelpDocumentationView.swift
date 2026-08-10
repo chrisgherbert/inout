@@ -378,8 +378,7 @@ struct HelpDocumentationView: View {
                     bullets: [
                         "ffmpeg and ffprobe handle export, conversion, media scanning, and inspection.",
                         "Managed Python, yt-dlp, and Deno handle supported URL downloads.",
-                        "Parakeet provides fast, word-timed transcripts for the Clip sidebar and AI Suggestions.",
-                        "whisper-cli and its model support profanity detection and generated burned captions."
+                        "Parakeet provides fast, word-timed transcripts for the Clip sidebar, AI Suggestions, profanity detection, and generated burned captions."
                     ]
                 ),
                 HelpSection(

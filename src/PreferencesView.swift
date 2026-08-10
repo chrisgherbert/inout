@@ -222,13 +222,11 @@ struct PreferencesView: View {
                 setupCheckRow("Managed Python 3", available: model.managedPythonVersionText != "Unavailable")
                 setupCheckRow("Deno JavaScript runtime", available: model.denoRuntimeAvailable)
                 setupCheckRow("yt-dlp", available: model.ytDLPToolAvailable)
-                setupCheckRow("whisper-cli", available: model.whisperCLIAvailable)
-                setupCheckRow("Whisper model", available: model.whisperModelAvailable)
                 setupCheckRow("Parakeet helper", available: model.parakeetHelperAvailable)
                 setupCheckRow("Parakeet model", available: model.parakeetModelAvailable)
 
                 settingsRow("") {
-                    Text("Use this tab to check the bundled and managed tools the app depends on. URL downloads rely on Managed Python 3, Deno, and yt-dlp, while clipping, conversion, captions, and transcription rely on ffmpeg, ffprobe, Whisper, and Parakeet.")
+                    Text("Use this tab to check the bundled and managed tools the app depends on. URL downloads rely on Managed Python 3, Deno, and yt-dlp, while clipping, conversion, captions, and transcription rely on ffmpeg, ffprobe, and Parakeet.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

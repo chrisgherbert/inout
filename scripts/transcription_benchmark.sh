@@ -9,7 +9,7 @@ FLUID_AUDIO_REF="${FLUID_AUDIO_REF:-v0.15.3}"
 PARAKEET_HELPER_PACKAGE="${PARAKEET_HELPER_PACKAGE:-$ROOT_DIR/tools/parakeet-transcriber}"
 PARAKEET_RUNNER_DIR="${PARAKEET_RUNNER_DIR:-$ROOT_DIR/.build/parakeet-transcriber}"
 PARAKEET_HELPER_BIN="$PARAKEET_RUNNER_DIR/release/ParakeetTranscriber"
-RUN_WHISPER=1
+RUN_WHISPER=0
 RUN_PARAKEET=1
 UPDATE_FLUID_AUDIO=1
 
@@ -17,13 +17,13 @@ usage() {
   cat <<'EOF'
 Usage: scripts/transcription_benchmark.sh [options]
 
-Benchmarks local transcription fixtures against the current bundled Whisper path
-and/or the app's Parakeet Core ML helper.
+Benchmarks local transcription fixtures against the bundled Parakeet backend.
+An optional legacy Whisper comparison is available when its resources are supplied.
 
 Options:
   --fixtures PATH      Fixture directory. Defaults to fixtures/transcription.
   --artifacts PATH     Output directory. Defaults to .build/transcription-benchmark.
-  --whisper-only       Run only the current Whisper backend.
+  --whisper-only       Run only the optional legacy Whisper backend.
   --parakeet-only      Run only the Parakeet backend.
   --skip-whisper       Do not run Whisper.
   --skip-parakeet      Do not run Parakeet.
@@ -31,8 +31,8 @@ Options:
   --help               Show this help.
 
 Environment:
-  WHISPER_CLI          Override whisper-cli path.
-  WHISPER_MODEL        Override ggml Whisper model path.
+  WHISPER_CLI          Path to an optional legacy whisper-cli executable.
+  WHISPER_MODEL        Path to an optional legacy ggml Whisper model.
   FFMPEG               Override ffmpeg path.
   FFPROBE              Override ffprobe path.
   PARAKEET_MODEL_DIR   Override Parakeet v2 Core ML model directory.
