@@ -14,8 +14,8 @@ struct ClipPlayerUtilityRow: View {
     let isSuggestingMarkers: Bool
     let isTranscribingForMarkers: Bool
     let onCopyPlayheadTimecode: () -> Void
-    let onJumpToStart: () -> Void
-    let onJumpToEnd: () -> Void
+    let onNavigatePrevious: () -> Void
+    let onNavigateNext: () -> Void
     let onCaptureFrame: () -> Void
     let onSuggestMarkers: () -> Void
     let onZoomOut: () -> Void
@@ -54,17 +54,17 @@ struct ClipPlayerUtilityRow: View {
     private var clipNavigationControls: some View {
         HStack(spacing: 6) {
             ControlGroup {
-                Button(action: onJumpToStart) {
+                Button(action: onNavigatePrevious) {
                     Image(systemName: "backward.end.fill")
                 }
-                .help("Jump to Clip Start")
-                .accessibilityLabel("Jump to Clip Start")
+                .help("Previous Marker or Clip Edge (Up Arrow)")
+                .accessibilityLabel("Previous Marker or Clip Edge")
 
-                Button(action: onJumpToEnd) {
+                Button(action: onNavigateNext) {
                     Image(systemName: "forward.end.fill")
                 }
-                .help("Jump to Clip End")
-                .accessibilityLabel("Jump to Clip End")
+                .help("Next Marker or Clip Edge (Down Arrow)")
+                .accessibilityLabel("Next Marker or Clip Edge")
             }
             .controlSize(.small)
 

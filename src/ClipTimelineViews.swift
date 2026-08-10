@@ -2603,13 +2603,11 @@ struct ClipToolView: View {
                 isSuggestingMarkers: smartMarkers.isAnalyzing,
                 isTranscribingForMarkers: pendingSmartMarkerConfiguration != nil,
                 onCopyPlayheadTimecode: copyPlayheadTimecode,
-                onJumpToStart: {
-                    seekPlayer(to: clip.clipStartSeconds)
-                    springAnimateVisualPlayhead(to: clip.clipStartSeconds)
+                onNavigatePrevious: {
+                    navigateToMarker(previous: true)
                 },
-                onJumpToEnd: {
-                    seekPlayer(to: clip.clipEndSeconds)
-                    springAnimateVisualPlayhead(to: clip.clipEndSeconds)
+                onNavigateNext: {
+                    navigateToMarker(previous: false)
                 },
                 onCaptureFrame: {
                     model.captureFrame(at: displayedPlayheadSeconds)
