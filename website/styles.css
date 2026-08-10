@@ -87,7 +87,7 @@ h1 {
   margin: 0;
   font-size: clamp(2.7rem, 7vw, 5.6rem);
   line-height: 0.94;
-  letter-spacing: -0.055em;
+  letter-spacing: -0.035em;
   max-width: 960px;
 }
 
@@ -95,7 +95,7 @@ h2 {
   margin: 0;
   font-size: clamp(1.75rem, 3vw, 2.6rem);
   line-height: 1.08;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.02em;
 }
 
 h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
@@ -115,7 +115,7 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: 9px;
   text-decoration: none;
   font-weight: 650;
   min-height: 46px;
@@ -125,8 +125,8 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
 
 .btn-primary {
   color: #f4f8ff;
-  background: linear-gradient(180deg, #2e8dff, var(--brand));
-  box-shadow: 0 10px 24px rgba(9, 115, 238, 0.28);
+  background: var(--brand);
+  box-shadow: none;
 }
 
 .btn-secondary {
@@ -136,8 +136,8 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
 }
 
 .btn-primary:hover {
-  filter: brightness(1.06);
-  box-shadow: 0 0 0 1px rgba(131, 186, 255, 0.5), 0 0 20px rgba(9, 115, 238, 0.4);
+  filter: brightness(1.1);
+  box-shadow: 0 0 0 1px rgba(131, 186, 255, 0.38);
 }
 
 .btn-secondary:hover { border-color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.08); }
@@ -185,31 +185,21 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
 .steps-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 34px;
   margin-top: 30px;
 }
 
-.step-card,
-.workflow-card {
-  border: 1px solid var(--line);
-  background: rgba(13, 16, 19, 0.82);
-  border-radius: 16px;
+.step-card {
+  border-top: 1px solid var(--line);
+  padding: 20px 0 0;
 }
-
-.step-card { padding: 24px; }
 .step-number {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  margin-bottom: 28px;
-  border-radius: 50%;
-  color: #dcecff;
-  background: var(--brand-soft);
-  border: 1px solid rgba(88, 166, 255, 0.35);
-  font-size: 0.82rem;
+  display: block;
+  margin-bottom: 44px;
+  color: var(--brand-bright);
+  font-size: 2rem;
   font-weight: 700;
+  line-height: 1;
 }
 
 .step-card p,
@@ -224,14 +214,17 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
 .workflow-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  column-gap: 48px;
+  row-gap: 0;
   margin-top: 30px;
 }
 
-.workflow-card { padding: 27px; }
+.workflow-card {
+  border-top: 1px solid var(--line);
+  padding: 26px 0 32px;
+}
 .workflow-card-accent {
-  border-color: rgba(49, 143, 255, 0.45);
-  background: linear-gradient(145deg, rgba(12, 52, 96, 0.34), rgba(13, 16, 19, 0.88) 60%);
+  border-color: var(--line);
 }
 .workflow-card p { margin: 11px 0 0; }
 .workflow-card ul { margin: 17px 0 0; padding-left: 19px; color: #d4dbe5; }
@@ -242,26 +235,29 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
 .focus-section {
   display: grid;
   grid-template-columns: minmax(240px, 0.8fr) minmax(300px, 1.2fr);
-  align-items: center;
+  align-items: start;
   gap: 48px;
   margin-top: 88px;
+  padding: 54px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 .focus-section p { margin: 0; font-size: 1.03rem; }
 
 .requirements {
   display: grid;
   grid-template-columns: 0.8fr 1.2fr;
-  gap: 38px;
-  margin-top: 26px;
+  gap: 48px;
+  margin-top: 0;
+  padding: 54px 0;
+  border-bottom: 1px solid var(--line);
   scroll-margin-top: 20px;
 }
 .requirements ul { margin: 18px 0 0; padding-left: 20px; color: #dbe2ec; }
 .requirements li { margin: 9px 0; }
 .assurance-callout {
-  border: 1px solid rgba(88, 166, 255, 0.3);
-  background: rgba(9, 115, 238, 0.08);
-  border-radius: 14px;
-  padding: 22px;
+  border-left: 1px solid var(--line);
+  padding: 4px 0 4px 38px;
 }
 .assurance-callout p { margin: 9px 0 0; }
 
@@ -270,8 +266,11 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
   grid-template-columns: 0.85fr 1.15fr;
   gap: 48px;
   align-items: start;
-  margin-top: 26px;
-  padding: 36px;
+  margin-top: 88px;
+  padding: 48px 42px;
+  background: rgba(255,255,255,0.035);
+  border: 1px solid var(--line);
+  border-radius: 14px;
   scroll-margin-top: 20px;
 }
 .bottom-download-btn { margin-top: 22px; }
@@ -325,6 +324,7 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
   .focus-section,
   .requirements,
   .download { grid-template-columns: 1fr; gap: 26px; }
+  .assurance-callout { border-left: 0; border-top: 1px solid var(--line); padding: 26px 0 0; }
   .install-guide { border-left: 0; border-top: 1px solid var(--line); padding: 26px 0 0; }
 }
 
@@ -336,10 +336,9 @@ h3 { margin: 0; font-size: 1.12rem; letter-spacing: -0.015em; }
   .hero { padding-top: 44px; }
   .hero-copy { font-size: 1.02rem; }
   .panel,
-  .screenshot-section,
-  .download { padding: 20px; }
+  .screenshot-section { padding: 20px; }
+  .download { padding: 34px 20px; }
   .section-block { padding-top: 64px; }
-  .workflow-card { padding: 22px; }
   .site-footer { flex-direction: column; align-items: flex-start; }
 }
 
