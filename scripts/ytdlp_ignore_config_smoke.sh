@@ -61,6 +61,13 @@ if [[ ! -f "$YTDLP_SCRIPT" ]]; then
   exit 1
 fi
 
+PYTHON_HOME="$(cd "$(dirname "$PYTHON_BIN")/.." && pwd)"
+MANAGED_LAUNCHER="$PYTHON_HOME/inout_ytdlp_launcher.py"
+LAUNCH_ARGS=()
+if [[ -f "$MANAGED_LAUNCHER" ]]; then
+  LAUNCH_ARGS=(-S "$MANAGED_LAUNCHER")
+fi
+
 fake_home="$TEMP_ROOT/home"
 poison_path="$TEMP_ROOT/poison-pythonpath"
 bad_python_home="$TEMP_ROOT/bad-python-home"
@@ -79,6 +86,6 @@ PYTHONNOUSERSITE=1 \
 PYTHONPATH="$poison_path" \
 PYTHONHOME="$bad_python_home" \
 env -u PYTHONPATH -u PYTHONHOME \
-  "$PYTHON_BIN" "$YTDLP_SCRIPT" --ignore-config --version >/dev/null
+  "$PYTHON_BIN" "${LAUNCH_ARGS[@]}" "$YTDLP_SCRIPT" --ignore-config --version >/dev/null
 
 echo "yt-dlp ignore-config smoke test passed."

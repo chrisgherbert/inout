@@ -207,6 +207,7 @@ final class DownloaderManager {
         guard let scriptURL = bundledYTDLPScriptURL,
               let pythonURL = activePythonURL,
               let pythonHome = activePythonHomeURL,
+              let launcherURL = managedPythonLauncherURL(forHome: pythonHome),
               let denoURL = activeDenoExecutableURL,
               fileManager.fileExists(atPath: scriptURL.path) else {
             return nil
@@ -214,7 +215,7 @@ final class DownloaderManager {
 
         return YTDLPLaunchCommand(
             executableURL: pythonURL,
-            preArguments: [scriptURL.path] + Self.ytdlpIsolationArguments + ytDLPJavaScriptRuntimeArguments(denoURL: denoURL),
+            preArguments: ["-S", launcherURL.path, scriptURL.path] + Self.ytdlpIsolationArguments + ytDLPJavaScriptRuntimeArguments(denoURL: denoURL),
             environment: pythonEnvironment(homeURL: pythonHome),
             removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys,
             source: "bundled"
@@ -441,6 +442,8 @@ final class DownloaderManager {
             throw DownloaderManagerError.validationFailed("Downloaded Python runtime is missing python3.")
         }
 
+        try validateManagedPythonRuntime(atHome: extractedHome)
+
         let version = try readPythonVersion(atHome: extractedHome)
         let manifest = DownloaderRuntimeManifest(
             version: version,
@@ -549,7 +552,7 @@ final class DownloaderManager {
         let pythonURL = homeURL.appendingPathComponent("bin/python3")
         let output = try runProcess(
             executableURL: pythonURL,
-            arguments: ["-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
+            arguments: ["-S", "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
             environment: pythonEnvironment(homeURL: homeURL),
             removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys
         )
@@ -614,13 +617,14 @@ final class DownloaderManager {
     private func externalLaunchCommand(for scriptURL: URL, pythonHome: URL? = nil) -> YTDLPLaunchCommand? {
         guard let pythonHome = pythonHome ?? activePythonHomeURL,
               let pythonURL = pythonExecutableURL(forHome: pythonHome),
+              let launcherURL = managedPythonLauncherURL(forHome: pythonHome),
               let denoURL = activeDenoExecutableURL,
               fileManager.fileExists(atPath: scriptURL.path) else {
             return nil
         }
         return YTDLPLaunchCommand(
             executableURL: pythonURL,
-            preArguments: [scriptURL.path] + Self.ytdlpIsolationArguments + ytDLPJavaScriptRuntimeArguments(denoURL: denoURL),
+            preArguments: ["-S", launcherURL.path, scriptURL.path] + Self.ytdlpIsolationArguments + ytDLPJavaScriptRuntimeArguments(denoURL: denoURL),
             environment: pythonEnvironment(homeURL: pythonHome),
             removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys,
             source: "external"
@@ -678,6 +682,29 @@ final class DownloaderManager {
     private func pythonExecutableURL(forHome homeURL: URL) -> URL? {
         let url = homeURL.appendingPathComponent("bin/python3")
         return fileManager.isExecutableFile(atPath: url.path) ? url : nil
+    }
+
+    private func managedPythonLauncherURL(forHome homeURL: URL) -> URL? {
+        let launcher = homeURL.appendingPathComponent("inout_ytdlp_launcher.py")
+        let manifest = homeURL.appendingPathComponent("inout-runtime-dependencies.json")
+        guard fileManager.isReadableFile(atPath: launcher.path),
+              fileManager.isReadableFile(atPath: manifest.path) else {
+            return nil
+        }
+        return launcher
+    }
+
+    private func validateManagedPythonRuntime(atHome homeURL: URL) throws {
+        guard let pythonURL = pythonExecutableURL(forHome: homeURL),
+              let launcherURL = managedPythonLauncherURL(forHome: homeURL) else {
+            throw DownloaderManagerError.validationFailed("Managed Python dependencies are missing.")
+        }
+        _ = try runProcess(
+            executableURL: pythonURL,
+            arguments: ["-S", launcherURL.path, "--inout-check-runtime"],
+            environment: pythonEnvironment(homeURL: homeURL),
+            removedEnvironmentKeys: Self.managedPythonRemovedEnvironmentKeys
+        )
     }
 
     private func setExecutablePermissions(at url: URL) throws {
@@ -763,7 +790,9 @@ final class DownloaderManager {
     private var installedPythonHomeURL: URL? {
         let current = runtimeCurrentDirectoryURL
         let python = current.appendingPathComponent("bin/python3")
-        return fileManager.isExecutableFile(atPath: python.path) ? current : nil
+        return fileManager.isExecutableFile(atPath: python.path) && managedPythonLauncherURL(forHome: current) != nil
+            ? current
+            : nil
     }
 
     private var activePythonHomeURL: URL? {

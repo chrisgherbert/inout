@@ -161,6 +161,7 @@ if [[ ! -f "$RUNTIME_SHA_PATH" ]]; then
   echo "Managed Python runtime checksum not found: $RUNTIME_SHA_PATH"
   exit 1
 fi
+"$ROOT_DIR/scripts/python_runtime_smoke.sh" "$RUNTIME_ARCHIVE"
 
 cp "$NOTARIZED_DMG" "$VERSIONED_DMG"
 shasum -a 256 "$VERSIONED_DMG" > "$SHA_PATH"

@@ -10,6 +10,7 @@ DMG_PATH="$DIST_DIR/$DMG_NAME"
 
 cd "$ROOT_DIR"
 
+"$ROOT_DIR/scripts/python_runtime_smoke.sh"
 "$ROOT_DIR/scripts/build_app.sh" release
 
 if [[ ! -d "$APP_PATH" ]]; then
