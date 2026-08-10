@@ -30,7 +30,7 @@ struct ClipPlayerUtilityRow: View {
         let _ = PlayheadDiagnostics.shared.noteUtilityRowBodyEvaluation()
         ViewThatFits(in: .horizontal) {
             wideLayout
-                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: 1_100)
                 .frame(maxWidth: .infinity, alignment: .center)
 
             splitLayout
@@ -123,21 +123,51 @@ struct ClipPlayerUtilityRow: View {
     }
 
     private var timecodeReadout: some View {
-        HStack(spacing: 6) {
-            Button(action: onCopyPlayheadTimecode) {
-                Image(systemName: "doc.on.doc")
-                    .font(.caption)
-                    .frame(width: 14, height: 14)
-            }
-            .buttonStyle(.plain)
-            .help("Copy playhead timecode")
-            .opacity(isPlayerTimecodeHovered ? 1.0 : 0.0)
-            .allowsHitTesting(isPlayerTimecodeHovered)
-            .accessibilityHidden(!isPlayerTimecodeHovered)
-            .contextMenu {
-                Button("Copy Timecode", action: onCopyPlayheadTimecode)
-            }
+        Button(action: onCopyPlayheadTimecode) {
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: 20, height: 16)
 
+                timecodeText
+
+                Color.clear
+                    .frame(width: 20, height: 16)
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 3)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(
+                        Color.accentColor.opacity(
+                            playheadCopyFlash ? 0.14 : (isPlayerTimecodeHovered ? 0.07 : 0)
+                        )
+                    )
+            }
+            .overlay(alignment: .leading) {
+                Image(systemName: playheadCopyFlash ? "checkmark" : "doc.on.doc")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(playheadCopyFlash ? Color.accentColor : Color.secondary)
+                    .frame(width: 20, height: 16)
+                    .padding(.leading, 2)
+                    .opacity(isPlayerTimecodeHovered || playheadCopyFlash ? 1 : 0)
+            }
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Copy playhead timecode")
+        .accessibilityLabel("Copy playhead timecode")
+        .contextMenu {
+            Button("Copy Timecode", action: onCopyPlayheadTimecode)
+        }
+        .onHover { hovering in
+            isPlayerTimecodeHovered = hovering
+        }
+        .animation(.easeOut(duration: 0.12), value: isPlayerTimecodeHovered)
+        .animation(.easeOut(duration: 0.12), value: playheadCopyFlash)
+    }
+
+    private var timecodeText: some View {
+        HStack(spacing: 6) {
             Text(formatDisplayTimecode(
                 playheadSeconds,
                 style: timecodeDisplayStyle,
@@ -158,9 +188,6 @@ struct ClipPlayerUtilityRow: View {
             ))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-        }
-        .onHover { hovering in
-            isPlayerTimecodeHovered = hovering
         }
     }
 
@@ -234,10 +261,15 @@ struct ClipPlayerUtilityRow: View {
     private var wideLayout: some View {
         HStack(spacing: 0) {
             navigationControls
-                .frame(width: 310, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 310, maxWidth: .infinity, alignment: .leading)
+
             timecodeReadout
+                .fixedSize(horizontal: true, vertical: false)
+
             zoomControls
-                .frame(width: 310, alignment: .trailing)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 310, maxWidth: .infinity, alignment: .trailing)
         }
     }
 
