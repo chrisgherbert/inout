@@ -19,6 +19,9 @@ require_text "$ROOT_DIR/src/ClipOutputPanel.swift" \
 require_text "$ROOT_DIR/src/ToolViews.swift" \
   "AdvancedVideoExportOptions(model: model" \
   "Convert video export must use the shared video options."
+require_text "$ROOT_DIR/src/MediaExportOptionsViews.swift" \
+  "MediaFramingOptionsButton(model: model)" \
+  "Shared Advanced video options must expose media framing."
 require_text "$ROOT_DIR/src/ClipOutputPanel.swift" \
   "AudioOnlyExportOptions(model: model)" \
   "Clip Audio Only export must use the shared audio options."
@@ -28,6 +31,9 @@ require_text "$ROOT_DIR/src/ToolViews.swift" \
 require_text "$ROOT_DIR/src/WorkspaceViewModel+ClipExport.swift" \
   "let config = configOverride ?? queuedClipExportConfigSnapshot()" \
   "Exports must run from an immutable configuration snapshot."
+require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
+  "clipFramingAspectRatio: clipFramingAspectRatio" \
+  "Queued exports must snapshot framing settings."
 require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
   "isFullSourceConversion: true" \
   "Whole-source conversion must be represented explicitly."

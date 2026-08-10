@@ -1,4 +1,5 @@
 import Foundation
+import InOutCore
 
 @MainActor
 extension WorkspaceViewModel {
@@ -274,6 +275,10 @@ extension WorkspaceViewModel {
             clipAdvancedVideoCodec: clipAdvancedVideoCodec,
             clipCompatibleSpeedPreset: clipCompatibleSpeedPreset,
             clipCompatibleMaxResolution: clipCompatibleMaxResolution,
+            clipFramingAspectRatio: clipFramingAspectRatio,
+            clipFramingMode: clipFramingMode,
+            clipFramingCropAlignment: clipFramingCropAlignment,
+            sourceVideoDimensions: parsedMediaResolution(sourceInfo?.resolution),
             clipVideoBitrateMbps: clipVideoBitrateMbps,
             clipAudioBitrateKbps: clipAudioBitrateKbps,
             clipAdvancedBoostAudio: clipAdvancedBoostAudio,

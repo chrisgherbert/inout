@@ -200,6 +200,9 @@ final class WorkspaceViewModel: ObservableObject {
             applySuggestedCompatibleBitrateForResolution()
         }
     }
+    @Published var clipFramingAspectRatio: MediaFramingAspectRatio = .original
+    @Published var clipFramingMode: MediaFramingMode = .fit
+    @Published var clipFramingCropAlignment: MediaFramingCropAlignment = .center
     @Published var clipAudioBitrateKbps: Int = 128
     @Published var clipAdvancedVideoCodec: AdvancedVideoCodec = .h264
     @Published var clipAdvancedBoostAudio = false
@@ -466,6 +469,10 @@ final class WorkspaceViewModel: ObservableObject {
         let clipAdvancedVideoCodec: AdvancedVideoCodec
         let clipCompatibleSpeedPreset: CompatibleSpeedPreset
         let clipCompatibleMaxResolution: CompatibleMaxResolution
+        let clipFramingAspectRatio: MediaFramingAspectRatio
+        let clipFramingMode: MediaFramingMode
+        let clipFramingCropAlignment: MediaFramingCropAlignment
+        let sourceVideoDimensions: MediaFramingDimensions?
         let clipVideoBitrateMbps: Double
         let clipAudioBitrateKbps: Int
         let clipAdvancedBoostAudio: Bool

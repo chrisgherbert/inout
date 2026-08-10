@@ -295,6 +295,12 @@ struct HelpDocumentationView: View {
                     ]
                 ),
                 HelpSection(
+                    title: "Change the frame",
+                    paragraphs: [
+                        "Open Framing in Advanced video export to choose an output aspect ratio. Fit keeps the complete picture, Fill crops the edges, and Blur keeps the complete picture over a blurred background. The same framing options are available for clips and complete-source conversion."
+                    ]
+                ),
+                HelpSection(
                     title: "Convert the complete source",
                     paragraphs: [
                         "Use Convert when you need the complete file rather than the current In/Out selection. Video uses the same options as Advanced clip export; Audio Only uses the same options as Audio Only clip export."

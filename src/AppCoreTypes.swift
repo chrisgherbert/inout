@@ -277,6 +277,15 @@ enum CompatibleMaxResolution: String, CaseIterable, Identifiable {
             return "scale='min(iw,854)':'min(ih,480)':force_original_aspect_ratio=decrease:force_divisible_by=2"
         }
     }
+
+    var maximumShortEdge: Int? {
+        switch self {
+        case .original: return nil
+        case .p1080: return 1080
+        case .p720: return 720
+        case .p480: return 480
+        }
+    }
 }
 
 enum AdvancedVideoCodec: String, CaseIterable, Identifiable {

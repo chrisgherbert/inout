@@ -147,6 +147,8 @@ struct AdvancedVideoExportOptions: View {
                 .frame(width: 148)
             }
 
+            MediaFramingOptionsButton(model: model)
+
             HStack {
                 Text("Video bitrate")
                     .frame(width: 120, alignment: .leading)

@@ -36,6 +36,12 @@ extension WorkspaceViewModel {
             clampClipRange()
         }
         let config = configOverride ?? queuedClipExportConfigSnapshot()
+        guard config.clipFramingAspectRatio == .original || config.sourceVideoDimensions != nil else {
+            let message = "Unable to determine the source dimensions required for framing."
+            finalizeQueued(.failed, message)
+            uiMessage = message
+            return
+        }
         let captionTranscriptSnapshot: [TranscriptSegment]? = {
             guard config.clipAdvancedBurnInCaptions,
                   hasCachedTranscript,
@@ -418,7 +424,17 @@ extension WorkspaceViewModel {
                 "-b:v", "\(bitrateKbps)k"
             ]
 
-            if let scaleFilter = config.clipCompatibleMaxResolution.scaleFilter {
+            if config.clipFramingAspectRatio != .original,
+               let sourceDimensions = config.sourceVideoDimensions,
+               let framingFilter = mediaFramingVideoFilter(
+                    aspectRatio: config.clipFramingAspectRatio,
+                    mode: config.clipFramingMode,
+                    cropAlignment: config.clipFramingCropAlignment,
+                    source: sourceDimensions,
+                    maximumShortEdge: config.clipCompatibleMaxResolution.maximumShortEdge
+               ) {
+                videoFilters.append(framingFilter)
+            } else if let scaleFilter = config.clipCompatibleMaxResolution.scaleFilter {
                 videoFilters.append(scaleFilter)
             }
 
