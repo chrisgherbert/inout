@@ -14,6 +14,7 @@ func run(_ executable: String, _ arguments: [String]) -> (status: Int32, output:
     process.arguments = arguments
     let outputPipe = Pipe()
     let errorPipe = Pipe()
+    process.standardInput = FileHandle.nullDevice
     process.standardOutput = outputPipe
     process.standardError = errorPipe
     do {
