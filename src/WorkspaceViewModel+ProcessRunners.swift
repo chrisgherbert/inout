@@ -130,6 +130,37 @@ private final class LockedBox<Value> {
     }
 }
 
+private struct YTDLPDownloadTimingState {
+    var recordedEvents: Set<String> = []
+    var hasSeenProgress = false
+}
+
+private final class YTDLPDownloadTimingTracker: @unchecked Sendable {
+    private let startedAt: TimeInterval
+    private let state = LockedBox(YTDLPDownloadTimingState())
+
+    init(startedAt: TimeInterval) {
+        self.startedAt = startedAt
+    }
+
+    func record(_ event: String, marksProgress: Bool = false) -> String? {
+        let shouldRecord = state.withValue { state in
+            if marksProgress {
+                guard !state.hasSeenProgress else { return false }
+                state.hasSeenProgress = true
+            }
+            return state.recordedEvents.insert(event).inserted
+        }
+        guard shouldRecord else { return nil }
+        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - startedAt)
+        return String(format: "+%.3fs %@", elapsed, event)
+    }
+
+    var hasSeenProgress: Bool {
+        state.snapshot().hasSeenProgress
+    }
+}
+
 private final class BufferedLineProcessor {
     private let buffer = LockedBox(Data())
     private let handleLine: @Sendable (String) -> Void
@@ -517,10 +548,12 @@ extension WorkspaceViewModel {
         removedEnvironmentKeys: Set<String>,
         arguments: [String],
         statusPrefix: String,
-        progressRange: ClosedRange<Double>
+        progressRange: ClosedRange<Double>,
+        requestStartedAt: TimeInterval
     ) async -> (downloadedPath: String?, error: String?) {
         let finalArguments = preArguments + arguments
         let commandLine = MediaToolUtilities.formatProcessCommand(executableURL: executableURL, arguments: finalArguments)
+        let timingTracker = YTDLPDownloadTimingTracker(startedAt: requestStartedAt)
         let captureConsoleOutput = showActivityConsole
         let consoleBatcher = ConsoleLineBatcher(isEnabled: captureConsoleOutput) { [weak self] chunk in
             Task { @MainActor [weak self] in
@@ -537,6 +570,25 @@ extension WorkspaceViewModel {
                 self.exportStatusText = "\(statusPrefix)… \(Int((clamped * 100).rounded()))%"
             }
         }
+        let recordTiming: @Sendable (String, String?, Bool) -> Void = { [weak self] event, statusText, marksProgress in
+            guard let timingLine = timingTracker.record(event, marksProgress: marksProgress) else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.appendActivityConsole(timingLine, source: "download-timing", force: true)
+                if let statusText,
+                   self.isExporting,
+                   !timingTracker.hasSeenProgress {
+                    self.exportStatusText = statusText
+                }
+            }
+        }
+        let capturePreflightOutput: @Sendable (String, String) -> Void = { [weak self] line, source in
+            guard !captureConsoleOutput, !timingTracker.hasSeenProgress else { return }
+            Task { @MainActor [weak self] in
+                self?.appendActivityConsole(line, source: source, force: true)
+            }
+        }
+        recordTiming("process runner entered", nil, false)
         return await withCheckedContinuation { (continuation: CheckedContinuation<(downloadedPath: String?, error: String?), Never>) in
             let process = Process()
             process.executableURL = executableURL
@@ -565,8 +617,12 @@ extension WorkspaceViewModel {
             }
 
             let parseLine: (String) -> Void = { rawLine in
+                recordTiming("first yt-dlp output", nil, false)
                 if let progress = extractPercentProgress(from: rawLine) {
+                    recordTiming("first download progress", nil, true)
                     progressBatcher.enqueue(progress)
+                } else if let phase = YTDLPDownloadPhase.detect(in: rawLine) {
+                    recordTiming(phase.timingLabel, phase.statusText, false)
                 }
 
                 if rawLine.hasPrefix("after_move:") {
@@ -584,11 +640,13 @@ extension WorkspaceViewModel {
 
             let stdoutProcessor = BufferedLineProcessor { line in
                 consoleBatcher.enqueue(line: line, source: "yt-dlp")
+                capturePreflightOutput(line, "yt-dlp")
                 parseLine(line)
             }
 
             let stderrProcessor = BufferedLineProcessor { line in
                 consoleBatcher.enqueue(line: line, source: "stderr")
+                capturePreflightOutput(line, "stderr")
                 parseLine(line)
                 stderrLines.withValue { $0.append(line) }
             }
@@ -602,7 +660,9 @@ extension WorkspaceViewModel {
             }
 
             do {
+                recordTiming("launching yt-dlp process", nil, false)
                 try process.run()
+                recordTiming("yt-dlp process launched", nil, false)
                 Task { @MainActor in
                     self.activeProcess = process
                 }
@@ -628,6 +688,7 @@ extension WorkspaceViewModel {
                 stderrProcessor.finish(with: trailingStderr)
                 consoleBatcher.flushNow()
                 progressBatcher.flushNow()
+                recordTiming("yt-dlp exited (status \(proc.terminationStatus))", nil, false)
 
                 let resolvedOutputPath = outputPath.snapshot()
                 let stderrSnapshot = stderrLines.snapshot()

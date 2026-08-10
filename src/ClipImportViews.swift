@@ -264,9 +264,13 @@ struct ClipEmptySourceView: View {
 
     let reduceTransparency: Bool
     let isURLDownloadEnabled: Bool
+    let activityConsoleText: String
+    @Binding var showActivityConsole: Bool
     let onChooseFile: () -> Void
     let onDownload: () -> Void
     let onChooseCustomFolder: () -> Void
+    let onCopyActivityConsole: () -> Void
+    let onClearActivityConsole: () -> Void
     let onHandleDrop: ([NSItemProvider]) -> Bool
     let onOpenRecentTranscript: (TranscriptLibraryEntry) -> Void
     let onShowRecentTranscriptInFinder: (TranscriptLibraryEntry) -> Void
@@ -340,8 +344,12 @@ struct ClipEmptySourceView: View {
                 browserCookiesSource: $urlDownloadBrowserCookiesSource,
                 isEnabled: isURLDownloadEnabled,
                 reduceTransparency: reduceTransparency,
+                activityConsoleText: activityConsoleText,
+                showActivityConsole: $showActivityConsole,
                 onDownload: onDownload,
-                onChooseCustomFolder: onChooseCustomFolder
+                onChooseCustomFolder: onChooseCustomFolder,
+                onCopyActivityConsole: onCopyActivityConsole,
+                onClearActivityConsole: onClearActivityConsole
             )
             .frame(maxWidth: .infinity)
 
@@ -551,8 +559,12 @@ private struct InitialURLDownloadControl: View {
     @Binding var browserCookiesSource: URLDownloadBrowserCookiesSource
     let isEnabled: Bool
     let reduceTransparency: Bool
+    let activityConsoleText: String
+    @Binding var showActivityConsole: Bool
     let onDownload: () -> Void
     let onChooseCustomFolder: () -> Void
+    let onCopyActivityConsole: () -> Void
+    let onClearActivityConsole: () -> Void
 
     @State private var showAdvancedOptions = false
     @FocusState private var isFocused: Bool
@@ -649,6 +661,58 @@ private struct InitialURLDownloadControl: View {
                     layout: .inline,
                     onChooseCustomFolder: onChooseCustomFolder
                 )
+                .frame(maxWidth: 920, alignment: .leading)
+            }
+
+            if !activityConsoleText.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button(showActivityConsole ? "Hide Console" : "Show Console") {
+                            showActivityConsole.toggle()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button("Copy", action: onCopyActivityConsole)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                        Button("Clear", action: onClearActivityConsole)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                        Spacer(minLength: 0)
+                    }
+
+                    if showActivityConsole {
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                Text(activityConsoleText)
+                                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id("url-download-console-end")
+                            }
+                            .frame(minHeight: 110, maxHeight: 180)
+                            .onChange(of: activityConsoleText) { _, _ in
+                                proxy.scrollTo("url-download-console-end", anchor: .bottom)
+                            }
+                            .onAppear {
+                                proxy.scrollTo("url-download-console-end", anchor: .bottom)
+                            }
+                        }
+                        .padding(10)
+                        .background(
+                            adaptiveContainerFill(
+                                material: .thinMaterial,
+                                fallback: Color(nsColor: .controlBackgroundColor),
+                                reduceTransparency: reduceTransparency
+                            ),
+                            in: RoundedRectangle(cornerRadius: UIRadius.small, style: .continuous)
+                        )
+                    }
+                }
                 .frame(maxWidth: 920, alignment: .leading)
             }
         }

@@ -2914,6 +2914,11 @@ struct ClipToolView: View {
             transcriptHistoryStorageBytes: model.transcriptHistoryStorageBytes,
             reduceTransparency: reduceTransparency,
             isURLDownloadEnabled: model.canRequestURLDownload,
+            activityConsoleText: model.activityConsoleText,
+            showActivityConsole: Binding(
+                get: { model.showActivityConsole },
+                set: { model.showActivityConsole = $0 }
+            ),
             onChooseFile: {
                 model.chooseSource()
             },
@@ -2931,6 +2936,12 @@ struct ClipToolView: View {
             },
             onChooseCustomFolder: {
                 model.chooseCustomURLDownloadDirectory()
+            },
+            onCopyActivityConsole: {
+                model.copyActivityConsole()
+            },
+            onClearActivityConsole: {
+                model.clearActivityConsole()
             },
             onHandleDrop: { providers in
                 model.handleDrop(providers: providers)

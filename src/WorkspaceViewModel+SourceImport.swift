@@ -11,7 +11,11 @@ extension WorkspaceViewModel {
         clearQueuedJobs()
     }
 
-    private func resetSourceScopedUIState(transcriptStatus: String, uiMessage: String) {
+    private func resetSourceScopedUIState(
+        transcriptStatus: String,
+        uiMessage: String,
+        preservesActivityConsole: Bool = false
+    ) {
         transcriptSegments = []
         hasCachedTranscript = false
         transcriptStatusText = transcriptStatus
@@ -21,7 +25,9 @@ extension WorkspaceViewModel {
         highlightedCaptureTimelineMarkerID = nil
         highlightedClipBoundary = nil
         clipPlayheadSeconds = 0
-        clearActivityConsole()
+        if !preservesActivityConsole {
+            clearActivityConsole()
+        }
         self.uiMessage = uiMessage
         resetClipRange()
     }
@@ -118,8 +124,9 @@ extension WorkspaceViewModel {
         exportCancellationRequested = false
         exportProgress = 0
         clearActivityConsole()
-        appendActivityConsole("URL download started", source: "yt-dlp")
-        exportStatusText = "Preparing download…"
+        let downloadRequestStartedAt = ProcessInfo.processInfo.systemUptime
+        appendActivityConsole("+0.000s download requested", source: "download-timing", force: true)
+        exportStatusText = "Starting downloader…"
         uiMessage = "Downloading media from URL…"
 
         exportTask = Task { [weak self] in
@@ -148,6 +155,7 @@ extension WorkspaceViewModel {
                     "--progress",
                     "--progress-template", "download:%(progress._percent_str)s",
                     "--print", "after_move:%(filepath)s",
+                    "--no-quiet",
                     "-o", downloadTemplateURL.path
                 ] + URLDownloadUtilities.ytDLPFormatArguments(for: preset)
                   + URLDownloadUtilities.ytDLPAuthenticationArguments(
@@ -164,7 +172,8 @@ extension WorkspaceViewModel {
                     removedEnvironmentKeys: ytDLPLaunch.removedEnvironmentKeys,
                     arguments: stagedArgs,
                     statusPrefix: "Downloading source",
-                    progressRange: 0.0...0.6
+                    progressRange: 0.0...0.6,
+                    requestStartedAt: downloadRequestStartedAt
                 )
                 downloadedPath = staged.downloadedPath
                 errorText = staged.error
@@ -175,6 +184,7 @@ extension WorkspaceViewModel {
                     "--progress",
                     "--progress-template", "download:%(progress._percent_str)s",
                     "--print", "after_move:%(filepath)s",
+                    "--no-quiet",
                     "-o", destinationURL.path
                 ] + URLDownloadUtilities.ytDLPFormatArguments(for: preset)
                   + URLDownloadUtilities.ytDLPAuthenticationArguments(
@@ -191,7 +201,8 @@ extension WorkspaceViewModel {
                     removedEnvironmentKeys: ytDLPLaunch.removedEnvironmentKeys,
                     arguments: args,
                     statusPrefix: "Downloading media",
-                    progressRange: 0.0...1.0
+                    progressRange: 0.0...1.0,
+                    requestStartedAt: downloadRequestStartedAt
                 )
                 downloadedPath = direct.downloadedPath
                 errorText = direct.error
@@ -387,7 +398,7 @@ extension WorkspaceViewModel {
                     return
                 }
 
-                self.setSource(finalURL)
+                self.setSource(finalURL, preservingActivityConsole: true)
                 self.outputURL = finalURL
                 let stageLabel = shouldSplitTranscodeStages ? "Download + transcode complete" : "Download complete"
                 self.exportStatusText = "\(stageLabel): \(finalURL.lastPathComponent)"
@@ -419,7 +430,7 @@ extension WorkspaceViewModel {
         }
     }
 
-    func setSource(_ url: URL) {
+    func setSource(_ url: URL, preservingActivityConsole: Bool = false) {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         if PlayheadBenchmarkConfig.shared.enabled {
             PlayheadDiagnostics.shared.writeProgress(stage: "set_source_begin", scenario: nil)
@@ -448,7 +459,8 @@ extension WorkspaceViewModel {
         exportProgress = 0
         resetSourceScopedUIState(
             transcriptStatus: hasAudioTrack ? "No transcript generated yet." : "No audio track available for transcript.",
-            uiMessage: "Loaded \(url.lastPathComponent)"
+            uiMessage: "Loaded \(url.lastPathComponent)",
+            preservesActivityConsole: preservingActivityConsole
         )
         if hasAudioTrack {
             restoreTranscriptFromLibrary(for: url, sourceSessionID: sourceSessionID)
