@@ -20,8 +20,12 @@ enum SecureCredentialStoreError: LocalizedError {
 
 enum SecureCredentialStore {
     private static let service = "com.bulwark.BulwarkVideoTools.ai-credentials"
+    private static let skipsKeychain =
+        ProcessInfo.processInfo.arguments.contains("--skip-keychain") ||
+        ProcessInfo.processInfo.environment["INOUT_SKIP_KEYCHAIN"] == "1"
 
     static func value(for account: String) -> String? {
+        guard !skipsKeychain else { return nil }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -45,6 +49,7 @@ enum SecureCredentialStore {
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else {
             throw SecureCredentialStoreError.invalidValue
         }
+        guard !skipsKeychain else { return }
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -72,6 +77,7 @@ enum SecureCredentialStore {
     }
 
     static func removeValue(for account: String) throws {
+        guard !skipsKeychain else { return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

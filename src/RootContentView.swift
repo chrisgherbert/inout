@@ -110,6 +110,7 @@ struct ContentView: View {
             .onOpenURL { url in
                 guard url.isFileURL else { return }
                 model.setSource(url)
+                EmptyDocumentWindowCleanupCoordinator.shared.schedule(keeping: appWindow)
                 NSApp.activate(ignoringOtherApps: true)
             }
             .onReceive(externalOpenBridge.$incomingURL) { url in
@@ -124,6 +125,7 @@ struct ContentView: View {
 
                 guard appWindow?.isKeyWindow == true || canReuseSingleEmptyWindow else { return }
                 model.setSource(url)
+                EmptyDocumentWindowCleanupCoordinator.shared.schedule(keeping: appWindow)
                 NSApp.activate(ignoringOtherApps: true)
                 externalOpenBridge.incomingURL = nil
             }
@@ -159,6 +161,7 @@ struct ContentView: View {
             }
             lastQueuedCount = model.queuedJobs.count
             lastPendingQueuedCount = model.queuedJobs.filter { $0.status == .queued }.count
+            EmptyDocumentWindowCleanupCoordinator.shared.schedule()
             updateURLDownloadOnboardingPresentation()
         }
         .onChange(of: model.urlDownloadSetupComplete) { isComplete in

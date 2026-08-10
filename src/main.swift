@@ -22,6 +22,54 @@ final class ExternalFileOpenBridge: ObservableObject {
 }
 
 @MainActor
+final class EmptyDocumentWindowCleanupCoordinator {
+    static let shared = EmptyDocumentWindowCleanupCoordinator()
+
+    private weak var preferredWindow: NSWindow?
+    private var pendingCleanup: DispatchWorkItem?
+
+    private init() {}
+
+    func schedule(keeping preferredWindow: NSWindow? = nil) {
+        if let preferredWindow {
+            self.preferredWindow = preferredWindow
+        }
+        pendingCleanup?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.closeRedundantEmptyWindows()
+        }
+        pendingCleanup = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
+    }
+
+    private func closeRedundantEmptyWindows() {
+        let emptyWindows = NSApp.windows.filter { window in
+            window.isVisible &&
+                window.canBecomeMain &&
+                window.sheetParent == nil &&
+                window.representedURL == nil &&
+                window.title == "In/Out"
+        }
+
+        let windowToKeep: NSWindow?
+        if let preferredWindow, preferredWindow.isVisible {
+            windowToKeep = preferredWindow
+        } else {
+            windowToKeep = emptyWindows.first(where: \.isKeyWindow) ??
+                emptyWindows.first(where: \.isMainWindow) ??
+                emptyWindows.first
+        }
+
+        for window in emptyWindows where window !== windowToKeep {
+            window.close()
+        }
+        preferredWindow = nil
+        pendingCleanup = nil
+    }
+}
+
+@MainActor
 final class DockProgressController {
     static let shared = DockProgressController()
 
@@ -103,4 +151,3 @@ final class DockProgressController {
         active = false
     }
 }
-
