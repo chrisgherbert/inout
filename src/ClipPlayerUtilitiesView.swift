@@ -8,8 +8,8 @@ struct ClipPlayerUtilityRow: View {
     let playheadSeconds: Double
     let totalDurationSeconds: Double
     let playheadCopyFlash: Bool
-    let compactZoomDisplayText: String
-    let timelineZoomLevelCount: Int
+    let timelineZoomLevels: [Double]
+    let timelineZoomIndex: Int
     let canSuggestMarkers: Bool
     let isSuggestingMarkers: Bool
     let isTranscribingForMarkers: Bool
@@ -20,7 +20,6 @@ struct ClipPlayerUtilityRow: View {
     let onSuggestMarkers: () -> Void
     let onZoomOut: () -> Void
     let onZoomIn: () -> Void
-    let onFit: () -> Void
     let timelineZoomIndexBinding: Binding<Double>
 
     @State private var isPlayerTimecodeHovered = false
@@ -45,29 +44,37 @@ struct ClipPlayerUtilityRow: View {
     }
 
     private var navigationControls: some View {
-        HStack(spacing: 6) {
-            clipNavigationControls
+        HStack(spacing: 8) {
+            transportControls
+
+            Divider()
+                .frame(height: 16)
+
+            actionControls
             aiSuggestionsButton
         }
     }
 
-    private var clipNavigationControls: some View {
-        HStack(spacing: 6) {
-            ControlGroup {
-                Button(action: onNavigatePrevious) {
-                    Image(systemName: "backward.end.fill")
-                }
-                .help("Previous Marker or Clip Edge (Up Arrow)")
-                .accessibilityLabel("Previous Marker or Clip Edge")
-
-                Button(action: onNavigateNext) {
-                    Image(systemName: "forward.end.fill")
-                }
-                .help("Next Marker or Clip Edge (Down Arrow)")
-                .accessibilityLabel("Next Marker or Clip Edge")
+    private var transportControls: some View {
+        ControlGroup {
+            Button(action: onNavigatePrevious) {
+                Image(systemName: "backward.end.fill")
             }
-            .controlSize(.small)
+            .help("Previous Marker or Clip Edge (Up Arrow)")
+            .accessibilityLabel("Previous Marker or Clip Edge")
 
+            Button(action: onNavigateNext) {
+                Image(systemName: "forward.end.fill")
+            }
+            .help("Next Marker or Clip Edge (Down Arrow)")
+            .accessibilityLabel("Next Marker or Clip Edge")
+        }
+        .controlSize(.small)
+    }
+
+    @ViewBuilder
+    private var actionControls: some View {
+        HStack(spacing: 6) {
             if hasVideoTrack {
                 Button(action: onCaptureFrame) {
                     Label("Capture Frame", systemImage: "camera")
@@ -106,7 +113,10 @@ struct ClipPlayerUtilityRow: View {
                 .fixedSize(horizontal: true, vertical: false)
 
             VStack(alignment: .leading, spacing: 6) {
-                clipNavigationControls
+                HStack(spacing: 8) {
+                    transportControls
+                    actionControls
+                }
                 aiSuggestionsButton
             }
         }
@@ -174,7 +184,7 @@ struct ClipPlayerUtilityRow: View {
 
             Slider(
                 value: timelineZoomIndexBinding,
-                in: 0...Double(max(0, timelineZoomLevelCount - 1)),
+                in: 0...Double(max(0, timelineZoomLevels.count - 1)),
                 step: 1
             )
             .controlSize(.regular)
@@ -196,27 +206,38 @@ struct ClipPlayerUtilityRow: View {
                 isZoomInHovered = hovering
             }
 
-            Text(compactZoomDisplayText)
-                .font(.caption.monospacedDigit())
-                .frame(width: 34, alignment: .trailing)
-
-            Button("Fit", action: onFit)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            Picker("Timeline Zoom", selection: timelineZoomIndexBinding) {
+                ForEach(Array(timelineZoomLevels.indices), id: \.self) { index in
+                    Text(zoomLabel(at: index))
+                        .tag(Double(index))
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .fixedSize()
+            .help("Timeline Zoom")
         }
     }
 
+    private func zoomLabel(at index: Int) -> String {
+        guard index > 0, timelineZoomLevels.indices.contains(index) else {
+            return "Fit"
+        }
+        let zoom = timelineZoomLevels[index]
+        if abs(zoom.rounded() - zoom) < 0.001 {
+            return "\(Int(zoom.rounded()))×"
+        }
+        return String(format: "%.1f×", zoom)
+    }
+
     private var wideLayout: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 0) {
             navigationControls
-
-            Spacer(minLength: 16)
-
+                .frame(width: 310, alignment: .leading)
             timecodeReadout
-
-            Spacer(minLength: 16)
-
             zoomControls
+                .frame(width: 310, alignment: .trailing)
         }
     }
 
@@ -254,9 +275,9 @@ extension ClipPlayerUtilityRow: Equatable {
         lhs.hasVideoTrack == rhs.hasVideoTrack &&
         lhs.playheadSeconds == rhs.playheadSeconds &&
         lhs.totalDurationSeconds == rhs.totalDurationSeconds &&
-        lhs.playheadCopyFlash == rhs.playheadCopyFlash &&
-            lhs.compactZoomDisplayText == rhs.compactZoomDisplayText &&
-            lhs.timelineZoomLevelCount == rhs.timelineZoomLevelCount &&
+            lhs.playheadCopyFlash == rhs.playheadCopyFlash &&
+            lhs.timelineZoomLevels == rhs.timelineZoomLevels &&
+            lhs.timelineZoomIndex == rhs.timelineZoomIndex &&
             lhs.canSuggestMarkers == rhs.canSuggestMarkers &&
             lhs.isSuggestingMarkers == rhs.isSuggestingMarkers &&
             lhs.isTranscribingForMarkers == rhs.isTranscribingForMarkers

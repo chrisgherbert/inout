@@ -43,6 +43,12 @@ require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
 require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
   "isFullSourceConversion: true" \
   "Whole-source conversion must be represented explicitly."
+require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
+  "func startFullSourceExport(mode: ClipEncodingMode, skipSaveDialog: Bool = false)" \
+  "Convert export must support the shared quick-export behavior."
+require_text "$ROOT_DIR/src/ToolViews.swift" \
+  "model.startFullSourceExport(mode: exportMode, skipSaveDialog: quickExport)" \
+  "Convert UI must forward Option-click quick export."
 require_text "$ROOT_DIR/src/WorkspaceViewModel+ClipExport.swift" \
   "destination.standardizedFileURL != sourceURL.standardizedFileURL" \
   "Whole-source export must never replace its input file."

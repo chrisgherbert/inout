@@ -587,19 +587,31 @@ extension WorkspaceViewModel {
         return range.lowerBound + ((range.upperBound - range.lowerBound) * clamped)
     }
 
-    func exportTranscript(format requestedFormat: TranscriptExportFormat? = nil) {
+    func exportTranscript(
+        format requestedFormat: TranscriptExportFormat? = nil,
+        skipSaveDialog: Bool = false
+    ) {
         guard let sourceURL else { return }
         guard !transcriptSegments.isEmpty else { return }
         let format = requestedFormat ?? transcriptExportFormat
         transcriptExportFormat = format
 
         let baseName = sourceURL.deletingPathExtension().lastPathComponent + "_transcript"
-        let panel = TranscriptUtilities.makeExportPanel(
-            defaultName: baseName + "." + format.fileExtension,
-            format: format
-        )
-
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let defaultName = baseName + "." + format.fileExtension
+        let destination: URL
+        if skipSaveDialog {
+            destination = MediaToolUtilities.uniqueUnderscoreIndexedURL(
+                in: sourceURL.deletingLastPathComponent(),
+                preferredFileName: defaultName
+            )
+        } else {
+            let panel = TranscriptUtilities.makeExportPanel(
+                defaultName: defaultName,
+                format: format
+            )
+            guard panel.runModal() == .OK, let chosenDestination = panel.url else { return }
+            destination = chosenDestination
+        }
 
         let resolvedDestination: URL = {
             if destination.pathExtension.lowercased() == format.fileExtension {
@@ -620,6 +632,9 @@ extension WorkspaceViewModel {
             outputURL = resolvedDestination
             uiMessage = "Transcript exported to \(resolvedDestination.lastPathComponent)"
             lastActivityState = .success
+            if skipSaveDialog {
+                playQuickExportSnipSound()
+            }
             if let soundName = completionSound.soundName,
                let sound = NSSound(named: soundName) {
                 sound.play()

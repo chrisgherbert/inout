@@ -92,6 +92,7 @@ private struct ClipPlayerStageSection: View {
     let transcriptPlaybackPresentation: ClipTranscriptPlaybackPresentation
     let isPlaying: Bool
     let isScrubbing: Bool
+    let isOptionKeyPressed: Bool
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
@@ -116,7 +117,7 @@ private struct ClipPlayerStageSection: View {
     let onSetTranscriptDisplayMode: (_ mode: TranscriptDisplayMode) -> Void
     let onSetTranscriptShowsTimecodes: (_ shows: Bool) -> Void
     let onSetTranscriptTextSize: (_ size: TranscriptTextSize) -> Void
-    let onExportTranscript: (_ format: TranscriptExportFormat?) -> Void
+    let onExportTranscript: (_ format: TranscriptExportFormat?, _ quickExport: Bool) -> Void
     let onSeekToTranscriptTime: (_ seconds: Double) -> Void
     let onPlayTranscriptFromTime: (_ seconds: Double) -> Void
     let onSetShowsSmartMarkerSuggestions: (_ shows: Bool) -> Void
@@ -210,6 +211,7 @@ private struct ClipPlayerStageSection: View {
                             hasAudioTrack: hasAudioTrack,
                             isPlaying: isPlaying,
                             isScrubbing: isScrubbing,
+                            isOptionKeyPressed: isOptionKeyPressed,
                             reduceTransparency: reduceTransparency,
                             focusSearchFieldToken: focusSearchFieldToken,
                             transcriptExportFormat: transcriptExportFormat,
@@ -302,6 +304,7 @@ extension ClipPlayerStageSection: Equatable {
         lhs.transcriptPlaybackPresentation === rhs.transcriptPlaybackPresentation &&
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
+        lhs.isOptionKeyPressed == rhs.isOptionKeyPressed &&
         lhs.reduceTransparency == rhs.reduceTransparency &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
@@ -2414,6 +2417,7 @@ struct ClipToolView: View {
                 transcriptPlaybackPresentation: runtime.transcriptPlaybackPresentation,
                 isPlaying: player.rate != 0,
                 isScrubbing: isPlayheadDragActive,
+                isOptionKeyPressed: isOptionKeyPressed,
                 reduceTransparency: reduceTransparency,
                 focusSearchFieldToken: clipTranscriptSearchFocusToken,
                 transcriptExportFormat: model.transcriptExportFormat,
@@ -2474,8 +2478,8 @@ struct ClipToolView: View {
                 onSetTranscriptTextSize: { size in
                     model.transcriptTextSize = size
                 },
-                onExportTranscript: { format in
-                    model.exportTranscript(format: format)
+                onExportTranscript: { format, quickExport in
+                    model.exportTranscript(format: format, skipSaveDialog: quickExport)
                 },
                 onSeekToTranscriptTime: { seconds in
                     seekPlayerAndFocusViewport(to: seconds, focusViewport: true)
@@ -2594,8 +2598,8 @@ struct ClipToolView: View {
                 playheadSeconds: displayedPlayheadSeconds,
                 totalDurationSeconds: max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds),
                 playheadCopyFlash: playheadCopyFlash,
-                compactZoomDisplayText: compactPlayerZoomDisplayText,
-                timelineZoomLevelCount: allowedTimelineZoomLevels.count,
+                timelineZoomLevels: allowedTimelineZoomLevels,
+                timelineZoomIndex: timelineZoomIndex,
                 canSuggestMarkers: (
                     !sourcePresentation.transcriptSegments.isEmpty ||
                     model.canGenerateTranscript
@@ -2621,9 +2625,6 @@ struct ClipToolView: View {
                 onZoomIn: {
                     setTimelineZoomIndex(min(allowedTimelineZoomLevels.count - 1, timelineZoomIndex + 1))
                 },
-                onFit: {
-                    setTimelineZoomIndex(0)
-                },
                 timelineZoomIndexBinding: Binding(
                     get: { Double(timelineZoomIndex) },
                     set: { setTimelineZoomIndex(Int($0.rounded())) }
@@ -2634,14 +2635,6 @@ struct ClipToolView: View {
         .onChange(of: isCompactLayout) { _ in
             storedPlayerHeight = Double(clampedPlayerHeight(currentPlayerHeight))
         }
-    }
-
-    private var compactPlayerZoomDisplayText: String {
-        let displayZoom = allowedTimelineZoomLevels[timelineZoomIndex]
-        if abs(displayZoom.rounded() - displayZoom) < 0.001 {
-            return "\(Int(displayZoom.rounded()))x"
-        }
-        return String(format: "%.1fx", displayZoom)
     }
 
     private func resetPlayerHeightToDefaultIfNeeded() {

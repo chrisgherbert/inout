@@ -51,6 +51,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let hasAudioTrack: Bool
     let isPlaying: Bool
     let isScrubbing: Bool
+    let isOptionKeyPressed: Bool
     let reduceTransparency: Bool
     let focusSearchFieldToken: Int
     let transcriptExportFormat: TranscriptExportFormat
@@ -70,7 +71,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     let setTranscriptDisplayMode: (TranscriptDisplayMode) -> Void
     let setTranscriptShowsTimecodes: (Bool) -> Void
     let setTranscriptTextSize: (TranscriptTextSize) -> Void
-    let exportTranscript: (TranscriptExportFormat?) -> Void
+    let exportTranscript: (TranscriptExportFormat?, Bool) -> Void
     let seekToTranscriptTime: (Double) -> Void
     let playTranscriptFromTime: (Double) -> Void
     let setShowsSmartMarkerSuggestions: (Bool) -> Void
@@ -113,6 +114,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.playbackPresentation === rhs.playbackPresentation &&
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
+        lhs.isOptionKeyPressed == rhs.isOptionKeyPressed &&
         lhs.focusSearchFieldToken == rhs.focusSearchFieldToken &&
         lhs.transcriptExportFormat == rhs.transcriptExportFormat &&
         lhs.transcriptExportLayout == rhs.transcriptExportLayout &&
@@ -315,7 +317,8 @@ struct ClipTranscriptSidebarView: View, Equatable {
                 get: { transcriptExportTimecodeStyle },
                 set: { setTranscriptExportTimecodeStyle($0) }
             ),
-            exportTranscript: { exportTranscript(nil) }
+            isOptionKeyPressed: isOptionKeyPressed,
+            exportTranscript: { quickExport in exportTranscript(nil, quickExport) }
         )
     }
 

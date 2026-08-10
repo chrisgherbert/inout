@@ -378,6 +378,8 @@ struct ConvertToolView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var exportMode: ClipEncodingMode
+    @State private var isOptionKeyPressed = false
+    @State private var optionKeyMonitor: Any?
 
     init(model: WorkspaceViewModel, isCompactLayout: Bool) {
         self.model = model
@@ -460,16 +462,26 @@ struct ConvertToolView: View {
                                 }
                                 Spacer(minLength: 8)
                                 Button {
-                                    model.startFullSourceExport(mode: exportMode)
+                                    let quickExport = NSEvent.modifierFlags.contains(.option)
+                                    model.startFullSourceExport(mode: exportMode, skipSaveDialog: quickExport)
                                 } label: {
                                     Label(
                                         model.isActivityRunning
                                             ? "Queue Export"
-                                            : (exportMode == .compressed ? "Export Video" : "Export Audio"),
-                                        systemImage: model.isActivityRunning ? "text.badge.plus" : "arrow.down.doc"
+                                            : (isOptionKeyPressed
+                                                ? (exportMode == .compressed ? "Quick Export Video" : "Quick Export Audio")
+                                                : (exportMode == .compressed ? "Export Video" : "Export Audio")),
+                                        systemImage: model.isActivityRunning
+                                            ? "text.badge.plus"
+                                            : (isOptionKeyPressed ? "bolt.fill" : "arrow.down.doc")
                                     )
                                 }
                                 .buttonStyle(.borderedProminent)
+                                .help(
+                                    isOptionKeyPressed
+                                        ? "Quick Export beside the source file (no save dialog)"
+                                        : "Export the complete file. Option-click for Quick Export."
+                                )
                                 .disabled(!model.canRequestFullSourceExport(mode: exportMode))
                             }
                         }
@@ -504,6 +516,20 @@ struct ConvertToolView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isExporting)
         .onAppear {
             resolveAvailableExportMode()
+            isOptionKeyPressed = NSEvent.modifierFlags.contains(.option)
+            if optionKeyMonitor == nil {
+                optionKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { event in
+                    isOptionKeyPressed = event.modifierFlags.contains(.option)
+                    return event
+                }
+            }
+        }
+        .onDisappear {
+            if let optionKeyMonitor {
+                NSEvent.removeMonitor(optionKeyMonitor)
+                self.optionKeyMonitor = nil
+            }
+            isOptionKeyPressed = false
         }
         .onChange(of: model.hasVideoTrack) { _, _ in
             resolveAvailableExportMode()

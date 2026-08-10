@@ -1,10 +1,12 @@
 import SwiftUI
+import AppKit
 
 struct TranscriptExportControls: View {
     @Binding var selectedFormat: TranscriptExportFormat
     @Binding var selectedLayout: TranscriptExportLayout
     @Binding var selectedTimecodeStyle: TranscriptExportTimecodeStyle
-    let exportTranscript: () -> Void
+    let isOptionKeyPressed: Bool
+    let exportTranscript: (_ quickExport: Bool) -> Void
     @State private var showsPopover = false
 
     private func optionRow<Content: View>(
@@ -22,9 +24,16 @@ struct TranscriptExportControls: View {
 
     var body: some View {
         Button {
-            showsPopover.toggle()
+            if NSEvent.modifierFlags.contains(.option) {
+                exportTranscript(true)
+            } else {
+                showsPopover.toggle()
+            }
         } label: {
-            Label("Export", systemImage: "square.and.arrow.up")
+            Label(
+                isOptionKeyPressed ? "Quick Export" : "Export",
+                systemImage: isOptionKeyPressed ? "bolt.fill" : "square.and.arrow.up"
+            )
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -86,10 +95,11 @@ struct TranscriptExportControls: View {
 
                 HStack {
                     Spacer()
-                    Button("Export Transcript…") {
+                    Button(isOptionKeyPressed ? "Quick Export Transcript" : "Export Transcript…") {
+                        let quickExport = NSEvent.modifierFlags.contains(.option)
                         showsPopover = false
                         DispatchQueue.main.async {
-                            exportTranscript()
+                            exportTranscript(quickExport)
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -99,6 +109,10 @@ struct TranscriptExportControls: View {
             .padding(16)
             .frame(width: 300)
         }
-        .help("Choose a format and export the transcript")
+        .help(
+            isOptionKeyPressed
+                ? "Quick Export Transcript (no save dialog)"
+                : "Choose a format and export the transcript. Option-click for Quick Export."
+        )
     }
 }

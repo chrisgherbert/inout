@@ -38,3 +38,17 @@ xcrun swiftc \
   -o "$OUTPUT_DIR/transcript-export-smoke"
 
 DYLD_LIBRARY_PATH="$CORE_DIR" "$OUTPUT_DIR/transcript-export-smoke"
+
+grep -Fq "skipSaveDialog: Bool = false" "$ROOT_DIR/src/WorkspaceViewModel+Transcript.swift" || {
+  echo "Transcript export must support quick export." >&2
+  exit 1
+}
+grep -Fq "exportTranscript(format: format, skipSaveDialog: quickExport)" "$ROOT_DIR/src/ClipTimelineViews.swift" || {
+  echo "Transcript UI must forward Option-click quick export." >&2
+  exit 1
+}
+if [[ "$(grep -Fc 'lhs.isOptionKeyPressed == rhs.isOptionKeyPressed' "$ROOT_DIR/src/ClipTimelineViews.swift")" -lt 1 ]] || \
+   [[ "$(grep -Fc 'lhs.isOptionKeyPressed == rhs.isOptionKeyPressed' "$ROOT_DIR/src/ClipTranscriptSidebarView.swift")" -lt 1 ]]; then
+  echo "Option-key changes must invalidate both equatable transcript presentation layers." >&2
+  exit 1
+fi

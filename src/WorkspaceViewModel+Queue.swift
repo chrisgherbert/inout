@@ -110,7 +110,7 @@ extension WorkspaceViewModel {
         enqueueClipExport(config: config, skipSaveDialog: skipSaveDialog)
     }
 
-    func startFullSourceExport(mode: ClipEncodingMode) {
+    func startFullSourceExport(mode: ClipEncodingMode, skipSaveDialog: Bool = false) {
         guard mode == .compressed || mode == .audioOnly,
               let sourceURL,
               sourceDurationSeconds > 0,
@@ -127,13 +127,19 @@ extension WorkspaceViewModel {
             isFullSourceConversion: true
         )
         let defaultName = defaultClipExportFileName(for: sourceURL, config: pendingConfig)
-        guard let destinationURL = promptClipExportDestination(
-            for: sourceURL,
-            defaultName: defaultName,
-            config: pendingConfig
-        ) else {
-            uiMessage = "Save cancelled."
-            return
+        let destinationURL: URL?
+        if skipSaveDialog {
+            destinationURL = nil
+        } else {
+            guard let chosenDestination = promptClipExportDestination(
+                for: sourceURL,
+                defaultName: defaultName,
+                config: pendingConfig
+            ) else {
+                uiMessage = "Save cancelled."
+                return
+            }
+            destinationURL = chosenDestination
         }
         let config = queuedClipExportConfigSnapshot(
             destinationURL: destinationURL,
@@ -144,9 +150,10 @@ extension WorkspaceViewModel {
         )
 
         if isAnalyzing || isExporting || isGeneratingTranscript {
-            enqueueClipExport(config: config)
+            enqueueClipExport(config: config, skipSaveDialog: skipSaveDialog)
         } else {
             startClipExport(
+                skipSaveDialog: skipSaveDialog,
                 preselectedDestination: destinationURL,
                 configOverride: config
             )

@@ -27,3 +27,5 @@ Open Framing in Advanced video export to choose an output aspect ratio. Fit keep
 ## Convert the complete video
 
 Use Convert when you need the complete file rather than the current In/Out selection. Video uses the same options as Advanced clip export; Audio Only uses the same options as Audio Only clip export.
+
+Hold `⌥` while choosing Export Video or Export Audio to save immediately beside the source file without opening a save dialog.

@@ -33,6 +33,7 @@ Open the transcript sidebar in Clip, then choose Generate Transcript. In/Out use
 - Choose Export in the transcript sidebar to select Text, Markdown, CSV, JSON, SRT, or WebVTT.
 - Text and Markdown support Paragraphs, Compact Lines, or Continuous Text.
 - Readable exports can omit timecodes or include start times or start-and-end times. Continuous Text never includes timecodes.
+- Hold `⌥` while choosing Export to save immediately beside the source video without opening a save dialog. The current format and layout options are used.
 
 ## Reopen saved transcripts
 
