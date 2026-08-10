@@ -60,8 +60,12 @@ enum AppShortcutCatalog {
     static let setClipEnd = AppShortcutDefinition(id: "setClipEnd", action: "Set Out", keys: ["O"], keyEquivalent: "o")
     static let clearClipRange = AppShortcutDefinition(id: "clearClipRange", action: "Clear In and Out", keys: ["X"], keyEquivalent: "x")
     static let selectFullSource = AppShortcutDefinition(id: "selectFullSource", action: "Select full source", keys: ["⌘", "A"])
+    static let stepBackwardOneFrame = AppShortcutDefinition(id: "stepBackwardOneFrame", action: "Step backward 1 frame", keys: ["←"])
+    static let stepForwardOneFrame = AppShortcutDefinition(id: "stepForwardOneFrame", action: "Step forward 1 frame", keys: ["→"])
     static let stepBackwardTenFrames = AppShortcutDefinition(id: "stepBackwardTenFrames", action: "Step backward 10 frames", keys: ["⇧", "←"])
     static let stepForwardTenFrames = AppShortcutDefinition(id: "stepForwardTenFrames", action: "Step forward 10 frames", keys: ["⇧", "→"])
+    static let stepBackwardHundredFrames = AppShortcutDefinition(id: "stepBackwardHundredFrames", action: "Step backward 100 frames", keys: ["⌥", "⇧", "←"])
+    static let stepForwardHundredFrames = AppShortcutDefinition(id: "stepForwardHundredFrames", action: "Step forward 100 frames", keys: ["⌥", "⇧", "→"])
 
     static let addMarker = AppShortcutDefinition(id: "addMarker", action: "Add marker", keys: ["M"], keyEquivalent: "m")
     static let previousMarker = AppShortcutDefinition(id: "previousMarker", action: "Previous marker or edge", keys: ["↑"], keyEquivalent: .upArrow)
@@ -100,7 +104,7 @@ enum AppShortcutCatalog {
         AppShortcutGroupDefinition(
             id: "trimAndSelection",
             title: "Trim and selection",
-            items: [setClipStart, setClipEnd, clearClipRange, selectFullSource, stepBackwardTenFrames, stepForwardTenFrames]
+            items: [setClipStart, setClipEnd, clearClipRange, selectFullSource, stepBackwardOneFrame, stepForwardOneFrame, stepBackwardTenFrames, stepForwardTenFrames, stepBackwardHundredFrames, stepForwardHundredFrames]
         ),
         AppShortcutGroupDefinition(
             id: "markersAndNavigation",

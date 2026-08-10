@@ -56,6 +56,8 @@ QUICK_EXPORT_SOUND_SOURCE="$ROOT_DIR/assets/QuickExportSnip.aiff"
 QUICK_EXPORT_SOUND_DEST="$APP_RESOURCES/QuickExportSnip.aiff"
 THIRD_PARTY_NOTICES_SOURCE="$ROOT_DIR/THIRD_PARTY_NOTICES.txt"
 THIRD_PARTY_NOTICES_DEST="$APP_RESOURCES/THIRD_PARTY_NOTICES.txt"
+HELP_CONTENT_BUILD="$ROOT_DIR/.build/help/help-content.json"
+HELP_CONTENT_DEST="$APP_RESOURCES/help-content.json"
 PINNED_FFMPEG_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg"
 PINNED_FFMPEG_SHA_FILE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffmpeg.sha256"
 PINNED_FFPROBE_DEFAULT="$ROOT_DIR/vendor/ffmpeg/macos-arm64/ffprobe"
@@ -219,6 +221,12 @@ if [[ "$PRESERVE_APP_BUNDLE" -eq 0 ]]; then
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP_RESOURCES" "$APP_FRAMEWORKS"
 mkdir -p "$ROOT_DIR/assets"
+
+"$ROOT_DIR/scripts/generate_help.py" \
+  --skip-site \
+  --app-json "$HELP_CONTENT_BUILD"
+cp "$HELP_CONTENT_BUILD" "$HELP_CONTENT_DEST"
+echo "Bundled Help documentation: $HELP_CONTENT_BUILD"
 
 # Quick builds preserve the app bundle, so explicitly remove obsolete Whisper resources.
 find "$APP_RESOURCES" -maxdepth 1 \

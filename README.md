@@ -9,7 +9,7 @@ Simple clipping, converting, and QA testing of video/audio files on macOS.
 
 ### System Requirements
 
-- macOS 13 Ventura or later
+- macOS 14 Sonoma or later
 - Apple Silicon Mac
 
 ### What It Does
@@ -85,7 +85,11 @@ Focused transcript export validation:
 ./scripts/transcript_export_smoke.sh
 ./scripts/transcript_library_smoke.sh
 ./scripts/sparkle_smoke.sh
+./scripts/help_documentation_smoke.sh
 ```
+
+The Markdown files in `Documentation/` are the source for both the native Help
+window and `website/help/`. Run `./scripts/generate_help.py` after editing them.
 
 Optional:
 

@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      - "Documentation/**"
+      - "scripts/generate_help.py"
+      - "src/AppCoreTypes.swift"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -29,6 +32,9 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+
+      - name: Generate Help documentation
+        run: ./scripts/generate_help.py
 
       - name: Upload website artifact
         uses: actions/upload-pages-artifact@v3
