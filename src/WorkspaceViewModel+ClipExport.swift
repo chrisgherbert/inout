@@ -430,6 +430,8 @@ extension WorkspaceViewModel {
                     aspectRatio: config.clipFramingAspectRatio,
                     mode: config.clipFramingMode,
                     cropAlignment: config.clipFramingCropAlignment,
+                    customCropX: config.clipFramingCustomCropX,
+                    customCropY: config.clipFramingCustomCropY,
                     source: sourceDimensions,
                     maximumShortEdge: config.clipCompatibleMaxResolution.maximumShortEdge
                ) {

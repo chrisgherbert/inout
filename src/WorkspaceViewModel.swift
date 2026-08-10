@@ -203,6 +203,8 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var clipFramingAspectRatio: MediaFramingAspectRatio = .original
     @Published var clipFramingMode: MediaFramingMode = .fit
     @Published var clipFramingCropAlignment: MediaFramingCropAlignment = .center
+    @Published var clipFramingCustomCropX: Double = 0.5
+    @Published var clipFramingCustomCropY: Double = 0.5
     @Published var clipAudioBitrateKbps: Int = 128
     @Published var clipAdvancedVideoCodec: AdvancedVideoCodec = .h264
     @Published var clipAdvancedBoostAudio = false
@@ -472,6 +474,8 @@ final class WorkspaceViewModel: ObservableObject {
         let clipFramingAspectRatio: MediaFramingAspectRatio
         let clipFramingMode: MediaFramingMode
         let clipFramingCropAlignment: MediaFramingCropAlignment
+        let clipFramingCustomCropX: Double
+        let clipFramingCustomCropY: Double
         let sourceVideoDimensions: MediaFramingDimensions?
         let clipVideoBitrateMbps: Double
         let clipAudioBitrateKbps: Int

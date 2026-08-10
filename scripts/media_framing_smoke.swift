@@ -98,6 +98,47 @@ for (index, testCase) in cases.enumerated() {
     require(actual == "\(dimensions.width)x\(dimensions.height)", "expected \(dimensions.width)x\(dimensions.height), got \(actual)")
 }
 
+let customCropFilter = mediaFramingVideoFilter(
+    aspectRatio: .vertical,
+    mode: .fill,
+    cropAlignment: .custom,
+    customCropX: 0.25,
+    customCropY: 0.75,
+    source: source,
+    maximumShortEdge: nil
+) ?? ""
+require(customCropFilter.contains("(in_w-out_w)*0.250000"), "custom horizontal crop was not encoded")
+require(customCropFilter.contains("(in_h-out_h)*0.750000"), "custom vertical crop was not encoded")
+let clampedCropFilter = mediaFramingVideoFilter(
+    aspectRatio: .vertical,
+    mode: .fill,
+    cropAlignment: .custom,
+    customCropX: -2,
+    customCropY: 3,
+    source: source,
+    maximumShortEdge: nil
+) ?? ""
+require(clampedCropFilter.contains("(in_w-out_w)*0.000000"), "custom horizontal crop was not clamped")
+require(clampedCropFilter.contains("(in_h-out_h)*1.000000"), "custom vertical crop was not clamped")
+let customCropURL = tempDirectory.appendingPathComponent("custom-crop.png")
+let customCropRender = run(ffmpeg, [
+    "-y", "-hide_banner", "-loglevel", "error",
+    "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=1",
+    "-frames:v", "1", "-vf", customCropFilter, customCropURL.path
+])
+require(customCropRender.status == 0, "FFmpeg rejected custom crop coordinates: \(customCropRender.output)")
+let customCropProbe = run(ffprobe, [
+    "-v", "error", "-select_streams", "v:0",
+    "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x",
+    customCropURL.path
+])
+require(customCropProbe.output.trimmingCharacters(in: .whitespacesAndNewlines) == "360x640", "custom crop dimensions are incorrect")
+let leftCropData = try Data(contentsOf: tempDirectory.appendingPathComponent("case-2.png"))
+let rightCropData = try Data(contentsOf: tempDirectory.appendingPathComponent("case-3.png"))
+let customCropData = try Data(contentsOf: customCropURL)
+require(leftCropData != rightCropData, "left and right crop presets rendered the same frame")
+require(customCropData != leftCropData && customCropData != rightCropData, "custom crop did not produce a distinct frame")
+
 let combinedOutputURL = tempDirectory.appendingPathComponent("blur-with-audio.mp4")
 let combinedFilter = mediaFramingVideoFilter(
     aspectRatio: .vertical,
@@ -135,4 +176,4 @@ let topCrop = mediaFramingVideoFilter(
 ) ?? ""
 require(topCrop.contains(":0,setsar=1"), "top crop alignment was not encoded")
 
-print("Media framing smoke test passed (\(cases.count + 1) FFmpeg renders).")
+print("Media framing smoke test passed (\(cases.count + 2) FFmpeg renders).")

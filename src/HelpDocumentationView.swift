@@ -297,7 +297,7 @@ struct HelpDocumentationView: View {
                 HelpSection(
                     title: "Change the frame",
                     paragraphs: [
-                        "Open Framing in Advanced video export to choose an output aspect ratio. Fit keeps the complete picture, Fill crops the edges, and Blur keeps the complete picture over a blurred background. The same framing options are available for clips and complete-source conversion."
+                        "Open Framing in Advanced video export to choose an output aspect ratio. Fit keeps the complete picture, Fill crops the edges, and Blur keeps the complete picture over a blurred background. With Fill selected, drag the preview for a custom crop or double-click it to return to center. The same framing options are available for clips and complete-source conversion."
                     ]
                 ),
                 HelpSection(

@@ -35,6 +35,12 @@ require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
   "clipFramingAspectRatio: clipFramingAspectRatio" \
   "Queued exports must snapshot framing settings."
 require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
+  "clipFramingCustomCropX: clipFramingCustomCropX" \
+  "Queued exports must snapshot custom crop coordinates."
+require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
+  "clipFramingCustomCropY: clipFramingCustomCropY" \
+  "Queued exports must snapshot both custom crop coordinates."
+require_text "$ROOT_DIR/src/WorkspaceViewModel+Queue.swift" \
   "isFullSourceConversion: true" \
   "Whole-source conversion must be represented explicitly."
 require_text "$ROOT_DIR/src/WorkspaceViewModel+ClipExport.swift" \

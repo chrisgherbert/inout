@@ -278,6 +278,8 @@ extension WorkspaceViewModel {
             clipFramingAspectRatio: clipFramingAspectRatio,
             clipFramingMode: clipFramingMode,
             clipFramingCropAlignment: clipFramingCropAlignment,
+            clipFramingCustomCropX: clipFramingCustomCropX,
+            clipFramingCustomCropY: clipFramingCustomCropY,
             sourceVideoDimensions: parsedMediaResolution(sourceInfo?.resolution),
             clipVideoBitrateMbps: clipVideoBitrateMbps,
             clipAudioBitrateKbps: clipAudioBitrateKbps,

@@ -133,7 +133,9 @@ private struct MediaFramingPopoverContent: View {
                 image: previewImage,
                 aspectRatio: model.clipFramingAspectRatio,
                 mode: model.clipFramingMode,
-                cropAlignment: model.clipFramingCropAlignment
+                cropAlignment: $model.clipFramingCropAlignment,
+                customCropX: $model.clipFramingCustomCropX,
+                customCropY: $model.clipFramingCustomCropY
             )
             .frame(maxWidth: .infinity)
 
@@ -158,14 +160,19 @@ private struct MediaFramingPopoverContent: View {
                 }
 
                 if model.clipFramingMode == .fill {
-                    LabeledContent("Crop Position") {
-                        Picker("Crop Position", selection: $model.clipFramingCropAlignment) {
-                            ForEach(MediaFramingCropAlignment.allCases) { alignment in
-                                Text(alignment.rawValue).tag(alignment)
+                    VStack(alignment: .leading, spacing: 5) {
+                        LabeledContent("Crop Position") {
+                            Picker("Crop Position", selection: $model.clipFramingCropAlignment) {
+                                ForEach(MediaFramingCropAlignment.allCases) { alignment in
+                                    Text(alignment.rawValue).tag(alignment)
+                                }
                             }
+                            .labelsHidden()
+                            .frame(width: 140)
                         }
-                        .labelsHidden()
-                        .frame(width: 140)
+                        Text("Drag the preview to fine-tune the crop. Double-click to center.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                     .font(.caption)
                 }
@@ -188,11 +195,15 @@ private struct MediaFramingPopoverContent: View {
                     model.clipFramingAspectRatio = .original
                     model.clipFramingMode = .fit
                     model.clipFramingCropAlignment = .center
+                    model.clipFramingCustomCropX = 0.5
+                    model.clipFramingCustomCropY = 0.5
                 }
                 .disabled(
                     model.clipFramingAspectRatio == .original &&
                     model.clipFramingMode == .fit &&
-                    model.clipFramingCropAlignment == .center
+                    model.clipFramingCropAlignment == .center &&
+                    abs(model.clipFramingCustomCropX - 0.5) < 0.0001 &&
+                    abs(model.clipFramingCustomCropY - 0.5) < 0.0001
                 )
             }
         }
@@ -267,7 +278,10 @@ private struct MediaFramingPreview: View {
     let image: NSImage?
     let aspectRatio: MediaFramingAspectRatio
     let mode: MediaFramingMode
-    let cropAlignment: MediaFramingCropAlignment
+    @Binding var cropAlignment: MediaFramingCropAlignment
+    @Binding var customCropX: Double
+    @Binding var customCropY: Double
+    @State private var dragStartPosition: CGPoint?
 
     private var sourceRatio: CGFloat {
         guard let image, image.size.height > 0 else { return 16.0 / 9.0 }
@@ -278,13 +292,14 @@ private struct MediaFramingPreview: View {
         CGFloat(aspectRatio.ratio ?? Double(sourceRatio))
     }
 
-    private var imageAlignment: Alignment {
+    private var effectiveCropPosition: CGPoint {
         switch cropAlignment {
-        case .center: return .center
-        case .top: return .top
-        case .bottom: return .bottom
-        case .left: return .leading
-        case .right: return .trailing
+        case .center: return CGPoint(x: 0.5, y: 0.5)
+        case .top: return CGPoint(x: 0.5, y: 0)
+        case .bottom: return CGPoint(x: 0.5, y: 1)
+        case .left: return CGPoint(x: 0, y: 0.5)
+        case .right: return CGPoint(x: 1, y: 0.5)
+        case .custom: return CGPoint(x: customCropX, y: customCropY)
         }
     }
 
@@ -295,6 +310,14 @@ private struct MediaFramingPreview: View {
                 Color.primary.opacity(0.035)
                 previewFrame(size: canvasSize)
                     .frame(width: canvasSize.width, height: canvasSize.height)
+                    .contentShape(Rectangle())
+                    .gesture(cropDragGesture(canvasSize: canvasSize))
+                    .onTapGesture(count: 2) {
+                        guard mode == .fill else { return }
+                        cropAlignment = .center
+                        customCropX = 0.5
+                        customCropY = 0.5
+                    }
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.primary.opacity(0.18), lineWidth: 0.6))
                     .shadow(color: .black.opacity(0.16), radius: 3, y: 1)
@@ -322,16 +345,20 @@ private struct MediaFramingPreview: View {
                             .scaledToFit()
                             .frame(width: size.width, height: size.height)
                     case .fill:
+                        let fillSize = aspectFillSize(for: size)
+                        let position = effectiveCropPosition
                         Image(nsImage: image)
                             .resizable()
-                            .scaledToFill()
-                            .frame(width: size.width, height: size.height, alignment: imageAlignment)
-                            .clipped()
+                            .frame(width: fillSize.width, height: fillSize.height)
+                            .offset(
+                                x: (0.5 - position.x) * max(0, fillSize.width - size.width),
+                                y: (0.5 - position.y) * max(0, fillSize.height - size.height)
+                            )
                     case .blurredBackground:
+                        let fillSize = aspectFillSize(for: size)
                         Image(nsImage: image)
                             .resizable()
-                            .scaledToFill()
-                            .frame(width: size.width, height: size.height)
+                            .frame(width: fillSize.width, height: fillSize.height)
                             .blur(radius: 14)
                             .scaleEffect(1.08)
                             .clipped()
@@ -359,5 +386,40 @@ private struct MediaFramingPreview: View {
             return CGSize(width: availableWidth, height: availableWidth / destinationRatio)
         }
         return CGSize(width: availableHeight * destinationRatio, height: availableHeight)
+    }
+
+    private func aspectFillSize(for canvasSize: CGSize) -> CGSize {
+        let canvasRatio = canvasSize.width / max(1, canvasSize.height)
+        if sourceRatio >= canvasRatio {
+            return CGSize(width: canvasSize.height * sourceRatio, height: canvasSize.height)
+        }
+        return CGSize(width: canvasSize.width, height: canvasSize.width / max(0.0001, sourceRatio))
+    }
+
+    private func cropDragGesture(canvasSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                guard mode == .fill else { return }
+                let fillSize = aspectFillSize(for: canvasSize)
+                let overflowX = max(0, fillSize.width - canvasSize.width)
+                let overflowY = max(0, fillSize.height - canvasSize.height)
+                if dragStartPosition == nil {
+                    let start = effectiveCropPosition
+                    dragStartPosition = start
+                    customCropX = start.x
+                    customCropY = start.y
+                    cropAlignment = .custom
+                }
+                guard let start = dragStartPosition else { return }
+                if overflowX > 0.5 {
+                    customCropX = min(1, max(0, start.x - (value.translation.width / overflowX)))
+                }
+                if overflowY > 0.5 {
+                    customCropY = min(1, max(0, start.y - (value.translation.height / overflowY)))
+                }
+            }
+            .onEnded { _ in
+                dragStartPosition = nil
+            }
     }
 }

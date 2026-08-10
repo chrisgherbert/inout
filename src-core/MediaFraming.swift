@@ -50,6 +50,7 @@ public enum MediaFramingCropAlignment: String, CaseIterable, Identifiable, Senda
     case bottom = "Bottom"
     case left = "Left"
     case right = "Right"
+    case custom = "Custom"
 
     public var id: String { rawValue }
 }
@@ -118,6 +119,8 @@ public func mediaFramingVideoFilter(
     aspectRatio: MediaFramingAspectRatio,
     mode: MediaFramingMode,
     cropAlignment: MediaFramingCropAlignment,
+    customCropX: Double = 0.5,
+    customCropY: Double = 0.5,
     source: MediaFramingDimensions,
     maximumShortEdge: Int?
 ) -> String? {
@@ -133,7 +136,11 @@ public func mediaFramingVideoFilter(
     case .fit:
         return "scale=\(width):\(height):force_original_aspect_ratio=decrease:force_divisible_by=2,pad=\(width):\(height):(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
     case .fill:
-        let position = cropPosition(for: cropAlignment)
+        let position = cropPosition(
+            for: cropAlignment,
+            customCropX: customCropX,
+            customCropY: customCropY
+        )
         return "scale=\(width):\(height):force_original_aspect_ratio=increase,crop=\(width):\(height):\(position.x):\(position.y),setsar=1"
     case .blurredBackground:
         return "split=2[framing_bg][framing_fg];" +
@@ -149,12 +156,21 @@ private func evenDimension(_ value: Int) -> Int {
     return safe.isMultiple(of: 2) ? safe : safe - 1
 }
 
-private func cropPosition(for alignment: MediaFramingCropAlignment) -> (x: String, y: String) {
+private func cropPosition(
+    for alignment: MediaFramingCropAlignment,
+    customCropX: Double,
+    customCropY: Double
+) -> (x: String, y: String) {
     switch alignment {
     case .center: return ("(in_w-out_w)/2", "(in_h-out_h)/2")
     case .top: return ("(in_w-out_w)/2", "0")
     case .bottom: return ("(in_w-out_w)/2", "in_h-out_h")
     case .left: return ("0", "(in_h-out_h)/2")
     case .right: return ("in_w-out_w", "(in_h-out_h)/2")
+    case .custom:
+        let locale = Locale(identifier: "en_US_POSIX")
+        let x = String(format: "%.6f", locale: locale, min(1, max(0, customCropX)))
+        let y = String(format: "%.6f", locale: locale, min(1, max(0, customCropY)))
+        return ("(in_w-out_w)*\(x)", "(in_h-out_h)*\(y)")
     }
 }
