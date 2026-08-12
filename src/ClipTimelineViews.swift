@@ -2676,7 +2676,7 @@ struct ClipToolView: View {
             sourceSessionID: sourcePresentation.sourceSessionID,
             clipStartSeconds: displayedClipStartSeconds,
             clipEndSeconds: displayedClipEndSeconds,
-            clipDurationSeconds: model.clipDurationSeconds,
+            clipDurationSeconds: max(0, displayedClipEndSeconds - displayedClipStartSeconds),
             hasVideoTrack: sourcePresentation.hasVideoTrack,
             timelinePanelHeight: timelinePanelHeight,
             thumbnailStripHeight: thumbnailStripHeight,

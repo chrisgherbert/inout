@@ -58,13 +58,13 @@ struct ClipPlayerUtilityRow: View {
     private var transportControls: some View {
         ControlGroup {
             Button(action: onNavigatePrevious) {
-                Image(systemName: "backward.end.fill")
+                Image(systemName: "chevron.up.circle")
             }
             .help("Previous Marker or Clip Edge (Up Arrow)")
             .accessibilityLabel("Previous Marker or Clip Edge")
 
             Button(action: onNavigateNext) {
-                Image(systemName: "forward.end.fill")
+                Image(systemName: "chevron.down.circle")
             }
             .help("Next Marker or Clip Edge (Down Arrow)")
             .accessibilityLabel("Next Marker or Clip Edge")

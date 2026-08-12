@@ -113,6 +113,43 @@ struct ClipSelectionPanel: View, Equatable {
         )
     }
 
+    private var selectionDurationText: String {
+        formatDisplayTimecode(
+            max(0, clipDurationSeconds),
+            style: timecodeDisplayStyle,
+            frameRate: timecodeFrameRate,
+            mediaDuration: totalDurationSeconds
+        )
+    }
+
+    private var selectionDurationReadout: some View {
+        HStack(spacing: 6) {
+            Text("Duration")
+                .foregroundStyle(.secondary)
+            Text(selectionDurationText)
+                .font(.caption.monospacedDigit())
+                .fontWeight(.semibold)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Selected clip duration \(selectionDurationText)")
+    }
+
+    private func setBoundaryButtonLabel(_ title: String, shortcut: String) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Text(shortcut)
+                .font(.caption2.monospaced().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Color.primary.opacity(0.08))
+                )
+        }
+    }
+
     var body: some View {
         let _ = PlayheadDiagnostics.shared.noteSelectionPanelBodyEvaluation()
         VStack(alignment: .leading, spacing: 10) {
@@ -198,9 +235,12 @@ struct ClipSelectionPanel: View, Equatable {
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 140)
                             .onSubmit { onCommitClipStartText() }
-                        Button("Set In") { onSetStart(playheadSeconds) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                        Button(action: { onSetStart(playheadSeconds) }) {
+                            setBoundaryButtonLabel("Set In", shortcut: "I")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Set In")
                     }
 
                     Divider()
@@ -216,10 +256,19 @@ struct ClipSelectionPanel: View, Equatable {
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 140)
                             .onSubmit { onCommitClipEndText() }
-                        Button("Set Out") { onSetEnd(playheadSeconds) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                        Button(action: { onSetEnd(playheadSeconds) }) {
+                            setBoundaryButtonLabel("Set Out", shortcut: "O")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Set Out")
                     }
+
+                    Divider()
+                        .frame(height: 22)
+                        .padding(.horizontal, 10)
+
+                    selectionDurationReadout
                 }
                 .font(.caption)
 
@@ -232,9 +281,12 @@ struct ClipSelectionPanel: View, Equatable {
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onSubmit { onCommitClipStartText() }
-                        Button("Set In") { onSetStart(playheadSeconds) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                        Button(action: { onSetStart(playheadSeconds) }) {
+                            setBoundaryButtonLabel("Set In", shortcut: "I")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Set In")
                     }
 
                     HStack(spacing: 8) {
@@ -245,10 +297,15 @@ struct ClipSelectionPanel: View, Equatable {
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onSubmit { onCommitClipEndText() }
-                        Button("Set Out") { onSetEnd(playheadSeconds) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                        Button(action: { onSetEnd(playheadSeconds) }) {
+                            setBoundaryButtonLabel("Set Out", shortcut: "O")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Set Out")
                     }
+
+                    selectionDurationReadout
                 }
                 .font(.caption)
             }
