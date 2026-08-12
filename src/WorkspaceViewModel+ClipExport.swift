@@ -271,30 +271,57 @@ extension WorkspaceViewModel {
                 finalizeQueued(.failed, exportStatusText)
                 return
             }
-            let asset = AVURLAsset(url: sourceURL)
-            let preset = AVAssetExportPresetPassthrough
-
-            guard let session = AVAssetExportSession(asset: asset, presetName: preset) else {
-                activeClipExportRunToken = nil
-                isExporting = false
-                exportStatusText = "Clip export failed: Unable to create passthrough export session"
-                uiMessage = exportStatusText
-                lastActivityState = .failed
-                finalizeQueued(.failed, exportStatusText)
-                return
-            }
-            activeExportSession = session
-
-            session.outputURL = destination
-            session.outputFileType = config.selectedClipFormat.fileType
-            session.shouldOptimizeForNetworkUse = true
-            session.timeRange = CMTimeRange(
-                start: CMTime(seconds: config.clipStartSeconds, preferredTimescale: 600),
-                duration: CMTime(seconds: exportDuration, preferredTimescale: 600)
+            let asset = AVURLAsset(
+                url: sourceURL,
+                options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
             )
 
             exportTask = Task { [weak self] in
                 guard let self else { return }
+
+                let exportTimeRange = await FastExportUtilities.exportTimeRange(
+                    for: asset,
+                    selectedStartSeconds: config.clipStartSeconds,
+                    selectedEndSeconds: config.clipEndSeconds
+                )
+                guard !Task.isCancelled,
+                      self.activeClipExportRunToken == exportRunToken else { return }
+
+                let actualStart = CMTimeGetSeconds(exportTimeRange.start)
+                let actualEnd = CMTimeGetSeconds(exportTimeRange.end)
+                if actualStart < config.clipStartSeconds - 0.000_001 ||
+                    actualEnd > config.clipEndSeconds + 0.000_001 {
+                    self.appendActivityConsole(
+                        String(
+                            format: "Expanded Fast export to safe frame boundaries: %.3f–%.3f seconds (requested %.3f–%.3f)",
+                            actualStart,
+                            actualEnd,
+                            config.clipStartSeconds,
+                            config.clipEndSeconds
+                        ),
+                        source: "export"
+                    )
+                }
+
+                guard let session = AVAssetExportSession(
+                    asset: asset,
+                    presetName: AVAssetExportPresetPassthrough
+                ) else {
+                    self.activeClipExportRunToken = nil
+                    self.exportTask = nil
+                    self.isExporting = false
+                    self.exportProgress = 0
+                    self.exportStatusText = "Clip export failed: Unable to create passthrough export session"
+                    self.uiMessage = self.exportStatusText
+                    self.lastActivityState = .failed
+                    self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
+                    return
+                }
+                self.activeExportSession = session
+                session.outputURL = destination
+                session.outputFileType = config.selectedClipFormat.fileType
+                session.shouldOptimizeForNetworkUse = true
+                session.timeRange = exportTimeRange
 
                 let monitor = Task { [weak self] in
                     while session.status == .waiting || session.status == .exporting {

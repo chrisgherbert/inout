@@ -108,6 +108,8 @@ if [[ "$SKIP_SMOKE" -eq 0 ]]; then
   "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
   echo "Running media framing smoke tests..."
   "$ROOT_DIR/scripts/media_framing_smoke.sh" "$APP_PATH"
+  echo "Running Fast export range smoke test..."
+  FFMPEG="$APP_PATH/Contents/Resources/ffmpeg" "$ROOT_DIR/scripts/fast_export_range_smoke.sh"
   echo "Running Parakeet caption smoke test..."
   "$ROOT_DIR/scripts/parakeet_caption_integration_smoke.sh" "$APP_PATH"
   echo "Running caption formatting smoke test..."
