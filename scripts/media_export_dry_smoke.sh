@@ -52,6 +52,12 @@ require_text "$ROOT_DIR/src/ToolViews.swift" \
 require_text "$ROOT_DIR/src/WorkspaceViewModel+ClipExport.swift" \
   "destination.standardizedFileURL != sourceURL.standardizedFileURL" \
   "Whole-source export must never replace its input file."
+require_text "$ROOT_DIR/src/WorkspaceViewModel+ClipExport.swift" \
+  "videoEncodingPlan: captionStageVideoEncodingPlan," \
+  "Caption exports must use the dedicated fast staging encoder."
+require_text "$ROOT_DIR/src/WorkspaceViewModel+ClipExport.swift" \
+  "includeFastStart: false" \
+  "Temporary caption stages must not perform a redundant faststart rewrite."
 
 if grep -Eq 'self\.clip(Start|End)Seconds' "$ROOT_DIR/src/WorkspaceViewModel+ClipExport.swift"; then
   echo "The export task must not read the live Clip range after it starts." >&2

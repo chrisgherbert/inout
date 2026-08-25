@@ -251,14 +251,6 @@ enum CompatibleSpeedPreset: String, CaseIterable, Identifiable {
     case quality = "Quality"
 
     var id: String { rawValue }
-
-    var ffmpegPreset: String {
-        switch self {
-        case .fast: return "veryfast"
-        case .balanced: return "medium"
-        case .quality: return "slow"
-        }
-    }
 }
 
 enum CompatibleMaxResolution: String, CaseIterable, Identifiable {

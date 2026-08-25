@@ -430,26 +430,21 @@ extension WorkspaceViewModel {
             let sourceAsset = AVURLAsset(url: sourceURL)
             let selectedAudioTrackIndex = self.preferredAudioTrackIndex(for: sourceAsset)
             let hasSourceAudio = (selectedAudioTrackIndex != nil)
-            let videoCodec = isWebM ? "libvpx-vp9" : (config.clipAdvancedVideoCodec == .hevc ? "libx265" : "libx264")
             let audioCodec = isWebM ? "libopus" : "aac"
+            let finalVideoEncodingPlan = videoExportEncodingPlan(
+                format: config.selectedClipFormat,
+                codec: config.clipAdvancedVideoCodec,
+                speed: config.clipCompatibleSpeedPreset,
+                pass: .final
+            )
+            let captionStageVideoEncodingPlan = videoExportEncodingPlan(
+                format: config.selectedClipFormat,
+                codec: config.clipAdvancedVideoCodec,
+                speed: config.clipCompatibleSpeedPreset,
+                pass: .captionStage
+            )
             var videoFilters: [String] = []
             var audioFilters: [String] = []
-            // Baseline args for advanced export. For captioned exports we run this
-            // exact baseline path to a temp clip first, then do a dedicated burn pass.
-            var baselineArgs = [
-                "-y",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-ss", coarseSeek,
-                "-i", sourceURL.path,
-                "-ss", fineSeek,
-                "-t", durationStr,
-                "-map", "0:v:0",
-                "-c:v", videoCodec,
-                "-preset", config.clipCompatibleSpeedPreset.ffmpegPreset,
-                "-pix_fmt", "yuv420p",
-                "-b:v", "\(bitrateKbps)k"
-            ]
 
             if config.clipFramingAspectRatio != .original,
                let sourceDimensions = config.sourceVideoDimensions,
@@ -480,25 +475,57 @@ extension WorkspaceViewModel {
                 audioFilters.append("alimiter=limit=0.988553")
             }
 
-            if let selectedAudioTrackIndex {
-                let audioInputRef = "0:a:\(selectedAudioTrackIndex)"
-                if !audioFilters.isEmpty {
-                    baselineArgs.append(contentsOf: [
-                        "-filter_complex", "[\(audioInputRef)]\(audioFilters.joined(separator: ","))[aout]",
-                        "-map", "[aout]"
-                    ])
-                } else {
-                    baselineArgs.append(contentsOf: ["-map", audioInputRef])
-                }
-                baselineArgs.append(contentsOf: [
-                    "-c:a", audioCodec,
-                    "-b:a", "\(audioBitrateKbps)k"
-                ])
+            func videoEncodingArguments(for plan: VideoExportEncodingPlan) -> [String] {
+                ["-c:v", plan.encoder]
+                    + plan.options
+                    + ["-pix_fmt", "yuv420p", "-b:v", "\(bitrateKbps)k"]
             }
 
-            if config.selectedClipFormat == .mp4 || config.selectedClipFormat == .mov {
-                baselineArgs.append(contentsOf: ["-movflags", "+faststart"])
+            // Both normal and caption-staging exports share the same seek, mapping,
+            // filtering, and muxing path; only the video encoder policy differs.
+            func baselineArguments(
+                videoEncodingPlan: VideoExportEncodingPlan,
+                includeFastStart: Bool
+            ) -> [String] {
+                var args = [
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-ss", coarseSeek,
+                    "-i", sourceURL.path,
+                    "-ss", fineSeek,
+                    "-t", durationStr,
+                    "-map", "0:v:0"
+                ]
+                args.append(contentsOf: videoEncodingArguments(for: videoEncodingPlan))
+
+                if let selectedAudioTrackIndex {
+                    let audioInputRef = "0:a:\(selectedAudioTrackIndex)"
+                    if !audioFilters.isEmpty {
+                        args.append(contentsOf: [
+                            "-filter_complex", "[\(audioInputRef)]\(audioFilters.joined(separator: ","))[aout]",
+                            "-map", "[aout]"
+                        ])
+                    } else {
+                        args.append(contentsOf: ["-map", audioInputRef])
+                    }
+                    args.append(contentsOf: [
+                        "-c:a", audioCodec,
+                        "-b:a", "\(audioBitrateKbps)k"
+                    ])
+                }
+
+                if includeFastStart,
+                   (config.selectedClipFormat == .mp4 || config.selectedClipFormat == .mov) {
+                    args.append(contentsOf: ["-movflags", "+faststart"])
+                }
+                return args
             }
+
+            let baselineArgs = baselineArguments(
+                videoEncodingPlan: finalVideoEncodingPlan,
+                includeFastStart: true
+            )
 
             var encodeError: String? = nil
             if config.clipAdvancedBurnInCaptions {
@@ -532,8 +559,12 @@ extension WorkspaceViewModel {
                 }
 
                 if captionStageReady {
-                    let stagedBaseURL = captionStageDirectory.appendingPathComponent("base.\(config.selectedClipFormat.fileExtension)")
-                    var stageArgs = baselineArgs
+                    let captionStageExtension = isWebM ? "mkv" : config.selectedClipFormat.fileExtension
+                    let stagedBaseURL = captionStageDirectory.appendingPathComponent("base.\(captionStageExtension)")
+                    var stageArgs = baselineArguments(
+                        videoEncodingPlan: captionStageVideoEncodingPlan,
+                        includeFastStart: false
+                    )
                     if !videoFilters.isEmpty {
                         stageArgs.append(contentsOf: ["-vf", videoFilters.joined(separator: ",")])
                     }
@@ -580,15 +611,14 @@ extension WorkspaceViewModel {
                                     "-hide_banner",
                                     "-loglevel", "error",
                                     "-i", stagedBaseURL.path,
-                                    "-map", "0:v:0",
-                                    "-c:v", videoCodec,
-                                    "-preset", config.clipCompatibleSpeedPreset.ffmpegPreset,
-                                    "-pix_fmt", "yuv420p",
-                                    "-b:v", "\(bitrateKbps)k",
+                                    "-map", "0:v:0"
+                                ]
+                                burnArgs.append(contentsOf: videoEncodingArguments(for: finalVideoEncodingPlan))
+                                burnArgs.append(contentsOf: [
                                     "-vf", MediaToolUtilities.subtitlesFilterArgument(path: prepared.srtURL.path, style: config.clipAdvancedCaptionStyle),
                                     "-map", "0:a:0?",
                                     "-c:a", "copy"
-                                ]
+                                ])
                                 if config.selectedClipFormat == .mp4 || config.selectedClipFormat == .mov {
                                     burnArgs.append(contentsOf: ["-movflags", "+faststart"])
                                 }

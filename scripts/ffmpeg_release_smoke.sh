@@ -56,7 +56,7 @@ echo "Running ffmpeg smoke test..."
 
 "$FFMPEG_PATH" -y -hide_banner -loglevel error \
   -ss 0.500 -i "$SOURCE" -ss 0.250 -t 1.200 \
-  -map 0:v:0 -c:v libx264 -preset veryfast -pix_fmt yuv420p -b:v 1200k \
+  -map 0:v:0 -c:v h264_videotoolbox -pix_fmt yuv420p -b:v 1200k \
   -map 0:a:0 -c:a aac -b:a 128k \
   -movflags +faststart \
   "$STAGE"
