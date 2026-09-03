@@ -365,7 +365,6 @@ enum AdvancedFilenamePreset: String, CaseIterable, Identifiable {
 }
 
 enum CompletionSound: String, CaseIterable, Identifiable {
-    case crystal
     case glass
     case basso
     case funk
@@ -375,7 +374,6 @@ enum CompletionSound: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .crystal: return "Crystal"
         case .glass: return "Glass"
         case .basso: return "Basso"
         case .funk: return "Funk"
@@ -385,7 +383,6 @@ enum CompletionSound: String, CaseIterable, Identifiable {
 
     var soundName: NSSound.Name? {
         switch self {
-        case .crystal: return NSSound.Name("Crystal")
         case .glass: return NSSound.Name("Glass")
         case .basso: return NSSound.Name("Basso")
         case .funk: return NSSound.Name("Funk")

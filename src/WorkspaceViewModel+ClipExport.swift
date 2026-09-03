@@ -142,6 +142,7 @@ extension WorkspaceViewModel {
                         self.exportStatusText = "\(exportName) failed: No ffmpeg executable found."
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText, outcome: .failed)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     }
                     return
@@ -175,6 +176,7 @@ extension WorkspaceViewModel {
                         self.exportStatusText = "\(exportName) failed: No audio track found in source."
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText, outcome: .failed)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     }
                     return
@@ -234,7 +236,7 @@ extension WorkspaceViewModel {
                         self.exportStatusText = "\(exportName) cancelled"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
-                        self.notifyCompletion("\(exportName.capitalized) Stopped", message: self.exportStatusText)
+                        self.notifyCompletion("\(exportName.capitalized) Stopped", message: self.exportStatusText, outcome: .cancelled)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                         return
                     }
@@ -242,7 +244,7 @@ extension WorkspaceViewModel {
                         self.exportStatusText = "\(exportName) failed: \(encodeError)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
-                        self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText)
+                        self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText, outcome: .failed)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     } else {
                         self.outputURL = destination
@@ -314,6 +316,7 @@ extension WorkspaceViewModel {
                     self.exportStatusText = "Clip export failed: Unable to create passthrough export session"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
+                    self.notifyCompletion("Clip Export Failed", message: self.exportStatusText, outcome: .failed)
                     self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     return
                 }
@@ -351,6 +354,7 @@ extension WorkspaceViewModel {
                         self.exportStatusText = "Clip export cancelled"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
+                        self.notifyCompletion("Clip Export Stopped", message: self.exportStatusText, outcome: .cancelled)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                         return
                     }
@@ -360,21 +364,25 @@ extension WorkspaceViewModel {
                         self.exportStatusText = "Clip export complete: \(destination.lastPathComponent)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .success
+                        self.notifyCompletion("Clip Export Complete", message: self.exportStatusText)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .completed, message: self.exportStatusText, outputURL: destination)
                     case .failed:
                         self.exportStatusText = "Clip export failed: \(session.error?.localizedDescription ?? "Unknown error")"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.notifyCompletion("Clip Export Failed", message: self.exportStatusText, outcome: .failed)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     case .cancelled:
                         self.exportStatusText = "Clip export cancelled"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .cancelled
+                        self.notifyCompletion("Clip Export Stopped", message: self.exportStatusText, outcome: .cancelled)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                     default:
                         self.exportStatusText = "Clip export ended with status: \(session.status.rawValue)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.notifyCompletion("Clip Export Failed", message: self.exportStatusText, outcome: .failed)
                         self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                     }
                 }
@@ -399,6 +407,7 @@ extension WorkspaceViewModel {
                     self.exportStatusText = "\(exportName) failed: No ffmpeg executable found."
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
+                    self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText, outcome: .failed)
                     self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                 }
                 return
@@ -661,7 +670,7 @@ extension WorkspaceViewModel {
                     self.exportStatusText = "\(exportName) cancelled"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .cancelled
-                    self.notifyCompletion("\(exportName.capitalized) Stopped", message: self.exportStatusText)
+                    self.notifyCompletion("\(exportName.capitalized) Stopped", message: self.exportStatusText, outcome: .cancelled)
                     self.completeQueuedJobIfNeeded(queueJobID, status: .cancelled, message: self.exportStatusText)
                     return
                 }
@@ -669,7 +678,7 @@ extension WorkspaceViewModel {
                     self.exportStatusText = "\(exportName) failed: \(encodeError)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
-                    self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText)
+                    self.notifyCompletion("\(exportName.capitalized) Failed", message: self.exportStatusText, outcome: .failed)
                     self.completeQueuedJobIfNeeded(queueJobID, status: .failed, message: self.exportStatusText)
                 } else {
                     self.outputURL = destination

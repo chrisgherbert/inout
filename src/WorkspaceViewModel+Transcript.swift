@@ -634,16 +634,13 @@ extension WorkspaceViewModel {
             lastActivityState = .success
             if skipSaveDialog {
                 playQuickExportSnipSound()
+            } else {
+                notifyCompletion("Transcript Export Complete", message: uiMessage)
             }
-            if let soundName = completionSound.soundName,
-               let sound = NSSound(named: soundName) {
-                sound.play()
-            }
-            notifyCompletion("Transcript Export Complete", message: uiMessage)
         } catch {
             uiMessage = "Transcript export failed: \(error.localizedDescription)"
             lastActivityState = .failed
-            notifyCompletion("Transcript Export Failed", message: uiMessage)
+            notifyCompletion("Transcript Export Failed", message: uiMessage, outcome: .failed)
         }
     }
 }

@@ -3,7 +3,7 @@ import AppKit
 import AVFoundation
 import InOutCore
 import UniformTypeIdentifiers
-import UserNotifications
+@preconcurrency import UserNotifications
 import Foundation
 
 enum ClipExportQueueStatus: String, Equatable {
@@ -250,7 +250,7 @@ final class WorkspaceViewModel: ObservableObject {
             UserDefaults.standard.set(jumpIntervalSeconds, forKey: DefaultsKey.jumpIntervalSeconds)
         }
     }
-    @Published var completionSound: CompletionSound = .crystal {
+    @Published var completionSound: CompletionSound = .glass {
         didSet {
             UserDefaults.standard.set(completionSound.rawValue, forKey: DefaultsKey.completionSound)
         }
@@ -460,7 +460,6 @@ final class WorkspaceViewModel: ObservableObject {
     private var willTerminateObserver: NSObjectProtocol?
     var exportCancellationRequested = false
     let exportCancelFlag = CancellationFlag()
-    private var notificationAuthRequested = false
     var originalModeDefaultBitrateMbps: Double = 4.0
     struct QueuedClipExportConfig {
         let clipStartSeconds: Double
@@ -653,9 +652,12 @@ final class WorkspaceViewModel: ObservableObject {
             jumpIntervalSeconds = min(max(1, savedJump), 30)
         }
 
-        if let rawSound = defaults.string(forKey: DefaultsKey.completionSound),
-           let sound = CompletionSound(rawValue: rawSound) {
-            completionSound = sound
+        if let rawSound = defaults.string(forKey: DefaultsKey.completionSound) {
+            // Crystal disappeared from newer macOS sound sets. Migrate the old
+            // default instead of leaving existing installations silently muted.
+            completionSound = rawSound == "crystal"
+                ? .glass
+                : (CompletionSound(rawValue: rawSound) ?? .glass)
         }
 
         if let rawAppearance = defaults.string(forKey: DefaultsKey.appearance),
@@ -1200,14 +1202,46 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func notifyCompletion(_ title: String, message: String) {
+    func notifyCompletion(
+        _ title: String,
+        message: String,
+        outcome: ActivityState = .success,
+        playsCompletionSound: Bool = true
+    ) {
+        let shouldPostNotification = !NSApp.isActive
+        if !shouldPostNotification {
+            if case .success = outcome, playsCompletionSound {
+                playConfiguredCompletionSound()
+            }
+        }
+
+        // Stopping a task is direct user feedback and does not need a second,
+        // out-of-app notification after the cancellation has completed.
+        if case .cancelled = outcome {
+            return
+        }
+
         let center = UNUserNotificationCenter.current()
+        let notificationSubtitle = sourceURL?.lastPathComponent
+        let notificationSound: UNNotificationSound? = {
+            switch outcome {
+            case .success:
+                return completionSound == .none ? nil : .default
+            case .failed:
+                return .default
+            case .idle, .running, .cancelled:
+                return nil
+            }
+        }()
 
         let enqueue = {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = message
-            content.sound = .default
+            if let sourceName = notificationSubtitle, !sourceName.isEmpty {
+                content.subtitle = sourceName
+            }
+            content.sound = notificationSound
 
             let request = UNNotificationRequest(
                 identifier: UUID().uuidString,
@@ -1217,16 +1251,37 @@ final class WorkspaceViewModel: ObservableObject {
             center.add(request)
         }
 
-        if notificationAuthRequested {
-            enqueue()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                if shouldPostNotification {
+                    enqueue()
+                }
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted, shouldPostNotification {
+                        enqueue()
+                    }
+                }
+            case .denied:
+                break
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private func playConfiguredCompletionSound() {
+        guard let soundName = completionSound.soundName else { return }
+        if let sound = NSSound(named: soundName) {
+            sound.play()
             return
         }
 
-        notificationAuthRequested = true
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            if granted {
-                enqueue()
-            }
+        // Glass is available across the app's supported macOS versions.
+        if soundName != NSSound.Name("Glass"),
+           let fallback = NSSound(named: NSSound.Name("Glass")) {
+            fallback.play()
         }
     }
 }

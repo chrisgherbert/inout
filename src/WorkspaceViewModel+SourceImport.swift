@@ -208,7 +208,7 @@ extension WorkspaceViewModel {
                 errorText = direct.error
             }
 
-            await MainActor.run {
+            let wasCancelled = await MainActor.run {
                 if self.exportCancellationRequested {
                     self.exportTask = nil
                     self.activeProcess = nil
@@ -217,9 +217,12 @@ extension WorkspaceViewModel {
                     self.exportStatusText = "Download cancelled"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .cancelled
-                    return
+                    self.notifyCompletion("Download Stopped", message: self.exportStatusText, outcome: .cancelled)
+                    return true
                 }
+                return false
             }
+            if wasCancelled { return }
 
             if let errorText {
                 await MainActor.run {
@@ -236,6 +239,7 @@ extension WorkspaceViewModel {
                     self.exportStatusText = "Download failed: \(conciseError)"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
+                    self.notifyCompletion("Download Failed", message: self.exportStatusText, outcome: .failed)
                 }
                 return
             }
@@ -249,6 +253,7 @@ extension WorkspaceViewModel {
                     self.exportStatusText = "Download failed: yt-dlp did not return an output file path."
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .failed
+                    self.notifyCompletion("Download Failed", message: self.exportStatusText, outcome: .failed)
                 }
                 return
             }
@@ -265,6 +270,7 @@ extension WorkspaceViewModel {
                         self.exportStatusText = "Download failed: ffmpeg is required for this mode."
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.notifyCompletion("Download Failed", message: self.exportStatusText, outcome: .failed)
                     }
                     return
                 }
@@ -379,6 +385,7 @@ extension WorkspaceViewModel {
                         self.exportStatusText = "Transcode failed: \(transcodeError)"
                         self.uiMessage = self.exportStatusText
                         self.lastActivityState = .failed
+                        self.notifyCompletion("Download Failed", message: self.exportStatusText, outcome: .failed)
                     }
                     return
                 }
@@ -395,6 +402,7 @@ extension WorkspaceViewModel {
                     self.exportStatusText = "Download cancelled"
                     self.uiMessage = self.exportStatusText
                     self.lastActivityState = .cancelled
+                    self.notifyCompletion("Download Stopped", message: self.exportStatusText, outcome: .cancelled)
                     return
                 }
 
@@ -404,6 +412,7 @@ extension WorkspaceViewModel {
                 self.exportStatusText = "\(stageLabel): \(finalURL.lastPathComponent)"
                 self.uiMessage = self.exportStatusText
                 self.lastActivityState = .success
+                self.notifyCompletion("Download Complete", message: self.exportStatusText)
             }
         }
     }

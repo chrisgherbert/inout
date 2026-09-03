@@ -534,10 +534,6 @@ extension WorkspaceViewModel {
             }
             analyzeStatusText = uiMessage
             lastActivityState = .success
-            if let soundName = completionSound.soundName,
-               let sound = NSSound(named: soundName) {
-                sound.play()
-            }
             notifyCompletion("Media Analysis Complete", message: uiMessage)
         case .failure(.cancelled):
             current.status = .failed("Stopped")
@@ -546,14 +542,14 @@ extension WorkspaceViewModel {
             analyzeStatusText = "Analysis stopped"
             uiMessage = "Analysis stopped"
             lastActivityState = .cancelled
-            notifyCompletion("Media Analysis Stopped", message: uiMessage)
+            notifyCompletion("Media Analysis Stopped", message: uiMessage, outcome: .cancelled)
         case .failure(.failed(let reason)):
             current.status = .failed(reason)
             analysis = current
             analyzeStatusText = "Analysis failed"
             uiMessage = "Analysis failed: \(reason)"
             lastActivityState = .failed
-            notifyCompletion("Media Analysis Failed", message: uiMessage)
+            notifyCompletion("Media Analysis Failed", message: uiMessage, outcome: .failed)
         }
     }
 
@@ -572,16 +568,12 @@ extension WorkspaceViewModel {
         case .success(let transcript):
             cacheGeneratedTranscript(transcript)
             lastActivityState = .success
-            if let soundName = completionSound.soundName,
-               let sound = NSSound(named: soundName) {
-                sound.play()
-            }
             notifyCompletion("Transcript Complete", message: transcriptStatusText)
             completeQueuedJobIfNeeded(nil, status: .completed, message: transcriptStatusText)
         case .failure(.cancelled):
             clearTranscriptGenerationState(statusText: "Transcript generation stopped.")
             lastActivityState = .cancelled
-            notifyCompletion("Transcript Stopped", message: transcriptStatusText)
+            notifyCompletion("Transcript Stopped", message: transcriptStatusText, outcome: .cancelled)
             completeQueuedJobIfNeeded(nil, status: .cancelled, message: transcriptStatusText)
         case .failure(.failed(let reason)):
             clearTranscriptGenerationState(
@@ -589,7 +581,7 @@ extension WorkspaceViewModel {
                 analyzeStatus: "Transcript generation failed"
             )
             lastActivityState = .failed
-            notifyCompletion("Transcript Failed", message: transcriptStatusText)
+            notifyCompletion("Transcript Failed", message: transcriptStatusText, outcome: .failed)
             completeQueuedJobIfNeeded(nil, status: .failed, message: transcriptStatusText)
         }
     }
