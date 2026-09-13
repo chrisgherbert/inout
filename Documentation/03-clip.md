@@ -24,6 +24,13 @@ order: 3
 - Use the zoom controls or keyboard zoom shortcuts to inspect detail or fit the complete timeline.
 - Drag the divider below the player to resize it. Double-click the divider to toggle its preferred and maximum heights.
 
+## Review audio levels
+
+- Choose the waveform button below the player, or choose View > Show Audio Meters, to display live left and right audio levels.
+- Click the meters to see current peak, RMS, and maximum peak readings. The clipping indicator remains visible until you reset the peak hold.
+- Choose Analyze Clip in the meter details to measure integrated loudness, loudness range, and true peak for the current In/Out selection.
+- Audio meters are hidden by default. In/Out remembers the visibility setting when you enable them.
+
 ## Markers and frame capture
 
 - Press `M` to add a marker at the playhead.

@@ -52,6 +52,7 @@ struct CheckBlackFramesApp: App {
     @FocusedValue(\.workspaceModel) private var focusedModel
     @ObservedObject private var timecodePreferences = TimecodeDisplayPreferences.shared
     @AppStorage("prefs.appearance") private var appearanceRawValue = AppAppearance.dark.rawValue
+    @AppStorage(AudioMeterPreferences.showsMetersKey) private var showsAudioMeters = false
 
     private var appearanceColorScheme: ColorScheme? {
         AppAppearance(rawValue: appearanceRawValue)?.colorScheme ?? AppAppearance.dark.colorScheme
@@ -261,6 +262,17 @@ struct CheckBlackFramesApp: App {
             }
 
             CommandMenu("View") {
+                Button(showsAudioMeters ? "Hide Audio Meters" : "Show Audio Meters") {
+                    showsAudioMeters.toggle()
+                }
+                .disabled(
+                    focusedModel?.selectedTool != .clip ||
+                        focusedModel?.sourceURL == nil ||
+                        focusedModel?.hasAudioTrack != true
+                )
+
+                Divider()
+
                 Button("Toggle Transcript") {
                     NotificationCenter.default.post(name: .clipToggleTranscriptSidebar, object: focusedModel)
                 }

@@ -5,6 +5,8 @@ struct ClipPlayerUtilityRow: View {
     @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
     @Environment(\.timecodeFrameRate) private var timecodeFrameRate
     let hasVideoTrack: Bool
+    let hasAudioTrack: Bool
+    let showsAudioMeters: Bool
     let playheadSeconds: Double
     let totalDurationSeconds: Double
     let playheadCopyFlash: Bool
@@ -16,6 +18,7 @@ struct ClipPlayerUtilityRow: View {
     let onCopyPlayheadTimecode: () -> Void
     let onNavigatePrevious: () -> Void
     let onNavigateNext: () -> Void
+    let onToggleAudioMeters: () -> Void
     let onCaptureFrame: () -> Void
     let onSuggestMarkers: () -> Void
     let onZoomOut: () -> Void
@@ -46,12 +49,33 @@ struct ClipPlayerUtilityRow: View {
     private var navigationControls: some View {
         HStack(spacing: 8) {
             transportControls
+            audioMeterButton
 
             Divider()
                 .frame(height: 16)
 
             actionControls
             aiSuggestionsButton
+        }
+    }
+
+    @ViewBuilder
+    private var audioMeterButton: some View {
+        if hasAudioTrack {
+            Button(action: onToggleAudioMeters) {
+                Image(systemName: "waveform")
+                    .foregroundStyle(showsAudioMeters ? Color.accentColor : Color.primary)
+                    .frame(width: 16, height: 16)
+                    .background {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(showsAudioMeters ? Color.accentColor.opacity(0.14) : Color.clear)
+                    }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(showsAudioMeters ? "Hide Audio Meters" : "Show Audio Meters")
+            .accessibilityLabel(showsAudioMeters ? "Hide Audio Meters" : "Show Audio Meters")
+            .accessibilityValue(showsAudioMeters ? "Shown" : "Hidden")
         }
     }
 
@@ -305,6 +329,8 @@ struct ClipPlayerUtilityRow: View {
 extension ClipPlayerUtilityRow: Equatable {
     static func == (lhs: ClipPlayerUtilityRow, rhs: ClipPlayerUtilityRow) -> Bool {
         lhs.hasVideoTrack == rhs.hasVideoTrack &&
+        lhs.hasAudioTrack == rhs.hasAudioTrack &&
+        lhs.showsAudioMeters == rhs.showsAudioMeters &&
         lhs.playheadSeconds == rhs.playheadSeconds &&
         lhs.totalDurationSeconds == rhs.totalDurationSeconds &&
             lhs.playheadCopyFlash == rhs.playheadCopyFlash &&

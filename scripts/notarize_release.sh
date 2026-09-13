@@ -124,6 +124,8 @@ if [[ "$SKIP_SMOKE" -eq 0 ]]; then
   "$ROOT_DIR/scripts/help_documentation_smoke.sh" "$APP_PATH"
   echo "Running completion feedback smoke test..."
   "$ROOT_DIR/scripts/completion_feedback_smoke.sh"
+  echo "Running audio meter smoke test..."
+  FFMPEG_BIN="$APP_PATH/Contents/Resources/ffmpeg" "$ROOT_DIR/scripts/audio_meter_smoke.sh"
 fi
 
 echo "Checking signing identity availability..."

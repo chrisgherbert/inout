@@ -11,6 +11,7 @@ import UserNotifications
 @MainActor
 private final class ClipToolRuntimeState: ObservableObject {
     let transcriptPlaybackPresentation = ClipTranscriptPlaybackPresentation()
+    let audioMeterPresentation = AudioMeterPresentation()
     var waveformTask: Task<Void, Never>?
     var thumbnailStripTask: Task<[TimelineThumbnailTile], Never>?
     var thumbnailStripDebounceTask: Task<Void, Never>?
@@ -89,6 +90,11 @@ private struct ClipPlayerStageSection: View {
     let canGenerateTranscript: Bool
     let isGeneratingTranscript: Bool
     let hasAudioTrack: Bool
+    let showsAudioMeters: Bool
+    let audioMeterPresentation: AudioMeterPresentation
+    let audioMeterFileURL: URL?
+    let audioMeterClipStartSeconds: Double
+    let audioMeterClipEndSeconds: Double
     let transcriptPlaybackPresentation: ClipTranscriptPlaybackPresentation
     let isPlaying: Bool
     let isScrubbing: Bool
@@ -135,6 +141,40 @@ private struct ClipPlayerStageSection: View {
     let onCloseTranscript: () -> Void
     let onShowTranscript: () -> Void
 
+    private var displaysAudioMeters: Bool {
+        showsAudioMeters && hasAudioTrack
+    }
+
+    private var audioMeterFootprint: CGFloat {
+        displaysAudioMeters ? 56 : 0
+    }
+
+    @ViewBuilder
+    private func playerAndAudioMeters(playerWidth: CGFloat) -> some View {
+        HStack(spacing: displaysAudioMeters ? 8 : 0) {
+            if displaysAudioMeters {
+                AudioMeterRailView(
+                    presentation: audioMeterPresentation,
+                    isPlaying: isPlaying,
+                    fileURL: audioMeterFileURL,
+                    clipStartSeconds: audioMeterClipStartSeconds,
+                    clipEndSeconds: audioMeterClipEndSeconds
+                )
+                .frame(width: 48, height: currentPlayerHeight)
+            }
+
+            InlinePlayerView(player: player)
+                .frame(width: playerWidth, height: currentPlayerHeight)
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
+                .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
+                .onTapGesture {
+                    onDismissTimecodeFieldFocus()
+                }
+        }
+    }
+
     var body: some View {
         GeometryReader { geometry in
             if showsClipTranscriptSidebar {
@@ -150,21 +190,16 @@ private struct ClipPlayerStageSection: View {
                     minimumPlayerRegionWidth,
                     geometry.size.width - sidebarWidth - dividerHandleWidth - (rowSpacing * 2)
                 )
-                let resolvedPlayerWidth = min(preferredPlayerDisplayWidth, playerRegionWidth)
+                let resolvedPlayerWidth = min(
+                    preferredPlayerDisplayWidth,
+                    max(180, playerRegionWidth - audioMeterFootprint)
+                )
 
                 HStack(alignment: .top, spacing: rowSpacing) {
                     HStack(spacing: 0) {
                         Spacer(minLength: 0)
 
-                        InlinePlayerView(player: player)
-                            .frame(width: resolvedPlayerWidth, height: currentPlayerHeight)
-                            .transaction { transaction in
-                                transaction.animation = nil
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-                            .onTapGesture {
-                                onDismissTimecodeFieldFocus()
-                            }
+                        playerAndAudioMeters(playerWidth: resolvedPlayerWidth)
 
                         Spacer(minLength: 0)
                     }
@@ -254,16 +289,11 @@ private struct ClipPlayerStageSection: View {
                 .frame(width: geometry.size.width, height: currentPlayerHeight, alignment: .topLeading)
             } else {
                 ZStack(alignment: .topTrailing) {
-                    InlinePlayerView(player: player)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: currentPlayerHeight)
-                        .transaction { transaction in
-                            transaction.animation = nil
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: UIRadius.medium, style: .continuous))
-                        .onTapGesture {
-                            onDismissTimecodeFieldFocus()
-                        }
+                    GeometryReader { playerGeometry in
+                        playerAndAudioMeters(
+                            playerWidth: max(180, playerGeometry.size.width - audioMeterFootprint)
+                        )
+                    }
 
                     if canShowClipTranscriptSidebar {
                         Button(action: onShowTranscript) {
@@ -301,6 +331,11 @@ extension ClipPlayerStageSection: Equatable {
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
         lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
         lhs.hasAudioTrack == rhs.hasAudioTrack &&
+        lhs.showsAudioMeters == rhs.showsAudioMeters &&
+        lhs.audioMeterPresentation === rhs.audioMeterPresentation &&
+        lhs.audioMeterFileURL == rhs.audioMeterFileURL &&
+        lhs.audioMeterClipStartSeconds == rhs.audioMeterClipStartSeconds &&
+        lhs.audioMeterClipEndSeconds == rhs.audioMeterClipEndSeconds &&
         lhs.transcriptPlaybackPresentation === rhs.transcriptPlaybackPresentation &&
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isScrubbing == rhs.isScrubbing &&
@@ -334,6 +369,7 @@ struct ClipToolView: View {
     @Environment(\.timecodeDisplayStyle) private var timecodeDisplayStyle
     @Environment(\.timecodeFrameRate) private var timecodeFrameRate
     @Environment(\.timecodeMediaDuration) private var timecodeMediaDuration
+    @AppStorage(AudioMeterPreferences.showsMetersKey) private var showsAudioMeters = false
 
     @StateObject private var runtime = ClipToolRuntimeState()
     @StateObject private var smartMarkers = SmartMarkerPresentationModel()
@@ -435,6 +471,9 @@ struct ClipToolView: View {
         playheadVisualSeconds = value
         playheadJumpFromSeconds = value
         runtime.suppressVisualPlayheadSyncUntil = .distantPast
+        if showsAudioMeters {
+            runtime.audioMeterPresentation.updatePlaybackTime(value)
+        }
     }
 
     private func springAnimateVisualPlayhead(to value: Double) {
@@ -541,6 +580,9 @@ struct ClipToolView: View {
                 let current = CMTimeGetSeconds(time)
                 if current.isFinite {
                     let newPlayhead = max(0, current)
+                    if showsAudioMeters {
+                        runtime.audioMeterPresentation.updatePlaybackTime(newPlayhead)
+                    }
                     let didMove = abs(newPlayhead - playheadSeconds) > (1.0 / 240.0)
 
                     if didMove {
@@ -645,6 +687,7 @@ struct ClipToolView: View {
 
     private func loadPlayerItem() {
         guard let sourceURL = sourcePresentation.sourceURL else {
+            runtime.audioMeterPresentation.detach(resetReadings: true)
             removePlayerTimeObserver()
             player.replaceCurrentItem(with: nil)
             playheadSeconds = 0
@@ -658,6 +701,7 @@ struct ClipToolView: View {
         }
 
         if runtime.loadedSourcePath == sourceURL.path, player.currentItem != nil {
+            updateAudioMeterAttachment()
             let duration = max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds)
             let restored = max(0, min(clip.clipPlayheadSeconds, duration))
             if abs(playheadSeconds - restored) > (1.0 / 120.0) {
@@ -671,6 +715,7 @@ struct ClipToolView: View {
         runtime.loadedSourcePath = sourceURL.path
         let item = AVPlayerItem(url: sourceURL)
         player.replaceCurrentItem(with: item)
+        updateAudioMeterAttachment()
         installPlayerTimeObserverIfNeeded()
         let duration = CMTimeGetSeconds(item.asset.duration)
         playerDurationSeconds = duration.isFinite && duration > 0 ? duration : sourcePresentation.sourceDurationSeconds
@@ -682,6 +727,19 @@ struct ClipToolView: View {
         clampTimelineZoomToAllowedLevels()
         player.seek(to: CMTime(seconds: restored, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         loadWaveform(for: sourceURL)
+    }
+
+    private func updateAudioMeterAttachment() {
+        guard showsAudioMeters,
+              sourcePresentation.hasAudioTrack,
+              let sourceURL = sourcePresentation.sourceURL else {
+            runtime.audioMeterPresentation.detach(resetReadings: true)
+            return
+        }
+        runtime.audioMeterPresentation.prepare(
+            fileURL: sourceURL,
+            at: effectivePlayheadSeconds()
+        )
     }
 
     private func loadWaveform(for url: URL) {
@@ -2414,6 +2472,11 @@ struct ClipToolView: View {
                 canGenerateTranscript: model.canGenerateTranscript,
                 isGeneratingTranscript: sourcePresentation.isGeneratingTranscript,
                 hasAudioTrack: sourcePresentation.hasAudioTrack,
+                showsAudioMeters: showsAudioMeters,
+                audioMeterPresentation: runtime.audioMeterPresentation,
+                audioMeterFileURL: sourcePresentation.sourceURL,
+                audioMeterClipStartSeconds: displayedClipStartSeconds,
+                audioMeterClipEndSeconds: displayedClipEndSeconds,
                 transcriptPlaybackPresentation: runtime.transcriptPlaybackPresentation,
                 isPlaying: player.rate != 0,
                 isScrubbing: isPlayheadDragActive,
@@ -2595,6 +2658,8 @@ struct ClipToolView: View {
 
             ClipPlayerUtilityRow(
                 hasVideoTrack: sourcePresentation.hasVideoTrack,
+                hasAudioTrack: sourcePresentation.hasAudioTrack,
+                showsAudioMeters: showsAudioMeters,
                 playheadSeconds: displayedPlayheadSeconds,
                 totalDurationSeconds: max(playerDurationSeconds, sourcePresentation.sourceDurationSeconds),
                 playheadCopyFlash: playheadCopyFlash,
@@ -2612,6 +2677,9 @@ struct ClipToolView: View {
                 },
                 onNavigateNext: {
                     navigateToMarker(previous: false)
+                },
+                onToggleAudioMeters: {
+                    showsAudioMeters.toggle()
                 },
                 onCaptureFrame: {
                     model.captureFrame(at: displayedPlayheadSeconds)
@@ -3068,6 +3136,9 @@ struct ClipToolView: View {
             model.syncClipTextFields()
             refreshClipTranscriptLookup(sourcePresentation.transcriptSegments)
         }
+        .onChange(of: showsAudioMeters) { _ in
+            updateAudioMeterAttachment()
+        }
 
         let step3 = step2.onChange(of: model.clipEncodingMode) { mode in
             if !sourcePresentation.hasVideoTrack && mode != .audioOnly {
@@ -3081,10 +3152,12 @@ struct ClipToolView: View {
 
         let step4 = step3
             .onChange(of: clip.clipStartSeconds) { _ in
+                runtime.audioMeterPresentation.invalidateLoudnessAnalysis()
                 guard !isClipBoundaryDragActive else { return }
                 syncDisplayedClipRangeImmediately()
             }
             .onChange(of: clip.clipEndSeconds) { _ in
+                runtime.audioMeterPresentation.invalidateLoudnessAnalysis()
                 guard !isClipBoundaryDragActive else { return }
                 syncDisplayedClipRangeImmediately()
             }
@@ -3118,6 +3191,9 @@ struct ClipToolView: View {
             }
             .onChange(of: sourcePresentation.hasVideoTrack) { _ in
                 scheduleThumbnailStripGeneration(immediate: true)
+            }
+            .onChange(of: sourcePresentation.hasAudioTrack) { _ in
+                updateAudioMeterAttachment()
             }
 
         let step5 = step4
@@ -3168,6 +3244,7 @@ struct ClipToolView: View {
             }
 
         return step5.onDisappear {
+            runtime.audioMeterPresentation.detach(resetReadings: true)
             runtime.waveformTask?.cancel()
             runtime.thumbnailStripTask?.cancel()
             runtime.thumbnailStripDebounceTask?.cancel()
