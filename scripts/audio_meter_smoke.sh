@@ -22,6 +22,32 @@ fi
   -b:a 192k \
   "$TMP_DIR/stereo.m4a"
 
+# A native-rate high-frequency channel catches accidental downsampling before
+# level measurement. Both channels have analytically known peak and RMS levels.
+"$FFMPEG" \
+  -hide_banner \
+  -loglevel error \
+  -f lavfi \
+  -i "aevalsrc=0.5*sin(2*PI*10000*t)|0.25*sin(2*PI*997*t):s=48000:d=8:c=stereo" \
+  -c:a pcm_f32le \
+  "$TMP_DIR/calibration.wav"
+
+"$FFMPEG" \
+  -hide_banner \
+  -loglevel error \
+  -f lavfi \
+  -i "aevalsrc=sin(2*PI*1000*t)|0.5*sin(2*PI*997*t):s=48000:d=2:c=stereo" \
+  -c:a pcm_f32le \
+  "$TMP_DIR/full-scale.wav"
+
+"$FFMPEG" \
+  -hide_banner \
+  -loglevel error \
+  -f lavfi \
+  -i "anullsrc=r=48000:cl=stereo:d=2" \
+  -c:a pcm_f32le \
+  "$TMP_DIR/silence.wav"
+
 xcrun swiftc \
   -parse-as-library \
   -emit-module \
@@ -44,4 +70,8 @@ xcrun swiftc \
   -framework Foundation \
   -o "$TMP_DIR/audio-meter-smoke"
 
-PATH="$(dirname "$FFMPEG"):$PATH" "$TMP_DIR/audio-meter-smoke" "$TMP_DIR/stereo.m4a"
+PATH="$(dirname "$FFMPEG"):$PATH" "$TMP_DIR/audio-meter-smoke" \
+  "$TMP_DIR/stereo.m4a" \
+  "$TMP_DIR/calibration.wav" \
+  "$TMP_DIR/full-scale.wav" \
+  "$TMP_DIR/silence.wav"

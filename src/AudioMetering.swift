@@ -154,27 +154,14 @@ private enum AudioMeterWindowReader {
             throw AudioMeterError.noAudioTrack
         }
 
-        let sourceChannels: Int = {
-            guard let formatDescription = audioTrack.formatDescriptions.first else { return 2 }
-            let audioDescription = formatDescription as! CMAudioFormatDescription
-            return max(
-                1,
-                Int(
-                    CMAudioFormatDescriptionGetStreamBasicDescription(audioDescription)?
-                        .pointee.mChannelsPerFrame ?? 2
-                )
-            )
-        }()
-        let reducedRateSettings: [String: Any] = [
+        let nativeFloatSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
             AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-            AVSampleRateKey: 12_000,
-            AVNumberOfChannelsKey: min(2, sourceChannels)
+            AVLinearPCMIsNonInterleaved: false
         ]
-        let nativeRateSettings: [String: Any] = [
+        let nativeIntegerSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsFloatKey: false,
@@ -187,15 +174,18 @@ private enum AudioMeterWindowReader {
                 asset: asset,
                 audioTrack: audioTrack,
                 startSeconds: startSeconds,
-                outputSettings: reducedRateSettings,
+                outputSettings: nativeFloatSettings,
                 controller: controller
             )
         } catch {
+            guard !controller.cancellationRequested, !(error is CancellationError) else {
+                throw CancellationError()
+            }
             return try read(
                 asset: asset,
                 audioTrack: audioTrack,
                 startSeconds: startSeconds,
-                outputSettings: nativeRateSettings,
+                outputSettings: nativeIntegerSettings,
                 controller: controller
             )
         }
@@ -261,12 +251,30 @@ private enum AudioMeterWindowReader {
             }
 
             let channels = max(1, Int(stream.mChannelsPerFrame))
-            let bytesPerFrame = max(Int(stream.mBytesPerFrame), channels * MemoryLayout<Int16>.size)
+            let isFloat32 = stream.mBitsPerChannel == 32 &&
+                stream.mFormatFlags & kAudioFormatFlagIsFloat != 0
+            let isSignedInt16 = stream.mBitsPerChannel == 16 &&
+                stream.mFormatFlags & kAudioFormatFlagIsSignedInteger != 0
+            let bytesPerSample: Int
+            if isFloat32 {
+                bytesPerSample = MemoryLayout<Float>.size
+            } else if isSignedInt16 {
+                bytesPerSample = MemoryLayout<Int16>.size
+            } else {
+                continue
+            }
+            guard stream.mFormatID == kAudioFormatLinearPCM,
+                  stream.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0,
+                  stream.mFormatFlags & kAudioFormatFlagIsBigEndian == 0 else {
+                continue
+            }
+
+            let bytesPerFrame = max(Int(stream.mBytesPerFrame), channels * bytesPerSample)
             let samplesInBuffer = byteCount / bytesPerFrame
             guard samplesInBuffer > 0 else { continue }
 
             decodedSampleData = true
-            let samples = UnsafeRawPointer(dataPointer).assumingMemoryBound(to: Int16.self)
+            let rawSamples = UnsafeRawPointer(dataPointer)
             let secondsPerSample = 1.0 / stream.mSampleRate
 
             for sampleIndex in 0..<samplesInBuffer {
@@ -274,11 +282,20 @@ private enum AudioMeterWindowReader {
                 let frameIndex = Int((sampleTime - startSeconds) * audioMeterFramesPerSecond)
                 guard accumulators.indices.contains(frameIndex) else { continue }
 
-                let baseIndex = sampleIndex * channels
-                let left = Double(samples[baseIndex]) / 32_768.0
-                let right = channels > 1
-                    ? Double(samples[baseIndex + 1]) / 32_768.0
-                    : left
+                let frameOffset = sampleIndex * bytesPerFrame
+                let left: Double
+                let right: Double
+                if isFloat32 {
+                    left = Double(rawSamples.load(fromByteOffset: frameOffset, as: Float.self))
+                    right = channels > 1
+                        ? Double(rawSamples.load(fromByteOffset: frameOffset + bytesPerSample, as: Float.self))
+                        : left
+                } else {
+                    left = Double(rawSamples.load(fromByteOffset: frameOffset, as: Int16.self)) / 32_768.0
+                    right = channels > 1
+                        ? Double(rawSamples.load(fromByteOffset: frameOffset + bytesPerSample, as: Int16.self)) / 32_768.0
+                        : left
+                }
                 accumulators[frameIndex].add(left: left, right: right)
             }
         }

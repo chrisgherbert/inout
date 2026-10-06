@@ -36,11 +36,17 @@ private final class LockedCadenceRecorder: @unchecked Sendable {
 @MainActor
 struct AudioMeterSmoke {
     static func main() async {
-        guard CommandLine.arguments.count == 2 else {
-            fail("Usage: audio-meter-smoke /path/to/stereo-audio")
+        guard CommandLine.arguments.count == 5 else {
+            fail(
+                "Usage: audio-meter-smoke /path/to/stereo-audio " +
+                    "/path/to/calibration-audio /path/to/full-scale-audio /path/to/silence"
+            )
         }
 
         let url = URL(fileURLWithPath: CommandLine.arguments[1])
+        let calibrationURL = URL(fileURLWithPath: CommandLine.arguments[2])
+        let fullScaleURL = URL(fileURLWithPath: CommandLine.arguments[3])
+        let silenceURL = URL(fileURLWithPath: CommandLine.arguments[4])
         let item = AVPlayerItem(url: url)
         let player = AVPlayer(playerItem: item)
         let meter = AudioMeterPresentation()
@@ -104,6 +110,10 @@ struct AudioMeterSmoke {
             fail("Loudness analysis failed: \(meter.loudnessError ?? "no result")")
         }
 
+        await verifyCalibratedLevels(fileURL: calibrationURL)
+        await verifyClipping(fileURL: fullScaleURL)
+        await verifySilence(fileURL: silenceURL)
+
         // Alternate between distant windows while readers are active. Cancellation
         // must remain cooperative so AVAssetReader is never torn down concurrently
         // with copyNextSampleBuffer.
@@ -138,6 +148,98 @@ struct AudioMeterSmoke {
                 updatesPerSecond
             )
         )
+    }
+
+    private static func verifyCalibratedLevels(fileURL: URL) async {
+        let meter = AudioMeterPresentation()
+        meter.prepare(fileURL: fileURL, at: 0.5)
+        for _ in 0..<200 where meter.values.maximumPeak == 0 && meter.attachmentError == nil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard meter.attachmentError == nil else {
+            fail("Calibrated meter data failed: \(meter.attachmentError ?? "unknown error")")
+        }
+
+        // Advance through prerecorded frames in real time so the 400 ms RMS
+        // presentation average reaches steady state.
+        for frame in 0..<180 {
+            meter.updatePlaybackTime(0.5 + (Double(frame) / 60.0))
+            try? await Task.sleep(nanoseconds: 8_000_000)
+        }
+
+        assertDB(
+            amplitude: meter.values.leftPeak,
+            expected: -6.0206,
+            tolerance: 0.25,
+            label: "10 kHz left peak"
+        )
+        assertDB(
+            amplitude: meter.values.rightPeak,
+            expected: -12.0412,
+            tolerance: 0.25,
+            label: "right peak"
+        )
+        assertDB(
+            amplitude: meter.values.leftShortTerm,
+            expected: -9.0309,
+            tolerance: 0.30,
+            label: "10 kHz left RMS"
+        )
+        assertDB(
+            amplitude: meter.values.rightShortTerm,
+            expected: -15.0515,
+            tolerance: 0.30,
+            label: "right RMS"
+        )
+        meter.detach(resetReadings: true)
+    }
+
+    private static func verifyClipping(fileURL: URL) async {
+        let meter = AudioMeterPresentation()
+        meter.prepare(fileURL: fileURL, at: 0.25)
+        for _ in 0..<200 where !meter.values.isClipping && meter.attachmentError == nil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard meter.attachmentError == nil, meter.values.isClipping else {
+            fail("A full-scale PCM signal did not set the clipping indicator")
+        }
+        assertDB(
+            amplitude: meter.values.maximumPeak,
+            expected: 0,
+            tolerance: 0.01,
+            label: "full-scale maximum peak"
+        )
+        meter.detach(resetReadings: true)
+    }
+
+    private static func verifySilence(fileURL: URL) async {
+        let meter = AudioMeterPresentation()
+        meter.prepare(fileURL: fileURL, at: 0.25)
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        guard meter.attachmentError == nil, meter.values == .zero else {
+            fail("Digital silence produced a nonzero meter reading")
+        }
+        meter.detach(resetReadings: true)
+    }
+
+    private static func assertDB(
+        amplitude: Double,
+        expected: Double,
+        tolerance: Double,
+        label: String
+    ) {
+        let measured = amplitudeToDecibels(amplitude, floor: -120)
+        guard abs(measured - expected) <= tolerance else {
+            fail(
+                String(
+                    format: "%@ measured %.3f dBFS; expected %.3f ± %.3f dB",
+                    label,
+                    measured,
+                    expected,
+                    tolerance
+                )
+            )
+        }
     }
 
     private static func fail(_ message: String) -> Never {
