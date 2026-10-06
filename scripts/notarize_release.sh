@@ -104,6 +104,8 @@ if [[ "$SKIP_SMOKE" -eq 0 ]]; then
   fi
   echo "Running bundled yt-dlp smoke test..."
   "$APP_PATH/Contents/Resources/yt-dlp" --ignore-config --version >/dev/null
+  echo "Running URL download format smoke test..."
+  YTDLP_BIN="$APP_PATH/Contents/Resources/yt-dlp" "$ROOT_DIR/scripts/url_download_format_smoke.sh"
   echo "Running bundled ffmpeg smoke tests..."
   "$ROOT_DIR/scripts/ffmpeg_release_smoke.sh" "$APP_PATH"
   echo "Running video export encoder smoke tests..."
