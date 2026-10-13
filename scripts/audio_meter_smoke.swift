@@ -100,6 +100,8 @@ struct AudioMeterSmoke {
             fail(String(format: "Meter presentation cadence was only %.1f fps", updatesPerSecond))
         }
 
+        await verifyLateAttachment(fileURL: url)
+
         meter.analyzeLoudness(fileURL: url, startSeconds: 0, endSeconds: 2)
         for _ in 0..<200 where meter.isAnalyzingLoudness {
             try? await Task.sleep(nanoseconds: 25_000_000)
@@ -148,6 +150,52 @@ struct AudioMeterSmoke {
                 updatesPerSecond
             )
         )
+    }
+
+    private static func verifyLateAttachment(fileURL: URL) async {
+        let item = AVPlayerItem(url: fileURL)
+        let player = AVPlayer(playerItem: item)
+        let meter = AudioMeterPresentation()
+        let recorder = LockedCadenceRecorder()
+        let valuesObserver = meter.$values.dropFirst().sink { _ in
+            recorder.recordUpdate()
+        }
+        defer { valuesObserver.cancel() }
+
+        player.isMuted = true
+        let timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 1.0 / 60.0, preferredTimescale: 600),
+            queue: .main
+        ) { time in
+            MainActor.assumeIsolated {
+                // This observer intentionally exists before the meter is attached.
+                meter.updatePlaybackTime(CMTimeGetSeconds(time))
+            }
+        }
+        defer { player.removeTimeObserver(timeObserver) }
+
+        player.play()
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        meter.prepare(fileURL: fileURL, at: CMTimeGetSeconds(player.currentTime()))
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        player.pause()
+
+        guard meter.attachmentError == nil else {
+            fail("Late meter attachment failed: \(meter.attachmentError ?? "unknown error")")
+        }
+        guard meter.values.maximumPeak > 0 else {
+            fail("A meter enabled during playback never produced a reading")
+        }
+        let updatesPerSecond = recorder.updatesPerSecond()
+        guard updatesPerSecond >= 30 else {
+            fail(
+                String(
+                    format: "A meter enabled during playback only updated at %.1f fps",
+                    updatesPerSecond
+                )
+            )
+        }
+        meter.detach(resetReadings: true)
     }
 
     private static func verifyCalibratedLevels(fileURL: URL) async {

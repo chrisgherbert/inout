@@ -471,9 +471,7 @@ struct ClipToolView: View {
         playheadVisualSeconds = value
         playheadJumpFromSeconds = value
         runtime.suppressVisualPlayheadSyncUntil = .distantPast
-        if showsAudioMeters {
-            runtime.audioMeterPresentation.updatePlaybackTime(value)
-        }
+        runtime.audioMeterPresentation.updatePlaybackTime(value)
     }
 
     private func springAnimateVisualPlayhead(to value: Double) {
@@ -580,9 +578,10 @@ struct ClipToolView: View {
                 let current = CMTimeGetSeconds(time)
                 if current.isFinite {
                     let newPlayhead = max(0, current)
-                    if showsAudioMeters {
-                        runtime.audioMeterPresentation.updatePlaybackTime(newPlayhead)
-                    }
+                    // Always forward playback time. A detached meter ignores the
+                    // update, while a meter enabled after observer installation
+                    // starts receiving live timestamps immediately.
+                    runtime.audioMeterPresentation.updatePlaybackTime(newPlayhead)
                     let didMove = abs(newPlayhead - playheadSeconds) > (1.0 / 240.0)
 
                     if didMove {
