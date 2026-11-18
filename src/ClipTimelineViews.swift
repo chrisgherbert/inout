@@ -13,6 +13,8 @@ private final class ClipToolRuntimeState: ObservableObject {
     let transcriptPlaybackPresentation = ClipTranscriptPlaybackPresentation()
     let audioMeterPresentation = AudioMeterPresentation()
     var waveformTask: Task<Void, Never>?
+    var waveformGenerationController: WaveformGenerationController?
+    var waveformGenerationID: UUID?
     var thumbnailStripTask: Task<[TimelineThumbnailTile], Never>?
     var thumbnailStripDebounceTask: Task<Void, Never>?
     var thumbnailStripPrewarmTask: Task<Void, Never>?
@@ -694,6 +696,9 @@ struct ClipToolView: View {
             playerDurationSeconds = 0
             runtime.loadedSourcePath = nil
             runtime.waveformTask?.cancel()
+            runtime.waveformGenerationController?.cancel()
+            runtime.waveformGenerationController = nil
+            runtime.waveformGenerationID = nil
             waveformSamples = []
             isWaveformLoading = false
             return
@@ -743,9 +748,13 @@ struct ClipToolView: View {
 
     private func loadWaveform(for url: URL) {
         runtime.waveformTask?.cancel()
+        runtime.waveformGenerationController?.cancel()
+        runtime.waveformGenerationController = nil
+        runtime.waveformGenerationID = nil
 
         // Keep long timelines detailed when zoomed in: higher bucket density than real-time display rate.
         let targetSampleCount = Int(min(240_000, max(12_000, sourcePresentation.sourceDurationSeconds * 120.0)))
+        let durationSeconds = sourcePresentation.sourceDurationSeconds
 
         if let cachedSamples = model.waveformSamplesFromCache(for: url, sampleCount: targetSampleCount), !cachedSamples.isEmpty {
             waveformSamples = cachedSamples
@@ -756,9 +765,27 @@ struct ClipToolView: View {
         waveformSamples = []
         isWaveformLoading = true
 
+        let controller = WaveformGenerationController()
+        let generationID = UUID()
+        runtime.waveformGenerationController = controller
+        runtime.waveformGenerationID = generationID
         runtime.waveformTask = Task.detached(priority: .userInitiated) {
-            let samples = generateWaveformSamples(for: url, sampleCount: targetSampleCount)
+            let samples = await withTaskCancellationHandler {
+                generateWaveformSamples(
+                    for: url,
+                    durationSeconds: durationSeconds,
+                    sampleCount: targetSampleCount,
+                    controller: controller
+                )
+            } onCancel: {
+                controller.cancel()
+            }
+            guard !Task.isCancelled, !controller.cancellationRequested else { return }
             await MainActor.run {
+                guard self.runtime.waveformGenerationID == generationID else { return }
+                self.runtime.waveformTask = nil
+                self.runtime.waveformGenerationController = nil
+                self.runtime.waveformGenerationID = nil
                 self.model.cacheWaveformSamples(samples, for: url, sampleCount: targetSampleCount)
                 self.waveformSamples = samples
                 self.isWaveformLoading = false
@@ -3256,6 +3283,9 @@ struct ClipToolView: View {
         return step5.onDisappear {
             runtime.audioMeterPresentation.detach(resetReadings: true)
             runtime.waveformTask?.cancel()
+            runtime.waveformGenerationController?.cancel()
+            runtime.waveformGenerationController = nil
+            runtime.waveformGenerationID = nil
             runtime.thumbnailStripTask?.cancel()
             runtime.thumbnailStripDebounceTask?.cancel()
             runtime.thumbnailStripPrewarmTask?.cancel()

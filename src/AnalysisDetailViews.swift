@@ -94,12 +94,18 @@ struct InlinePlayerView: NSViewRepresentable {
         view.controlsStyle = .floating
         view.showsFullScreenToggleButton = false
         view.allowsPictureInPicturePlayback = true
+        view.updatesNowPlayingInfoCenter = false
+        view.allowsVideoFrameAnalysis = false
+        view.videoFrameAnalysisTypes = []
         view.videoGravity = .resizeAspect
         view.player = player
         return view
     }
 
     func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        nsView.updatesNowPlayingInfoCenter = false
+        nsView.allowsVideoFrameAnalysis = false
+        nsView.videoFrameAnalysisTypes = []
         if nsView.player !== player {
             nsView.player = player
         }

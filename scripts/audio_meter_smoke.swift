@@ -1,4 +1,3 @@
-import AVFoundation
 import Combine
 import Foundation
 
@@ -47,8 +46,6 @@ struct AudioMeterSmoke {
         let calibrationURL = URL(fileURLWithPath: CommandLine.arguments[2])
         let fullScaleURL = URL(fileURLWithPath: CommandLine.arguments[3])
         let silenceURL = URL(fileURLWithPath: CommandLine.arguments[4])
-        let item = AVPlayerItem(url: url)
-        let player = AVPlayer(playerItem: item)
         let meter = AudioMeterPresentation()
         let cadenceRecorder = LockedCadenceRecorder()
         let valuesObserver = meter.$values.dropFirst().sink { _ in
@@ -56,29 +53,14 @@ struct AudioMeterSmoke {
         }
         defer { valuesObserver.cancel() }
 
-        // Metering reads the file independently, so muting this test player does
-        // not suppress measurements or alter the playback pipeline.
-        player.isMuted = true
         meter.prepare(fileURL: url, at: 0)
         for _ in 0..<200 where meter.values.maximumPeak == 0 && meter.attachmentError == nil {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        guard item.audioMix == nil else {
-            fail("Preparing the meter unexpectedly modified the player audio mix")
+        for frame in 0..<72 {
+            meter.updatePlaybackTime(Double(frame) / 60.0)
+            try? await Task.sleep(nanoseconds: 16_666_667)
         }
-
-        let timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 1.0 / 60.0, preferredTimescale: 600),
-            queue: .main
-        ) { time in
-            MainActor.assumeIsolated {
-                meter.updatePlaybackTime(CMTimeGetSeconds(time))
-            }
-        }
-        defer { player.removeTimeObserver(timeObserver) }
-        player.play()
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
-        player.pause()
 
         let values = meter.values
         let updatesPerSecond = cadenceRecorder.updatesPerSecond()
@@ -134,9 +116,6 @@ struct AudioMeterSmoke {
         }
 
         meter.detach(resetReadings: true)
-        guard item.audioMix == nil else {
-            fail("Detaching the meter unexpectedly modified the player audio mix")
-        }
         guard meter.values == .zero else {
             fail("Detaching the meter did not clear its readings")
         }
@@ -153,8 +132,6 @@ struct AudioMeterSmoke {
     }
 
     private static func verifyLateAttachment(fileURL: URL) async {
-        let item = AVPlayerItem(url: fileURL)
-        let player = AVPlayer(playerItem: item)
         let meter = AudioMeterPresentation()
         let recorder = LockedCadenceRecorder()
         let valuesObserver = meter.$values.dropFirst().sink { _ in
@@ -162,23 +139,20 @@ struct AudioMeterSmoke {
         }
         defer { valuesObserver.cancel() }
 
-        player.isMuted = true
-        let timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 1.0 / 60.0, preferredTimescale: 600),
-            queue: .main
-        ) { time in
-            MainActor.assumeIsolated {
-                // This observer intentionally exists before the meter is attached.
-                meter.updatePlaybackTime(CMTimeGetSeconds(time))
-            }
+        // Playback timestamps can arrive before the UI enables and attaches the
+        // meter. They must remain harmless and start producing values afterward.
+        for frame in 0..<15 {
+            meter.updatePlaybackTime(Double(frame) / 60.0)
+            try? await Task.sleep(nanoseconds: 16_666_667)
         }
-        defer { player.removeTimeObserver(timeObserver) }
-
-        player.play()
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        meter.prepare(fileURL: fileURL, at: CMTimeGetSeconds(player.currentTime()))
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        player.pause()
+        meter.prepare(fileURL: fileURL, at: 0.25)
+        for _ in 0..<200 where meter.values.maximumPeak == 0 && meter.attachmentError == nil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        for frame in 15..<75 {
+            meter.updatePlaybackTime(Double(frame) / 60.0)
+            try? await Task.sleep(nanoseconds: 16_666_667)
+        }
 
         guard meter.attachmentError == nil else {
             fail("Late meter attachment failed: \(meter.attachmentError ?? "unknown error")")

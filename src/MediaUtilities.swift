@@ -275,129 +275,139 @@ func loadSourceMediaInfo(for url: URL) -> SourceMediaInfo {
     return info
 }
 
-private func waveformSamples(
-    for asset: AVURLAsset,
-    audioTrack: AVAssetTrack,
-    durationSeconds: Double,
-    sampleCount: Int,
-    outputSettings: [String: Any]
-) -> [Double]? {
-    let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
-    output.alwaysCopiesSampleData = false
+final class WaveformGenerationController: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var isCancelled = false
 
-    let reader: AVAssetReader
-    do {
-        reader = try AVAssetReader(asset: asset)
-    } catch {
-        return nil
+    var cancellationRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isCancelled
     }
-    guard reader.canAdd(output) else { return nil }
-    reader.add(output)
-    guard reader.startReading() else { return nil }
 
-    var peaks = Array(repeating: 0.0, count: sampleCount)
-    let bucketScale = Double(sampleCount - 1) / durationSeconds
+    func install(_ process: Process) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isCancelled else { return false }
+        self.process = process
+        return true
+    }
 
-    while let sampleBuffer = output.copyNextSampleBuffer() {
-        guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
-              asbd.mSampleRate > 0 else {
-            continue
+    func finish(_ process: Process) {
+        lock.lock()
+        if self.process === process {
+            self.process = nil
         }
+        lock.unlock()
+    }
 
-        let startTime = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-        if !startTime.isFinite { continue }
-
-        guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
-
-        var length = 0
-        var dataPointer: UnsafeMutablePointer<Int8>?
-        let status = CMBlockBufferGetDataPointer(
-            dataBuffer,
-            atOffset: 0,
-            lengthAtOffsetOut: nil,
-            totalLengthOut: &length,
-            dataPointerOut: &dataPointer
-        )
-        guard status == kCMBlockBufferNoErr, let dataPointer, length > 0 else { continue }
-
-        let channels = max(Int(asbd.mChannelsPerFrame), 1)
-        let bytesPerFrame = max(Int(asbd.mBytesPerFrame), channels * 2)
-        let frameCount = length / bytesPerFrame
-        if frameCount <= 0 { continue }
-
-        let int16Pointer = UnsafeRawPointer(dataPointer).assumingMemoryBound(to: Int16.self)
-        let frameStep = 1.0 / asbd.mSampleRate
-
-        for frame in 0..<frameCount {
-            let sampleTime = startTime + (Double(frame) * frameStep)
-            let bucketFloat = sampleTime * bucketScale
-            let bucket = min(sampleCount - 1, max(0, Int(bucketFloat)))
-
-            var framePeak = 0.0
-            for channel in 0..<channels {
-                let sampleIndex = frame * channels + channel
-                let v = Double(abs(Int(int16Pointer[sampleIndex]))) / Double(Int16.max)
-                framePeak = max(framePeak, v)
-            }
-            peaks[bucket] = max(peaks[bucket], framePeak)
+    func terminateIfCancelled(_ process: Process) {
+        lock.lock()
+        let shouldTerminate = isCancelled
+        lock.unlock()
+        if shouldTerminate, process.isRunning {
+            process.terminate()
         }
     }
 
-    guard reader.status != .failed else { return nil }
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let process = process
+        self.process = nil
+        lock.unlock()
 
-    let maxPeak = peaks.max() ?? 0
-    if maxPeak > 0 {
-        return peaks.map { $0 / maxPeak }
+        if process?.isRunning == true {
+            process?.terminate()
+        }
     }
-    return peaks
 }
 
-func generateWaveformSamples(for url: URL, sampleCount: Int) -> [Double] {
-    guard sampleCount > 0 else { return [] }
+private func waveformDecodeSampleRate(durationSeconds: Double, sampleCount: Int) -> Int {
+    // Preserve several decoded values per displayed bucket without producing a
+    // full-rate PCM copy of a long recording.
+    let desiredRate = (Double(sampleCount) * 8.0) / durationSeconds
+    return [250, 500, 1_000, 2_000, 4_000, 8_000, 12_000]
+        .first(where: { Double($0) >= desiredRate }) ?? 12_000
+}
 
-    let asset = AVURLAsset(url: url)
-    guard let audioTrack = asset.tracks(withMediaType: .audio).first else { return [] }
-
-    let durationSeconds = CMTimeGetSeconds(asset.duration)
-    guard durationSeconds.isFinite && durationSeconds > 0 else { return [] }
-
-    let fullRateOutputSettings: [String: Any] = [
-        AVFormatIDKey: kAudioFormatLinearPCM,
-        AVLinearPCMBitDepthKey: 16,
-        AVLinearPCMIsFloatKey: false,
-        AVLinearPCMIsBigEndianKey: false,
-        AVLinearPCMIsNonInterleaved: false
-    ]
-    // Fast path: request downmixed mono at lower sample-rate to reduce decode/processing load.
-    let reducedRateOutputSettings: [String: Any] = [
-        AVFormatIDKey: kAudioFormatLinearPCM,
-        AVLinearPCMBitDepthKey: 16,
-        AVLinearPCMIsFloatKey: false,
-        AVLinearPCMIsBigEndianKey: false,
-        AVLinearPCMIsNonInterleaved: false,
-        AVSampleRateKey: 12_000,
-        AVNumberOfChannelsKey: 1
-    ]
-
-    if let fast = waveformSamples(
-        for: asset,
-        audioTrack: audioTrack,
-        durationSeconds: durationSeconds,
-        sampleCount: sampleCount,
-        outputSettings: reducedRateOutputSettings
-    ) {
-        return fast
+func generateWaveformSamples(
+    for url: URL,
+    durationSeconds: Double,
+    sampleCount: Int,
+    controller: WaveformGenerationController
+) -> [Double] {
+    guard sampleCount > 0,
+          durationSeconds.isFinite,
+          durationSeconds > 0,
+          !controller.cancellationRequested,
+          let ffmpegURL = ToolDiscoveryUtilities.findExecutable(named: "ffmpeg") else {
+        return []
     }
 
-    // Fallback: keep prior full-rate behavior for assets that reject conversion settings.
-    return waveformSamples(
-        for: asset,
-        audioTrack: audioTrack,
+    let sampleRate = waveformDecodeSampleRate(
         durationSeconds: durationSeconds,
-        sampleCount: sampleCount,
-        outputSettings: fullRateOutputSettings
-    ) ?? []
+        sampleCount: sampleCount
+    )
+    let process = Process()
+    let outputPipe = Pipe()
+    process.executableURL = ffmpegURL
+    process.arguments = [
+        "-hide_banner",
+        "-loglevel", "error",
+        "-nostdin",
+        "-i", url.path,
+        "-map", "0:a:0",
+        "-vn",
+        "-sn",
+        "-dn",
+        "-ac", "1",
+        "-ar", String(sampleRate),
+        "-c:a", "pcm_f32le",
+        "-f", "f32le",
+        "pipe:1"
+    ]
+    process.standardOutput = outputPipe
+    process.standardError = FileHandle.nullDevice
+
+    guard controller.install(process) else { return [] }
+    defer { controller.finish(process) }
+
+    do {
+        try process.run()
+    } catch {
+        return []
+    }
+    controller.terminateIfCancelled(process)
+
+    let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard !controller.cancellationRequested,
+          process.terminationStatus == 0,
+          data.count >= MemoryLayout<Float>.stride else {
+        return []
+    }
+
+    var peaks = Array(repeating: 0.0, count: sampleCount)
+    let expectedFrameCount = max(1, Int((durationSeconds * Double(sampleRate)).rounded(.up)))
+
+    data.withUnsafeBytes { rawBuffer in
+        let samples = rawBuffer.bindMemory(to: Float.self)
+        for index in samples.indices {
+            if index.isMultiple(of: 4_096), controller.cancellationRequested { return }
+            let bucket = min(sampleCount - 1, (index * sampleCount) / expectedFrameCount)
+            let value = Double(abs(samples[index]))
+            if value.isFinite {
+                peaks[bucket] = max(peaks[bucket], value)
+            }
+        }
+    }
+
+    guard !controller.cancellationRequested else { return [] }
+    let maximumPeak = peaks.max() ?? 0
+    guard maximumPeak > 0 else { return peaks }
+    return peaks.map { $0 / maximumPeak }
 }
 
 private func blackPixelRatio(

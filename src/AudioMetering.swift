@@ -1,4 +1,4 @@
-import AVFoundation
+import Accelerate
 import Foundation
 import InOutCore
 import SwiftUI
@@ -35,32 +35,6 @@ private struct AudioMeterFrame: Sendable {
     var rightPeak = 0.0
     var leftRMSPower = 0.0
     var rightRMSPower = 0.0
-}
-
-private struct AudioMeterFrameAccumulator {
-    var leftPeak = 0.0
-    var rightPeak = 0.0
-    var leftSquares = 0.0
-    var rightSquares = 0.0
-    var sampleCount = 0
-
-    mutating func add(left: Double, right: Double) {
-        leftPeak = max(leftPeak, abs(left))
-        rightPeak = max(rightPeak, abs(right))
-        leftSquares += left * left
-        rightSquares += right * right
-        sampleCount += 1
-    }
-
-    var frame: AudioMeterFrame {
-        guard sampleCount > 0 else { return AudioMeterFrame() }
-        return AudioMeterFrame(
-            leftPeak: leftPeak,
-            rightPeak: rightPeak,
-            leftRMSPower: leftSquares / Double(sampleCount),
-            rightRMSPower: rightSquares / Double(sampleCount)
-        )
-    }
 }
 
 private struct AudioMeterWindow: Sendable {
@@ -128,6 +102,7 @@ private final class AudioLoudnessProcessController: @unchecked Sendable {
 
 private final class AudioMeterReadController: @unchecked Sendable {
     private let lock = NSLock()
+    private var process: Process?
     private var isCancelled = false
 
     var cancellationRequested: Bool {
@@ -136,10 +111,40 @@ private final class AudioMeterReadController: @unchecked Sendable {
         return isCancelled
     }
 
+    func install(_ process: Process) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isCancelled else { return false }
+        self.process = process
+        return true
+    }
+
+    func finish(_ process: Process) {
+        lock.lock()
+        if self.process === process {
+            self.process = nil
+        }
+        lock.unlock()
+    }
+
+    func terminateIfCancelled(_ process: Process) {
+        lock.lock()
+        let shouldTerminate = isCancelled
+        lock.unlock()
+        if shouldTerminate, process.isRunning {
+            process.terminate()
+        }
+    }
+
     func cancel() {
         lock.lock()
         isCancelled = true
+        let process = process
+        self.process = nil
         lock.unlock()
+        if process?.isRunning == true {
+            process?.terminate()
+        }
     }
 }
 
@@ -149,182 +154,207 @@ private enum AudioMeterWindowReader {
         startSeconds: Double,
         controller: AudioMeterReadController
     ) throws -> AudioMeterWindow {
-        let asset = AVURLAsset(url: fileURL)
-        guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
-            throw AudioMeterError.noAudioTrack
-        }
-
-        let nativeFloatSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false
-        ]
-        let nativeIntegerSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false
-        ]
-
-        do {
-            return try read(
-                asset: asset,
-                audioTrack: audioTrack,
-                startSeconds: startSeconds,
-                outputSettings: nativeFloatSettings,
-                controller: controller
-            )
-        } catch {
-            guard !controller.cancellationRequested, !(error is CancellationError) else {
-                throw CancellationError()
-            }
-            return try read(
-                asset: asset,
-                audioTrack: audioTrack,
-                startSeconds: startSeconds,
-                outputSettings: nativeIntegerSettings,
-                controller: controller
-            )
-        }
-    }
-
-    private static func read(
-        asset: AVURLAsset,
-        audioTrack: AVAssetTrack,
-        startSeconds: Double,
-        outputSettings: [String: Any],
-        controller: AudioMeterReadController
-    ) throws -> AudioMeterWindow {
-        let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
-        output.alwaysCopiesSampleData = false
-
-        let reader = try AVAssetReader(asset: asset)
-        guard reader.canAdd(output) else {
-            throw AudioMeterError.meterDataUnavailable("The audio track could not be decoded.")
-        }
-        reader.add(output)
-        reader.timeRange = CMTimeRange(
-            start: CMTime(seconds: startSeconds, preferredTimescale: 600),
-            duration: CMTime(seconds: audioMeterWindowDurationSeconds, preferredTimescale: 600)
-        )
         guard !controller.cancellationRequested else {
             throw CancellationError()
         }
-        guard reader.startReading() else {
+
+        guard let ffmpegURL = ToolDiscoveryUtilities.findExecutable(named: "ffmpeg") else {
+            throw AudioMeterError.ffmpegUnavailable
+        }
+
+        let process = Process()
+        process.executableURL = ffmpegURL
+        process.arguments = [
+            "-hide_banner",
+            "-loglevel", "error",
+            "-nostdin",
+            "-ss", String(format: "%.6f", startSeconds),
+            "-t", String(format: "%.6f", audioMeterWindowDurationSeconds),
+            "-i", fileURL.path,
+            "-map", "0:a:0",
+            "-vn",
+            "-sn",
+            "-dn",
+            "-ac", "2",
+            "-c:a", "pcm_f32le",
+            "-f", "wav",
+            "pipe:1"
+        ]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = FileHandle.nullDevice
+
+        guard controller.install(process) else {
+            throw CancellationError()
+        }
+        defer { controller.finish(process) }
+
+        do {
+            try process.run()
+        } catch {
+            throw AudioMeterError.meterDataUnavailable(error.localizedDescription)
+        }
+        controller.terminateIfCancelled(process)
+
+        let waveData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        guard !controller.cancellationRequested else {
+            throw CancellationError()
+        }
+        guard process.terminationStatus == 0 else {
             throw AudioMeterError.meterDataUnavailable(
-                reader.error?.localizedDescription ?? "The audio reader could not start."
+                "The audio track could not be decoded."
             )
         }
 
+        let wave = try parseFloatWave(waveData)
         let frameCount = Int(ceil(audioMeterWindowDurationSeconds * audioMeterFramesPerSecond)) + 1
-        var accumulators = Array(repeating: AudioMeterFrameAccumulator(), count: frameCount)
-        var decodedSampleData = false
+        let bytesPerSample = MemoryLayout<Float>.size
+        let bytesPerAudioFrame = wave.channelCount * bytesPerSample
+        let sampleCount = wave.sampleData.count / bytesPerAudioFrame
+        guard sampleCount > 0 else {
+            throw AudioMeterError.meterDataUnavailable("FFmpeg returned no audio samples.")
+        }
 
-        while !controller.cancellationRequested,
-              let sampleBuffer = output.copyNextSampleBuffer() {
-            guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
-                  let stream = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
-                  stream.mSampleRate > 0,
-                  let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
-                continue
-            }
-
-            let bufferStart = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-            guard bufferStart.isFinite else { continue }
-
-            var byteCount = 0
-            var dataPointer: UnsafeMutablePointer<Int8>?
-            let status = CMBlockBufferGetDataPointer(
-                dataBuffer,
-                atOffset: 0,
-                lengthAtOffsetOut: nil,
-                totalLengthOut: &byteCount,
-                dataPointerOut: &dataPointer
-            )
-            guard status == kCMBlockBufferNoErr,
-                  let dataPointer,
-                  byteCount > 0 else {
-                continue
-            }
-
-            let channels = max(1, Int(stream.mChannelsPerFrame))
-            let isFloat32 = stream.mBitsPerChannel == 32 &&
-                stream.mFormatFlags & kAudioFormatFlagIsFloat != 0
-            let isSignedInt16 = stream.mBitsPerChannel == 16 &&
-                stream.mFormatFlags & kAudioFormatFlagIsSignedInteger != 0
-            let bytesPerSample: Int
-            if isFloat32 {
-                bytesPerSample = MemoryLayout<Float>.size
-            } else if isSignedInt16 {
-                bytesPerSample = MemoryLayout<Int16>.size
-            } else {
-                continue
-            }
-            guard stream.mFormatID == kAudioFormatLinearPCM,
-                  stream.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0,
-                  stream.mFormatFlags & kAudioFormatFlagIsBigEndian == 0 else {
-                continue
-            }
-
-            let bytesPerFrame = max(Int(stream.mBytesPerFrame), channels * bytesPerSample)
-            let samplesInBuffer = byteCount / bytesPerFrame
-            guard samplesInBuffer > 0 else { continue }
-
-            decodedSampleData = true
-            let rawSamples = UnsafeRawPointer(dataPointer)
-            let secondsPerSample = 1.0 / stream.mSampleRate
-
-            for sampleIndex in 0..<samplesInBuffer {
-                let sampleTime = bufferStart + (Double(sampleIndex) * secondsPerSample)
-                let frameIndex = Int((sampleTime - startSeconds) * audioMeterFramesPerSecond)
-                guard accumulators.indices.contains(frameIndex) else { continue }
-
-                let frameOffset = sampleIndex * bytesPerFrame
-                let left: Double
-                let right: Double
-                if isFloat32 {
-                    left = Double(rawSamples.load(fromByteOffset: frameOffset, as: Float.self))
-                    right = channels > 1
-                        ? Double(rawSamples.load(fromByteOffset: frameOffset + bytesPerSample, as: Float.self))
-                        : left
-                } else {
-                    left = Double(rawSamples.load(fromByteOffset: frameOffset, as: Int16.self)) / 32_768.0
-                    right = channels > 1
-                        ? Double(rawSamples.load(fromByteOffset: frameOffset + bytesPerSample, as: Int16.self)) / 32_768.0
-                        : left
+        var leftSamples = Array(repeating: Float.zero, count: sampleCount)
+        var rightSamples = Array(repeating: Float.zero, count: sampleCount)
+        waveData.withUnsafeBytes { rawBuffer in
+            leftSamples.withUnsafeMutableBufferPointer { leftBuffer in
+                rightSamples.withUnsafeMutableBufferPointer { rightBuffer in
+                    var split = DSPSplitComplex(
+                        realp: leftBuffer.baseAddress!,
+                        imagp: rightBuffer.baseAddress!
+                    )
+                    let interleaved = rawBuffer.baseAddress!
+                        .advanced(by: wave.sampleData.lowerBound)
+                        .assumingMemoryBound(to: DSPComplex.self)
+                    vDSP_ctoz(interleaved, 2, &split, 1, vDSP_Length(sampleCount))
                 }
-                accumulators[frameIndex].add(left: left, right: right)
             }
         }
 
-        if controller.cancellationRequested {
-            // AVAssetReader teardown must happen on the same thread that is
-            // copying buffers. Cross-thread cancelReading can race AVFoundation.
-            if reader.status == .reading {
-                reader.cancelReading()
+        var frames = Array(repeating: AudioMeterFrame(), count: frameCount)
+        leftSamples.withUnsafeBufferPointer { leftBuffer in
+            rightSamples.withUnsafeBufferPointer { rightBuffer in
+                for frameIndex in frames.indices {
+                    if frameIndex.isMultiple(of: 64), controller.cancellationRequested {
+                        break
+                    }
+                    let sampleStart = Int(
+                        floor(Double(frameIndex) * wave.sampleRate / audioMeterFramesPerSecond)
+                    )
+                    let sampleEnd = min(
+                        sampleCount,
+                        Int(floor(Double(frameIndex + 1) * wave.sampleRate / audioMeterFramesPerSecond))
+                    )
+                    guard sampleStart < sampleEnd else { break }
+
+                    let count = vDSP_Length(sampleEnd - sampleStart)
+                    var leftPeak = Float.zero
+                    var rightPeak = Float.zero
+                    var leftRMSPower = Float.zero
+                    var rightRMSPower = Float.zero
+                    vDSP_maxmgv(leftBuffer.baseAddress! + sampleStart, 1, &leftPeak, count)
+                    vDSP_maxmgv(rightBuffer.baseAddress! + sampleStart, 1, &rightPeak, count)
+                    vDSP_measqv(leftBuffer.baseAddress! + sampleStart, 1, &leftRMSPower, count)
+                    vDSP_measqv(rightBuffer.baseAddress! + sampleStart, 1, &rightRMSPower, count)
+                    frames[frameIndex] = AudioMeterFrame(
+                        leftPeak: Double(leftPeak),
+                        rightPeak: Double(rightPeak),
+                        leftRMSPower: Double(leftRMSPower),
+                        rightRMSPower: Double(rightRMSPower)
+                    )
+                }
             }
+        }
+
+        guard !controller.cancellationRequested else {
             throw CancellationError()
-        }
-        if reader.status == .cancelled {
-            throw CancellationError()
-        }
-        guard reader.status != .failed else {
-            throw AudioMeterError.meterDataUnavailable(
-                reader.error?.localizedDescription ?? "The audio reader failed."
-            )
-        }
-        guard decodedSampleData else {
-            throw AudioMeterError.meterDataUnavailable("No audio samples were available in this range.")
         }
 
         return AudioMeterWindow(
             startSeconds: startSeconds,
             framesPerSecond: audioMeterFramesPerSecond,
-            frames: accumulators.map(\.frame)
+            frames: frames
         )
+    }
+
+    private struct FloatWave {
+        let sampleRate: Double
+        let channelCount: Int
+        let sampleData: Range<Int>
+    }
+
+    private static func parseFloatWave(_ data: Data) throws -> FloatWave {
+        guard data.count >= 12,
+              chunkIdentifier(in: data, at: 0) == "RIFF",
+              chunkIdentifier(in: data, at: 8) == "WAVE" else {
+            throw AudioMeterError.meterDataUnavailable("FFmpeg returned invalid audio data.")
+        }
+
+        var sampleRate: Double?
+        var channelCount: Int?
+        var sampleData: Range<Int>?
+        var offset = 12
+
+        while offset + 8 <= data.count {
+            let identifier = chunkIdentifier(in: data, at: offset)
+            let declaredSize = readUInt32LE(in: data, at: offset + 4)
+            let contentStart = offset + 8
+            let availableSize = max(0, data.count - contentStart)
+            let contentSize = declaredSize == UInt32.max
+                ? availableSize
+                : min(Int(declaredSize), availableSize)
+
+            if identifier == "fmt ", contentSize >= 16 {
+                let format = readUInt16LE(in: data, at: contentStart)
+                let channels = Int(readUInt16LE(in: data, at: contentStart + 2))
+                let rate = Double(readUInt32LE(in: data, at: contentStart + 4))
+                let bitsPerSample = readUInt16LE(in: data, at: contentStart + 14)
+                guard format == 3, channels == 2, rate > 0, bitsPerSample == 32 else {
+                    throw AudioMeterError.meterDataUnavailable(
+                        "FFmpeg returned an unsupported PCM format."
+                    )
+                }
+                sampleRate = rate
+                channelCount = channels
+            } else if identifier == "data" {
+                sampleData = contentStart..<(contentStart + contentSize)
+                break
+            }
+
+            guard declaredSize != UInt32.max else { break }
+            offset = contentStart + Int(declaredSize) + (Int(declaredSize) & 1)
+        }
+
+        guard let sampleRate,
+              let channelCount,
+              let sampleData,
+              !sampleData.isEmpty else {
+            throw AudioMeterError.meterDataUnavailable("FFmpeg returned no audio samples.")
+        }
+        return FloatWave(
+            sampleRate: sampleRate,
+            channelCount: channelCount,
+            sampleData: sampleData
+        )
+    }
+
+    private static func chunkIdentifier(in data: Data, at offset: Int) -> String? {
+        guard offset >= 0, offset + 4 <= data.count else { return nil }
+        return String(data: data[offset..<(offset + 4)], encoding: .ascii)
+    }
+
+    private static func readUInt16LE(in data: Data, at offset: Int) -> UInt16 {
+        UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+    }
+
+    private static func readUInt32LE(in data: Data, at offset: Int) -> UInt32 {
+        UInt32(data[offset]) |
+            (UInt32(data[offset + 1]) << 8) |
+            (UInt32(data[offset + 2]) << 16) |
+            (UInt32(data[offset + 3]) << 24)
     }
 }
 
