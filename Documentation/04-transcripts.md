@@ -8,7 +8,7 @@ order: 4
 
 ## Generate a transcript
 
-Open the transcript sidebar in Clip, then choose Generate Transcript. In/Out uses Parakeet for fast, word-timed transcription. Starting AI Suggestions before a transcript exists can generate it automatically first.
+Open the transcript sidebar in Clip, then choose Generate Transcript. Transcription runs on your Mac and currently supports English. Starting AI Suggestions before a transcript exists can generate it automatically first.
 
 > **Note:** Wording and timing can move slightly while transcription is still in progress.
 
@@ -37,23 +37,33 @@ Open the transcript sidebar in Clip, then choose Generate Transcript. In/Out use
 
 ## Clean up a transcript
 
-After transcription finishes, click **Clean Up** beside View and Export to open its popover. Choose a provider, check the configured model, and optionally add names and episode context. Click **Start Cleanup** to run in the background. The popover stays open and updates to show progress and results; click outside it to dismiss. Provider selection is remembered; context is retained for the current source.
+1. After transcription finishes, choose Clean Up in the transcript toolbar.
+2. Choose a provider. Optionally add names or episode context to help with spelling.
+3. Choose Start Cleanup. You can keep working while it runs; cancel from the activity area if needed.
+4. Choose Review Corrections when results are ready. Play a passage to check it, then select and apply the changes you want. Apply All accepts every suggestion; Discard Results dismisses them.
 
-Hold Option to change the button to **Quick Clean Up**. Clicking starts immediately using the saved settings and automatically applies all verified corrections when finished. You can release Option after clicking. A secondary **Quick Clean Up** button in the setup popover offers the same automatic acceptance using the provider and context shown there. Quick mode is available when no request is running and no corrections await review. Pending corrections continue to open their results popover, even while Option is held.
+Cleanup focuses on names and recognition errors while preserving the speaker's wording and original timing. Corrected text is used in transcript and caption exports. Review suggestions for accuracy.
 
-The bottom activity area shows progress and Cancel Cleanup, alongside other work. Opening the cleanup popover while running shows a brief progress summary and cancellation; dismissing it leaves the task running. A single full-transcript request shows indeterminate progress until the model responds.
+> **Note:** Apple Intelligence runs locally. Cloud providers receive transcript text and any context you supply, using your API key. API usage is billed separately from consumer chat subscriptions.
 
-When results are ready, the toolbar button reads **Review N Corrections**. Its popover offers **Review Corrections**, which opens the sidebar’s Corrections tab, or **Apply All**, which applies every suggestion. These actions keep the popover open; applying corrections changes it to the after-run options. Discard Results clears pending suggestions. In the Corrections tab, each suggestion shows original and corrected wording, its timestamp, and Play Passage. Check the changes you want and apply them; Review Later keeps your selections.
+## Quick Clean Up
 
-After application, confirmation and **Undo** appear below the transcript. Opening **Clean Up** again shows the applied count, **Undo Cleanup**, **Run Again…** to return to setup, and **Restore Original Transcript** below a divider. Changing or regenerating the source clears outdated cleanup work.
+Hold `⌥` and click Clean Up to run with your saved settings and automatically apply corrections. You can also choose Quick Clean Up in the cleanup popover. Use this when you do not need to review each suggestion first.
 
-Cloud cleanup sends the full transcript in one request when it fits the request budget, so the model can use context from throughout the recording. Oversized transcripts are split into larger sections processed up to three at a time. OpenAI receives readable transcript paragraphs and returns compact phrase corrections; the app resolves the timing anchors locally. Cleanup disables extra reasoning on supported OpenAI models. If a response is incomplete or malformed, the app retries two smaller correction ranges once while retaining transcript context. Suggestions that cannot be matched exactly are skipped and counted in the Corrections tab. Request timings, token usage, and retries appear in the Activity Console. Apple Intelligence uses small sections processed locally.
+Pending corrections must be applied or discarded before starting another cleanup.
 
-In the Corrections tab, you can play a passage, select individual changes, and apply the selected corrections. Cleanup prioritizes names, places, organizations, and other proper nouns and also proposes clear speech-recognition fixes. It preserves the speaker's wording, grammar, repetitions, and fillers. A local spelling-similarity check rejects substantially different replacements before review, helping prevent substitutions of a different person, organization, or title. This check is a safeguard rather than a guarantee; review proposals before applying them. Optional context can help identify intended spellings.
+## Undo or restore the original
 
-Corrections keep the original word or phrase time spans. Caption line breaks and grouping may change to fit corrected text. Both readable transcripts and exported captions use the corrections.
+Choose Undo below the transcript after applying corrections. You can also open Clean Up and choose Undo Cleanup or Restore Original Transcript, including after reopening the video.
 
-The original transcript is saved with the corrected version. Open the cleanup popover and choose Restore Original Transcript to revert, including after reopening the video. Apple Intelligence runs locally; cloud providers receive transcript text and the optional context using your API key.
+The original transcript is kept with the corrected version. Corrections preserve word timing, though caption line breaks may change.
+
+## If cleanup needs attention
+
+- Check the provider and model in the cleanup popover. Cloud providers need a working API key in Settings > AI.
+- Add names or episode context if spellings are wrong, then run cleanup again.
+- Some proposed changes may be skipped if they cannot be matched to the original text. Review the remaining suggestions in the Corrections tab.
+- For a failed request, check Inspect > Console for the error. Remove private transcript text and credentials before sharing a report.
 
 ## Reopen saved transcripts
 

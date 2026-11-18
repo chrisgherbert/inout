@@ -29,3 +29,11 @@ Open Framing in Advanced video export to choose an output aspect ratio. Fit keep
 Use Convert when you need the complete file rather than the current In/Out selection. Video uses the same options as Advanced clip export; Audio Only uses the same options as Audio Only clip export.
 
 Hold `⌥` while choosing Export Video or Export Audio to save immediately beside the source file without opening a save dialog.
+
+## File formats
+
+- Video: MP4, MOV, MKV, and WebM. Fast export uses MP4 or MOV and requires compatible source streams; Advanced export re-encodes the video.
+- Audio Only: MP3, M4A, or WAV.
+- Transcript and caption files: export Text, Markdown, CSV, JSON, SRT, or WebVTT from the transcript sidebar.
+
+Playback depends on the source codec. For URL downloads, choose Best Compatible when you need a file ready for playback.

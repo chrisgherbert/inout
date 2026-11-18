@@ -218,6 +218,22 @@ def section_html(topic_id: str, section: dict) -> str:
         parts.append("</ul>")
     if section["note"]:
         parts.append(f'<aside class="help-note"><strong>Note</strong><p>{render_inline(section["note"])}</p></aside>')
+    if section_id == "transcript-clean-up-a-transcript":
+        parts.append(
+            '<figure class="help-screenshot">'
+            '<a href="../assets/transcript-corrections.png" aria-label="View full-size corrections screenshot">'
+            '<img src="../assets/transcript-corrections.png" width="735" height="678" loading="lazy" '
+            'alt="Corrections tab showing selected suggestions, original and corrected wording, Play Passage, and Apply Corrections controls" />'
+            '</a><figcaption>Play a passage to check a correction. Uncheck any changes you do not want to apply.</figcaption></figure>'
+        )
+    if section_id == "export-change-the-frame":
+        parts.append(
+            '<figure class="help-screenshot help-screenshot-narrow">'
+            '<a href="../assets/vertical-framing.png" aria-label="View full-size framing screenshot">'
+            '<img src="../assets/vertical-framing.png" width="437" height="623" loading="lazy" '
+            'alt="Framing options with 9:16 aspect ratio, Fill mode, and a custom crop preview selected" />'
+            '</a><figcaption>Choose 9:16 for a vertical clip. In Fill mode, drag the preview to adjust the crop.</figcaption></figure>'
+        )
     parts.append(f'<a class="section-anchor" href="#{html.escape(section_id)}" aria-label="Link to {html.escape(section["title"])}">#</a>')
     parts.append("</section>")
     return "\n".join(parts)
@@ -320,7 +336,7 @@ def render_site(documentation: dict) -> str:
     </aside>
     <div class="help-content">{"".join(articles)}</div>
   </main>
-  <footer class="help-footer"><a href="../index.html">In/Out for macOS</a><a href="https://github.com/chrisgherbert/inout/releases" target="_blank" rel="noopener noreferrer">Release History</a></footer>
+  <footer class="help-footer"><a href="../index.html">In/Out for macOS</a><nav aria-label="Help and support"><a href="https://github.com/chrisgherbert/inout/issues">Report a problem</a><a href="https://github.com/chrisgherbert/inout/releases">Release notes</a></nav></footer>
   <script id="help-search-data" type="application/json">{encoded_search}</script>
   <script src="./help.js"></script>
 </body>

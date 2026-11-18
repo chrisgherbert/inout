@@ -1,10 +1,11 @@
-# Website Assets
+# Website assets
 
-- `icon.png`: site/app icon used in header.
-- `screenshot.png`: current app overview used on the product page.
-- `screenshot-placeholder.svg`: retained placeholder artwork.
+- `icon.png`: app icon used in the site header.
+- `screenshot.png`: current Clip workspace overview, supplied November 18, 2026.
+- `transcript-corrections.png`: cleanup review, shown in website Help.
+- `vertical-framing.png`: 9:16 framing and crop preview, shown in website Help.
+- `screenshot-placeholder.svg`: unused placeholder artwork.
 
-To update the app screenshot:
+All screenshots were supplied November 18, 2026. Captions are explained in text; no additional screenshot is needed.
 
-1. Export your screenshot to PNG (recommended width 1600+).
-2. Replace `screenshot.png` while keeping the same filename, or update `website/index.html`.
+When replacing screenshots, use the current release and avoid sensitive information. Keep the full window for the overview; focused captures work well for Help. Update the cache version in `website/index.html` when replacing the overview.

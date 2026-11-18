@@ -8,6 +8,8 @@ order: 9
 
 ## Install In/Out
 
+In/Out is free to download and use. Optional cloud AI usage is billed by your provider.
+
 1. Open the downloaded In-Out DMG file.
 2. Drag In-Out.app onto the Applications folder shown in the installer window.
 3. Open In/Out from Applications. You can eject the installer disk image afterward.

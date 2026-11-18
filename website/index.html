@@ -3,207 +3,66 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>In/Out for macOS - Clip, Transcribe, and Review Video Faster</title>
-  <meta name="description" content="In/Out is a fast macOS app for reviewing long videos, searching local transcripts, finding useful moments, and exporting precise clips without setting up an editing project." />
+  <title>In/Out for Mac — Clip, transcribe, and convert video</title>
+  <meta name="description" content="Find quotes in local transcripts, trim video, export captions, and convert files. In/Out is a video and audio utility for Apple silicon Macs." />
   <link rel="icon" href="./assets/icon.png" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div class="page-bg"></div>
-
+  <a class="skip-link" href="#top">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="#top" aria-label="In/Out home">
-      <img src="./assets/icon.png" alt="" class="brand-icon" />
-      <span class="brand-name">In/Out</span>
-    </a>
+    <a class="brand" href="#top" aria-label="In/Out home"><img src="./assets/icon.png" alt="" class="brand-icon" /><span class="brand-name">In/Out</span></a>
     <nav class="header-nav" aria-label="Main navigation">
-      <a href="#how-it-works">How It Works</a>
-      <a href="#workflows">What You Can Do</a>
-      <a href="./help/index.html">Help</a>
-      <a href="#download">Download</a>
+      <a href="#workflows">Features</a><a href="./help/index.html">Help</a><a href="https://github.com/chrisgherbert/inout/issues">Support</a><a href="#download">Download</a>
     </nav>
   </header>
-
   <main id="top">
-    <section class="hero">
-      <p class="eyebrow">Fast video review for macOS</p>
-      <h1>Download, clip, transcribe, and convert videos.</h1>
-      <p class="hero-copy">
-        Open a video or download one from a supported URL. Review it on a visual timeline,
-        search what was said, set precise In and Out points, and export the result without
-        creating a project in a full video editor.
-      </p>
-      <div class="hero-actions">
-        <a id="download-btn" class="btn-primary" href="#" target="_blank" rel="noopener noreferrer">Download In/Out for macOS</a>
-        <a class="btn-secondary" href="#how-it-works">See How It Works</a>
-      </div>
-      <p id="release-meta" class="release-meta">Resolving latest release...</p>
-      <ul class="trust-list" aria-label="Product details">
-        <li>Fast local transcription</li>
-        <li>Apple silicon</li>
-        <li>Notarized for macOS</li>
-      </ul>
-    </section>
-
-    <section id="screenshot" class="screenshot-section panel panel-featured">
-      <div class="section-heading">
-        <h2>Review, transcribe, and export in the same place</h2>
-        <p class="section-copy">
-          Everything stays connected to the same timeline, so you can move from finding a moment
-          to delivering it quickly.
-        </p>
-      </div>
-      <div class="screenshot-frame">
-        <img src="./assets/screenshot.png?v=20260731" alt="In/Out showing a video, searchable transcript, thumbnail timeline, waveform, selected range, and export controls" />
+    <section class="hero" aria-labelledby="hero-title">
+      <p class="eyebrow">In/Out for macOS</p>
+      <h1 id="hero-title">Clip, transcribe, and convert video.</h1>
+      <div class="hero-details">
+        <p class="hero-copy">Open a recording or download a video, search its transcript, and export the section you need. Convert files, add captions, and check for black frames and silence.</p>
+        <div class="hero-download">
+          <a id="download-btn" class="btn-primary" href="https://github.com/chrisgherbert/inout/releases/latest">Download for Mac</a>
+          <p class="requirements-inline">Free to download and use<br />macOS 14 or later · Apple silicon</p>
+          <p id="release-meta" class="release-meta" aria-live="polite"><a href="https://github.com/chrisgherbert/inout/releases/latest">Latest release</a></p>
+        </div>
       </div>
     </section>
-
-    <section id="how-it-works" class="section-block">
-      <div class="section-heading narrow-heading">
-        <p class="section-kicker">How it works</p>
-        <h2>Find the moment that matters</h2>
-      </div>
-      <div class="steps-grid">
-        <article class="step-card">
-          <span class="step-number">1</span>
-          <h3>Open the source</h3>
-          <p>Drag in a video or audio file, choose one from your Mac, or paste a supported video URL.</p>
-        </article>
-        <article class="step-card">
-          <span class="step-number">2</span>
-          <h3>Find the moment</h3>
-          <p>Scrub the visual timeline, search the transcript, add markers, or ask AI Suggestions to find useful points and ranges.</p>
-        </article>
-        <article class="step-card">
-          <span class="step-number">3</span>
-          <h3>Export what you need</h3>
-          <p>Set In and Out points, then make a quick clip or customize the result for your next step.</p>
-        </article>
-      </div>
-    </section>
-
-    <section id="workflows" class="section-block">
-      <div class="section-heading narrow-heading">
-        <h2>Review, transcribe, convert, and check videos</h2>
-        <p class="section-copy">
-          In/Out is designed for producers, journalists, researchers, and anyone who regularly turns long recordings into useful clips and text.
-        </p>
-      </div>
+    <figure class="product-preview">
+      <img src="./assets/screenshot.png?v=20261118" width="1600" alt="In/Out with video playback, a searchable transcript, and a timeline for selecting a clip" />
+      <figcaption>The Clip workspace includes video playback, a searchable transcript, and a timeline for trimming.</figcaption>
+    </figure>
+    <aside class="release-strip" aria-labelledby="release-title">
+      <div><p class="eyebrow">Recently added</p><h2 id="release-title">Transcript cleanup</h2></div>
+      <p>Correct names and recognition errors, review the changes, and keep caption timing. You can always restore the original.</p>
+      <a href="./help/index.html#transcript-clean-up-a-transcript">How cleanup works</a>
+    </aside>
+    <section id="workflows" class="section-block" aria-labelledby="workflows-title">
+      <div class="section-heading"><h2 id="workflows-title">Video and audio tools</h2><p class="section-copy">Trim recordings, work with transcripts, and prepare files without an editing project.</p></div>
       <div class="workflow-grid">
-        <article class="workflow-card">
-          <p class="card-label">Clip</p>
-          <h3>Make precise clips</h3>
-          <p>Make precise clips without creating a project, naming a project, or wondering where the project went.</p>
-          <ul>
-            <li>Export a clip in seconds</li>
-            <li>Reframe, add captions, or export audio</li>
-          </ul>
-        </article>
-
-        <article class="workflow-card">
-          <p class="card-label">Transcript</p>
-          <h3>Find what was said, not just where it happened</h3>
-          <p>Search a locally generated transcript, follow along with playback, and click any passage to jump to that moment.</p>
-          <ul>
-            <li>Choose compact lines or readable paragraphs</li>
-            <li>Copy passages or export transcripts and captions</li>
-          </ul>
-        </article>
-
-        <article class="workflow-card workflow-card-accent">
-          <p class="card-label">AI Suggestions</p>
-          <h3>Turn analysis into something you can use</h3>
-          <p>Find highlights, topic changes, possible ad breaks, clip-worthy ranges, YouTube chapters, or written descriptions.</p>
-          <ul>
-            <li>Suggestions stay linked to the video timeline</li>
-            <li>Create custom tasks and refine the results</li>
-          </ul>
-          <p class="card-note">Optional. Cloud AI features require your own provider account.</p>
-        </article>
-
-        <article class="workflow-card">
-          <p class="card-label">Convert</p>
-          <h3>Prepare complete files for the next step</h3>
-          <p>Convert a complete video or audio file without creating an editing project.</p>
-          <ul>
-            <li>Resize and reframe for different destinations</li>
-            <li>Convert audio or add burned-in captions</li>
-          </ul>
-        </article>
-
-        <article class="workflow-card">
-          <p class="card-label">Analyze</p>
-          <h3>Catch common problems before delivery</h3>
-          <p>Scan a video for black frames, silence gaps, and profanity, then jump directly to each result for review.</p>
-        </article>
-
-        <article class="workflow-card">
-          <p class="card-label">Open &amp; Inspect</p>
-          <h3>Bring videos in and understand what you have</h3>
-          <p>Open local files or supported web links, then check the essential details about the video.</p>
-        </article>
+        <article class="workflow-card"><h3>Search and export transcripts</h3><p>Generate an English transcript on your Mac. Search for a phrase, jump to the passage, and copy the text or export a clip. Saved transcripts reopen with the source file.</p><a href="./help/index.html#transcript">Transcripts and search</a></article>
+        <article class="workflow-card"><h3>Trim clips and add captions</h3><p>Set In and Out points, choose a vertical or widescreen frame, and burn in captions. Use Fast export when you only need a trim without re-encoding.</p><a href="./help/index.html#export">Clips, framing, and captions</a></article>
+        <article class="workflow-card"><h3>Get AI suggestions</h3><p>Use optional AI to suggest excerpts, mark topic changes, or draft YouTube chapters. Choose Apple Intelligence or connect your own cloud API key.</p><a href="./help/index.html#ai-suggestions">AI options and setup</a></article>
+        <article class="workflow-card"><h3>Convert, check, and inspect</h3><p>Convert a complete file or save audio only. Scan for black frames, silence, possible bad edits, and profanity, or inspect codecs and other file details.</p><a href="./help/index.html#analyze">Video checks</a><a href="./help/index.html#export-convert-the-complete-video">File conversion</a></article>
       </div>
     </section>
-
-    <section class="focus-section">
-      <div>
-        <h2>Common video work without a full editing project</h2>
-      </div>
-      <p>
-        In/Out handles the work that is too involved for QuickTime and too small to justify opening a full editor.
-      </p>
+    <section class="section-block essentials" aria-labelledby="essentials-title">
+      <div class="section-heading"><h2 id="essentials-title">Requirements and formats</h2></div>
+      <dl class="details-list">
+        <div><dt>Mac requirements</dt><dd>Apple silicon and macOS 14 Sonoma or later. Apple Intelligence needs a supported Mac, macOS 26 or later, and Apple Intelligence enabled.</dd></div>
+        <div><dt>Local and cloud AI</dt><dd>Transcription and Apple Intelligence run on your Mac. Optional cloud cleanup and suggestions send transcript text and any context you provide directly to your chosen provider.</dd></div>
+        <div><dt>API access</dt><dd>OpenAI, Claude, and Gemini require your own API key. Provider usage is billed separately from consumer chat subscriptions. No cloud account is needed for clipping, conversion, or local transcription.</dd></div>
+        <div><dt>Transcripts and captions</dt><dd>Transcription currently supports English. Export Text, Markdown, CSV, JSON, SRT, or WebVTT. Cleanup preserves timing; review corrections before using them.</dd></div>
+        <div><dt>Video and audio</dt><dd>Export MP4, MOV, MKV, or WebM video, or MP3, M4A, or WAV audio. Playback and Fast export depend on the source codec. <a href="./help/index.html#export">See export options</a>.</dd></div>
+      </dl>
     </section>
-
-    <section id="requirements" class="requirements">
-      <div class="requirements-copy">
-        <h2>Built for current Macs</h2>
-        <ul>
-          <li>macOS 14 Sonoma or later</li>
-          <li>Apple silicon Mac</li>
-        </ul>
-      </div>
-      <div class="assurance-callout">
-        <h3>Local by default</h3>
-        <p>
-          Transcription runs on your Mac. AI features are optional and only send transcript content
-          to your chosen provider when you use them.
-        </p>
-      </div>
-    </section>
-
-    <section id="download" class="download">
-      <div class="download-copy">
-        <h2>Install In/Out on your Mac</h2>
-        <p class="section-copy">A notarized installer for Apple silicon Macs.</p>
-        <a id="download-btn-secondary" class="btn-primary bottom-download-btn" href="#" target="_blank" rel="noopener noreferrer">Download In/Out for macOS</a>
-      </div>
-      <div class="install-guide">
-        <ol class="install-steps">
-          <li><span>Download and open the DMG.</span></li>
-          <li><span>Drag In/Out into the Applications folder shown in the installer.</span></li>
-          <li><span>Open In/Out from Applications.</span></li>
-        </ol>
-        <p class="download-note">
-          The DMG is only needed for the first installation. Future updates install from within In/Out.
-        </p>
-      </div>
+    <section id="download" class="download" aria-labelledby="download-title">
+      <div><h2 id="download-title">Download In/Out</h2><a id="download-btn-secondary" class="btn-primary" href="https://github.com/chrisgherbert/inout/releases/latest">Download for Mac</a><p class="download-note">Free to download and use · Notarized for macOS</p></div>
+      <div><ol class="install-steps"><li>Download and open the DMG.</li><li>Drag In-Out into Applications.</li><li>Open In/Out from Applications, then eject the installer.</li></ol><p class="download-note">Already installed? Choose In/Out &gt; Check for Updates.</p><div class="help-links"><a href="./help/index.html#updates">Installation help</a><a href="./help/index.html#shortcuts">Keyboard shortcuts</a></div></div>
     </section>
   </main>
-
-  <footer class="site-footer">
-    <p>In/Out for macOS</p>
-    <p class="footer-links">
-      <a href="./help/index.html">Help</a>
-      <a id="releases-link" href="#" target="_blank" rel="noopener noreferrer">Release History</a>
-      <a id="repo-link" href="#" target="_blank" rel="noopener noreferrer" aria-label="In/Out on GitHub">
-        <svg class="github-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-          <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.63 2.29 6.71 5.47 7.8.4.08.55-.18.55-.39 0-.19-.01-.82-.01-1.48-2.01.45-2.53-.51-2.69-.98-.09-.25-.48-1.03-.82-1.24-.28-.16-.68-.57-.01-.58.63-.01 1.08.59 1.23.84.72 1.24 1.87.89 2.33.68.07-.54.28-.89.5-1.09-1.78-.21-3.64-.92-3.64-4.08 0-.9.31-1.64.82-2.22-.08-.21-.36-1.06.08-2.2 0 0 .67-.22 2.2.85.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.07 2.2-.85 2.2-.85.44 1.14.16 1.99.08 2.2.51.58.82 1.31.82 2.22 0 3.17-1.87 3.87-3.65 4.08.29.26.54.76.54 1.54 0 1.11-.01 2-.01 2.28 0 .21.15.47.55.39A8.2 8.2 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z"></path>
-        </svg>
-        <span>GitHub</span>
-      </a>
-    </p>
-  </footer>
-
+  <footer class="site-footer"><p>In/Out for macOS</p><nav class="footer-links" aria-label="More information"><a href="./help/index.html">Help</a><a href="https://github.com/chrisgherbert/inout/issues">Report a problem</a><a id="releases-link" href="https://github.com/chrisgherbert/inout/releases">Release notes</a><a id="repo-link" href="https://github.com/chrisgherbert/inout">GitHub</a></nav></footer>
   <script src="./site.js"></script>
 </body>
 </html>

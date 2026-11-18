@@ -1,6 +1,6 @@
-.help-page { background: #070809; }
+.help-page { background: var(--bg); }
 .help-page .page-bg {
-  background: linear-gradient(180deg, #0a0d11 0%, #070809 34%, #070809 100%);
+  background: none;
 }
 .help-site-header {
   max-width: 1240px;
@@ -34,17 +34,17 @@
   overflow: auto;
   padding: 34px 22px 34px 0;
   border-right: 1px solid var(--line);
-  scrollbar-color: #46505d transparent;
+  scrollbar-color: #66675e transparent;
   scrollbar-width: thin;
 }
 .help-sidebar::-webkit-scrollbar { width: 8px; }
 .help-sidebar::-webkit-scrollbar-track { background: transparent; }
-.help-sidebar::-webkit-scrollbar-thumb { border-radius: 4px; background: #46505d; }
+.help-sidebar::-webkit-scrollbar-thumb { border-radius: 4px; background: #66675e; }
 .help-search-label {
   display: block;
   margin-bottom: 8px;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.875rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -53,27 +53,27 @@
   width: 100%;
   height: 38px;
   padding: 0 11px;
-  border: 1px solid #303640;
+  border: 1px solid var(--line);
   border-radius: 7px;
-  background: #111419;
+  background: var(--bg-elev);
   color: var(--text);
   font: inherit;
 }
 [data-help-search]:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
-.help-search-status { min-height: 18px; margin: 7px 0 3px; color: var(--muted); font-size: 0.78rem; }
+.help-search-status { min-height: 18px; margin: 7px 0 3px; color: var(--muted); font-size: 0.875rem; }
 .help-topic-nav { display: grid; }
 .help-topic-link {
   display: grid;
   gap: 3px;
   padding: 10px 12px;
   border-left: 2px solid transparent;
-  color: #dce2eb;
+  color: var(--text);
   text-decoration: none;
 }
 .help-topic-link[hidden] { display: none; }
 .help-topic-link:hover { background: rgba(255,255,255,0.035); }
-.help-topic-link.is-active { border-left-color: var(--brand-bright); background: rgba(9,115,238,0.09); }
-.help-topic-link small { color: var(--muted); font-size: 0.76rem; line-height: 1.35; }
+.help-topic-link.is-active { border-left-color: var(--brand-bright); background: var(--brand-soft); }
+.help-topic-link small { color: var(--muted); font-size: 0.875rem; line-height: 1.35; }
 .help-content { min-width: 0; max-width: 780px; padding-top: 56px; }
 .help-js .help-article { display: none; }
 .help-js .help-article.is-active { display: block; }
@@ -81,7 +81,7 @@
 .help-overline {
   margin: 0 0 12px;
   color: var(--brand-bright);
-  font-size: 0.73rem;
+  font-size: 0.875rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -98,12 +98,12 @@
 .help-article-section h2,
 .shortcut-group h2 { font-size: 1.42rem; letter-spacing: -0.01em; }
 .help-article-section p,
-.help-article-section li { color: #c8ced7; font-size: 1rem; line-height: 1.68; }
+.help-article-section li { color: var(--muted); font-size: 1rem; line-height: 1.68; }
 .help-article-section p { margin: 14px 0 0; }
 .help-article-section ul,
 .help-article-section ol { margin: 17px 0 0; padding-left: 25px; }
 .help-article-section li { margin: 8px 0; padding-left: 4px; }
-.help-note { margin-top: 22px; padding: 16px 18px; border-left: 3px solid var(--brand-bright); background: rgba(255,255,255,0.025); }
+.help-note { margin-top: 22px; padding: 16px 18px; border-left: 3px solid var(--brand-bright); background: var(--bg-elev); }
 .help-note strong { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .help-note p { margin-top: 6px; color: var(--muted); }
 .section-anchor { position: absolute; top: 38px; right: 0; color: transparent; text-decoration: none; }
@@ -111,9 +111,9 @@
 .section-anchor:focus { color: var(--muted); }
 .shortcut-list { margin: 17px 0 0; }
 .shortcut-list > div { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 20px; align-items: center; padding: 11px 0; border-top: 1px solid rgba(255,255,255,0.06); }
-.shortcut-list dt { color: #d8dee7; }
+.shortcut-list dt { color: var(--text); }
 .shortcut-list dd { display: flex; gap: 5px; margin: 0; }
-kbd { display: inline-block; min-width: 28px; margin: 0 0.08em; padding: 4px 7px; border: 1px solid #343b46; border-bottom-color: #4b5563; border-radius: 5px; background: #15191f; color: #eef2f7; font: 600 0.78rem/1.2 "SF Pro Text", sans-serif; text-align: center; vertical-align: 0.06em; }
+kbd { display: inline-block; min-width: 28px; margin: 0 0.08em; padding: 4px 7px; border: 1px solid var(--line); border-bottom-color: #6a6b61; border-radius: 5px; background: var(--bg-elev); color: var(--text); font: 600 0.78rem/1.2 "SF Pro Text", sans-serif; text-align: center; vertical-align: 0.06em; }
 .article-pagination { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding-top: 38px; }
 .article-pagination a { color: var(--brand-bright); text-decoration: none; }
 .article-pagination a:last-child { text-align: right; }
@@ -125,7 +125,7 @@ kbd { display: inline-block; min-width: 28px; margin: 0 0.08em; padding: 4px 7px
   .help-sidebar { display: none; }
   .help-mobile-controls { display: grid; gap: 7px; padding: 20px 22px 0; }
   .help-mobile-controls label { color: var(--muted); font-size: 0.8rem; }
-  #help-topic-select { width: 100%; height: 40px; padding: 0 10px; border: 1px solid #303640; border-radius: 7px; background: #111419; color: var(--text); font: inherit; }
+  #help-topic-select { width: 100%; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg-elev); color: var(--text); font: inherit; }
   .help-mobile-controls [data-help-search] { height: 40px; margin-top: 10px; }
   .help-content { padding-top: 40px; }
   .help-article-header h1 { font-size: 2.45rem; }
@@ -134,3 +134,15 @@ kbd { display: inline-block; min-width: 28px; margin: 0 0.08em; padding: 4px 7px
   .article-pagination a:last-child { text-align: left; }
   .help-footer { padding: 24px 22px 38px; }
 }
+.help-footer nav { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+@media (max-width: 480px) {
+  .help-site-header { gap: 16px; align-items: flex-start; }
+  .help-site-header nav { gap: 14px; font-size: .94rem; }
+  .help-footer { flex-direction: column; gap: 16px; }
+}
+
+.help-screenshot { margin: 28px 0 0; }
+.help-screenshot img { display: block; width: 100%; max-width: 735px; height: auto; border: 1px solid var(--line); border-radius: 5px; }
+.help-screenshot figcaption { margin-top: 10px; color: var(--muted); font-size: .875rem; line-height: 1.5; }
+
+.help-screenshot-narrow { max-width: 437px; }

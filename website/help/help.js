@@ -79,4 +79,8 @@
 
   showTopic(topicFromHash(), true);
   runSearch();
+  var initialSection = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+  if (initialSection && !initialSection.classList.contains("help-article")) {
+    initialSection.scrollIntoView();
+  }
 })();

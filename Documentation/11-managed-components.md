@@ -6,11 +6,9 @@ symbol: shippingbox
 order: 11
 ---
 
-## Included and managed tools
+## Automatic setup
 
-- ffmpeg and ffprobe handle export, conversion, video scanning, and inspection.
-- Managed Python, yt-dlp, and Deno handle supported URL downloads.
-- Parakeet provides fast, word-timed transcripts for the Clip sidebar, AI Suggestions, profanity detection, and generated burned captions.
+In/Out includes the tools used for export, analysis, and transcription. The first URL download may install additional helper tools; you do not need to set them up in Terminal.
 
 ## Check or repair tools
 

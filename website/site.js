@@ -24,16 +24,19 @@
     var secondary = document.getElementById("download-btn-secondary");
     var releasesLink = document.getElementById("releases-link");
     var repoLink = document.getElementById("repo-link");
-    var meta = document.getElementById("release-meta");
-
     if (primary) {
       primary.href = url;
       if (label) primary.textContent = label;
     }
-    if (secondary) secondary.href = url;
-    if (releasesLink) releasesLink.href = url.includes("/download/") ? url.split("/releases/")[0] + "/releases" : url;
-    if (repoLink && releasesLink && releasesLink.href) repoLink.href = releasesLink.href.replace(/\/releases$/, "");
-    if (meta) meta.textContent = "Latest notarized installer ready";
+    if (secondary) {
+      secondary.href = url;
+      if (label) secondary.textContent = label;
+    }
+    var repo = deriveRepo();
+    var repoUrl = "https://github.com/" + repo.owner + "/" + repo.repo;
+    if (releasesLink) releasesLink.href = repoUrl + "/releases";
+    if (repoLink) repoLink.href = repoUrl;
+
   }
 
   function setMetaText(text) {
@@ -61,7 +64,7 @@
     var repo = deriveRepo();
     var releasesUrl = "https://github.com/" + repo.owner + "/" + repo.repo + "/releases";
     var fallback = releasesUrl + "/latest";
-    setDownloadLink(fallback, "View Latest Release");
+    setDownloadLink(fallback, "Download for Mac");
 
     try {
       var api = "https://api.github.com/repos/" + repo.owner + "/" + repo.repo + "/releases/latest";
@@ -73,15 +76,15 @@
       var installerAsset = findInstallerAsset(assets);
 
       if (installerAsset && installerAsset.browser_download_url) {
-        setDownloadLink(installerAsset.browser_download_url, "Download In/Out for macOS");
-        setMetaText("Latest: " + release.tag_name + " · Notarized DMG");
+        setDownloadLink(installerAsset.browser_download_url, "Download for Mac");
+        setMetaText(release.tag_name + " · " + (/\.dmg$/i.test(installerAsset.name) ? "DMG installer" : "ZIP download"));
       } else {
         setDownloadLink(fallback, "View Releases");
-        setMetaText("Latest release found, but no installer asset matched.");
+        setMetaText("Choose an installer on GitHub.");
       }
     } catch (err) {
       setDownloadLink(fallback, "View Releases");
-      setMetaText("Could not resolve latest asset automatically. Using Releases page.");
+      setMetaText("Download the latest installer from GitHub.");
       console.warn("In/Out release lookup failed:", err);
     }
   }
