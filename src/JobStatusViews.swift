@@ -3,6 +3,11 @@ import AppKit
 
 struct StatusFooterStripView: View {
     @ObservedObject var activity: ActivityPresentationModel
+    @ObservedObject var cleanup: TranscriptCleanupSession
+    let reviewCleanup: () -> Void
+    let applyAllCleanup: () -> Void
+    let retryCleanup: () -> Void
+    let undoCleanup: () -> Void
     let queuedJobs: [QueuedClipExport]
     let isAnalyzing: Bool
     let isExporting: Bool
@@ -55,52 +60,60 @@ struct StatusFooterStripView: View {
     }
 
     var body: some View {
-        HStack(spacing: 14) {
-                HStack(spacing: 8) {
-                    stateIconView
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(stateColor)
-                        .frame(width: 20, height: 20, alignment: .center)
-                Text(footerStateLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-            }
-            .frame(width: 140, alignment: .leading)
+        VStack(spacing: 8) {
+            if isActivityRunning || cleanup.phase == .idle || outputURL != nil {
+                HStack(spacing: 14) {
+                    HStack(spacing: 8) {
+                        stateIconView
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(stateColor)
+                            .frame(width: 20, height: 20, alignment: .center)
+                        Text(footerStateLabel)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    .frame(width: 140, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(activityText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(activityText)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
 
-                if let progress = activityProgress {
-                    ProgressView(value: progress)
-                        .progressViewStyle(.linear)
-                        .controlSize(.small)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            HStack(spacing: 8) {
-                Group {
-                    if isActivityRunning {
-                        Button(role: .destructive) {
-                            stopCurrentActivity()
-                        } label: {
-                            Label("Stop", systemImage: "stop.fill")
+                        if let progress = activityProgress {
+                            ProgressView(value: progress)
+                                .progressViewStyle(.linear)
+                                .controlSize(.small)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
-                        .controlSize(.small)
-                    } else if outputURL != nil {
-                        Button("Show in Finder") {
-                            revealOutput()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    HStack(spacing: 8) {
+                        Group {
+                            if isActivityRunning {
+                                Button(role: .destructive) {
+                                    stopCurrentActivity()
+                                } label: {
+                                    Label("Stop", systemImage: "stop.fill")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.red)
+                                .controlSize(.small)
+                            } else if outputURL != nil {
+                                Button("Show in Finder") {
+                                    revealOutput()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
                     }
                 }
-                .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .trailing)))
+            }
+            if cleanup.phase != .idle {
+                TranscriptCleanupFooterRow(session: cleanup, review: reviewCleanup,
+                    applyAll: applyAllCleanup, retry: retryCleanup, undo: undoCleanup)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -120,6 +133,7 @@ struct StatusFooterStripView: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: activity.lastActivityState)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isActivityRunning)
+
     }
 
     private var activityProgress: Double? {
@@ -291,5 +305,84 @@ struct JobsPopoverView: View {
         }
         .padding(12)
         .frame(width: 560, height: 320, alignment: .topLeading)
+    }
+}
+
+struct TranscriptCleanupFooterRow: View {
+    @ObservedObject var session: TranscriptCleanupSession
+    let review: () -> Void
+    let applyAll: () -> Void
+    let retry: () -> Void
+    let undo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Label(title, systemImage: icon)
+                .font(.subheadline.weight(.semibold))
+                .frame(width: 140, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                if session.phase == .running {
+                    if let fraction = session.progressFraction {
+                        ProgressView(value: fraction).progressViewStyle(.linear).controlSize(.small)
+                    } else {
+                        ProgressView().progressViewStyle(.linear).controlSize(.small)
+                    }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                switch session.phase {
+                case .running:
+                    Button("Cancel Cleanup") { session.reset() }
+                case .ready:
+                    if session.edits.isEmpty {
+                        Button("Done") { session.reset() }
+                    } else {
+                        Button("Review \(session.edits.count) \(session.edits.count == 1 ? "Correction" : "Corrections")", action: review)
+                        Button("Apply All", action: applyAll).buttonStyle(.borderedProminent)
+                    }
+                case .failed:
+                    Button("Try Again", action: retry)
+                    Button("Dismiss") { session.reset() }
+                case .applied:
+                    Button("Undo", action: undo)
+                    Button("Done") { session.reset() }
+                case .idle:
+                    EmptyView()
+                }
+            }.controlSize(.small).buttonStyle(.bordered)
+        }
+    }
+
+    private var title: String {
+        switch session.phase {
+        case .running: return "Cleaning Up"
+        case .ready: return "Cleanup Ready"
+        case .failed: return "Cleanup Failed"
+        case .applied: return "Cleanup Applied"
+        case .idle: return "Ready"
+        }
+    }
+    private var icon: String {
+        switch session.phase {
+        case .running: return "sparkles"
+        case .ready, .applied: return "checkmark.circle"
+        case .failed: return "exclamationmark.triangle"
+        case .idle: return "circle.dashed"
+        }
+    }
+    private var detail: String {
+        switch session.phase {
+        case .running:
+            return session.completedWords == 0
+                ? "Cleaning up transcript · Waiting for model response…"
+                : "Cleaning up transcript · \(session.progress)"
+        case .ready:
+            return session.edits.isEmpty ? "No corrections suggested."
+                : "\(session.edits.count) correction\(session.edits.count == 1 ? "" : "s") suggested · Transcript unchanged"
+        case .failed: return session.errorText ?? "Transcript cleanup failed."
+        case .applied: return "\(session.appliedCount) correction\(session.appliedCount == 1 ? "" : "s") applied · Caption timing preserved"
+        case .idle: return "Ready"
+        }
     }
 }

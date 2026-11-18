@@ -69,7 +69,7 @@ extension WorkspaceViewModel {
                 SmartMarkerPreferences.cacheOpenAIModelIDs(options.map(\.id))
                 self.openAIModelCatalogStatusText = options.isEmpty
                     ? "No compatible text models were found."
-                    : "Available models updated."
+                    : "Loaded \(options.count) available text models."
             } catch {
                 guard !Task.isCancelled else { return }
                 self.openAIModelCatalogStatusText = error.localizedDescription

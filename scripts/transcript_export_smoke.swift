@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import Combine
 import Foundation
 import InOutCore
@@ -26,6 +28,7 @@ final class PlayheadDiagnostics {
 
 @main
 struct TranscriptExportSmokeTest {
+    @MainActor
     static func main() throws {
         let segments = [
             TranscriptSegment(
@@ -160,7 +163,47 @@ struct TranscriptExportSmokeTest {
 
         precondition(TranscriptExportFormat.webVTT.fileExtension == "vtt")
         precondition(TranscriptExportFormat.markdown.fileExtension == "md")
-        print("Transcript export smoke test passed.")
+        verifyTableRefresh()
+        print("Transcript export smoke test passed (including same-ID correction display and restore).")
+    }
+
+    @MainActor
+    private static func verifyTableRefresh() {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
+        let state = TranscriptRefreshTestState()
+        let host = NSHostingView(rootView: TranscriptRefreshTestView(state: state))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 200)
+        defer { window.close() }
+        func findTable(_ view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            return view.subviews.lazy.compactMap { findTable($0) }.first
+        }
+        func displayedText() -> String? {
+            host.layoutSubtreeIfNeeded()
+            guard let table = findTable(host), table.numberOfRows > 0,
+                  let cell = table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTableCellView else { return nil }
+            return cell.textField?.stringValue
+        }
+        func waitForText(_ expected: String) {
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline {
+                if displayedText() == expected { return }
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
+            preconditionFailure("Transcript table showed \(displayedText() ?? "no text") instead of \(expected)")
+        }
+        waitForText("constant shots at Cash Patel,")
+        // Deliberately hold both the row ID and caller revision constant, as can happen
+        // when SwiftUI reuses a native table while recreating its surrounding state.
+        state.text = "constant shots at Kash Patel,"
+        waitForText("constant shots at Kash Patel,")
+        state.text = "constant shots at Cash Patel,"
+        waitForText("constant shots at Cash Patel,")
     }
 
     private static func content(
@@ -175,5 +218,21 @@ struct TranscriptExportSmokeTest {
             layout: layout,
             timecodeStyle: timecodes
         )
+    }
+}
+
+
+@MainActor
+private final class TranscriptRefreshTestState: ObservableObject {
+    let rowID = UUID()
+    @Published var text = "constant shots at Cash Patel,"
+}
+
+private struct TranscriptRefreshTestView: View {
+    @ObservedObject var state: TranscriptRefreshTestState
+    var body: some View {
+        TranscriptTableView(rows: [TranscriptDisplayRow(id: state.rowID, start: 603.36, end: 610.4,
+            startLabel: "00:10:03.360", text: state.text, normalizedText: normalizedTranscriptSearchText(state.text))],
+            rowsVersion: 0, fontSize: 14)
     }
 }

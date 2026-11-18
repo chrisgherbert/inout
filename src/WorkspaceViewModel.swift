@@ -70,7 +70,11 @@ final class WorkspaceViewModel: ObservableObject {
         didSet { sourcePresentation.sourceURL = sourceURL }
     }
     @Published var sourceSessionID = UUID() {
-        didSet { sourcePresentation.sourceSessionID = sourceSessionID }
+        didSet {
+            transcriptCleanup.reset()
+            transcriptCleanupGlossary = ""
+            sourcePresentation.sourceSessionID = sourceSessionID
+        }
     }
     @Published var analysis: FileAnalysis? {
         didSet { sourcePresentation.analysis = analysis }
@@ -78,8 +82,17 @@ final class WorkspaceViewModel: ObservableObject {
     @Published var sourceInfo: SourceMediaInfo? {
         didSet { sourcePresentation.sourceInfo = sourceInfo }
     }
+    var transcriptCleanupProviderID = UserDefaults.standard.string(forKey: "prefs.transcriptCleanupProviderID")
+        .flatMap(SmartMarkerProviderID.init(rawValue:)) ?? SmartMarkerPreferences.providerID {
+        didSet { UserDefaults.standard.set(transcriptCleanupProviderID.rawValue, forKey: "prefs.transcriptCleanupProviderID") }
+    }
+    var transcriptCleanupGlossary = ""
+    @Published var originalTranscriptSegments: [TranscriptSegment]?
     @Published var transcriptSegments: [TranscriptSegment] = [] {
-        didSet { sourcePresentation.transcriptSegments = transcriptSegments }
+        didSet {
+            transcriptCleanup.reset()
+            sourcePresentation.transcriptSegments = transcriptSegments
+        }
     }
     @Published var transcriptStatusText: String = "No transcript generated yet." {
         didSet { sourcePresentation.transcriptStatusText = transcriptStatusText }
@@ -97,7 +110,10 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
     @Published var isGeneratingTranscript = false {
-        didSet { sourcePresentation.isGeneratingTranscript = isGeneratingTranscript }
+        didSet {
+            if isGeneratingTranscript { transcriptCleanup.reset() }
+            sourcePresentation.isGeneratingTranscript = isGeneratingTranscript
+        }
     }
 
     @Published var isAnalyzing = false {

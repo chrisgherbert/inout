@@ -19,4 +19,4 @@ xcrun swiftc \
   "$ROOT_DIR/scripts/smart_marker_smoke.swift" \
   -o "$OUTPUT_DIR/smart-marker-smoke"
 
-"$OUTPUT_DIR/smart-marker-smoke" "$@"
+INOUT_SKIP_KEYCHAIN=1 "$OUTPUT_DIR/smart-marker-smoke" "$@"

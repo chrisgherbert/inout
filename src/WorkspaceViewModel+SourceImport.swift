@@ -16,6 +16,7 @@ extension WorkspaceViewModel {
         uiMessage: String,
         preservesActivityConsole: Bool = false
     ) {
+        originalTranscriptSegments = nil
         transcriptSegments = []
         hasCachedTranscript = false
         transcriptStatusText = transcriptStatus

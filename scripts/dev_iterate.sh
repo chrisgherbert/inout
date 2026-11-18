@@ -11,7 +11,7 @@ Usage: $(basename "$0") [--refresh-tools] [--verify-tools] [--run]
 Fast local iteration build:
   - Uses quick build mode
   - Preserves bundled ffmpeg, yt-dlp, and Parakeet resources by default
-  - Skips signing/notarization/release
+  - Signs locally with the configured certificate; skips notarization/release
 
 Options:
   --refresh-tools  Re-copy bundled ffmpeg/ffprobe/yt-dlp/Parakeet resources

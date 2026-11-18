@@ -76,13 +76,15 @@ struct TimelineThumbnailTile {
 }
 
 private struct ClipPlayerStageSection: View {
+    let workspace: WorkspaceViewModel
     let player: AVPlayer
     let currentPlayerHeight: CGFloat
     let preferredPlayerDisplayWidth: CGFloat
     let showsClipTranscriptSidebar: Bool
     let canShowClipTranscriptSidebar: Bool
     let clipTranscriptSidebarWidth: CGFloat
-    let transcriptSegments: [TranscriptSegment]
+    let sourcePresentation: SourcePresentationModel
+    let transcriptRevision: Int
     let timecodeDisplayStyle: TimecodeFormatConfiguration
     let timecodeFrameRate: Double?
     let timecodeMediaDuration: Double?
@@ -235,14 +237,13 @@ private struct ClipPlayerStageSection: View {
 
                     EquatableView(content:
                         ClipTranscriptSidebarView(
+                            workspace: workspace,
                             timecodeDisplayStyle: timecodeDisplayStyle,
                             timecodeFrameRate: timecodeFrameRate,
                             timecodeMediaDuration: timecodeMediaDuration,
                             playbackPresentation: transcriptPlaybackPresentation,
-                            transcriptSegments: transcriptSegments,
-                            transcriptStatusText: transcriptStatusText,
+                            sourcePresentation: sourcePresentation,
                             canGenerateTranscript: canGenerateTranscript,
-                            isGeneratingTranscript: isGeneratingTranscript,
                             hasAudioTrack: hasAudioTrack,
                             isPlaying: isPlaying,
                             isScrubbing: isScrubbing,
@@ -321,9 +322,7 @@ extension ClipPlayerStageSection: Equatable {
         lhs.showsClipTranscriptSidebar == rhs.showsClipTranscriptSidebar &&
         lhs.canShowClipTranscriptSidebar == rhs.canShowClipTranscriptSidebar &&
         lhs.clipTranscriptSidebarWidth == rhs.clipTranscriptSidebarWidth &&
-        lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
-        lhs.transcriptSegments.first?.id == rhs.transcriptSegments.first?.id &&
-        lhs.transcriptSegments.last?.id == rhs.transcriptSegments.last?.id &&
+        lhs.transcriptRevision == rhs.transcriptRevision &&
         lhs.timecodeDisplayStyle == rhs.timecodeDisplayStyle &&
         lhs.timecodeFrameRate == rhs.timecodeFrameRate &&
         lhs.timecodeMediaDuration == rhs.timecodeMediaDuration &&
@@ -420,6 +419,7 @@ struct ClipToolView: View {
     @State private var showURLImportAdvancedOptions = false
     @State private var emptyStateURLText: String = ""
     @State private var isEmptyDropTargeted = false
+    @State private var isCleanupReviewRequested = false
     @State private var isSmartMarkerSetupPresented = false
     @State private var pendingSmartMarkerConfiguration: SmartMarkerAnalysisConfiguration?
     @FocusState private var isImportURLFieldFocused: Bool
@@ -2316,7 +2316,7 @@ struct ClipToolView: View {
     }
 
     private var canShowClipTranscriptSidebar: Bool {
-        (!isCompactLayout || smartMarkers.showsSuggestions) && sourcePresentation.hasAudioTrack
+        (!isCompactLayout || smartMarkers.showsSuggestions || isCleanupReviewRequested) && sourcePresentation.hasAudioTrack
     }
 
     private var showsClipTranscriptSidebar: Bool {
@@ -2457,13 +2457,15 @@ struct ClipToolView: View {
     private var clipPlayerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             ClipPlayerStageSection(
+                workspace: model,
                 player: player,
                 currentPlayerHeight: currentPlayerHeight,
                 preferredPlayerDisplayWidth: preferredPlayerDisplayWidth,
                 showsClipTranscriptSidebar: showsClipTranscriptSidebar,
                 canShowClipTranscriptSidebar: canShowClipTranscriptSidebar,
                 clipTranscriptSidebarWidth: clipTranscriptSidebarWidth,
-                transcriptSegments: sourcePresentation.transcriptSegments,
+                sourcePresentation: sourcePresentation,
+                transcriptRevision: sourcePresentation.transcriptRevision,
                 timecodeDisplayStyle: timecodeDisplayStyle,
                 timecodeFrameRate: timecodeFrameRate,
                 timecodeMediaDuration: timecodeMediaDuration,
@@ -3232,6 +3234,15 @@ struct ClipToolView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipTimelineZoomReset, object: model)) { _ in
                 resetTimelineZoom()
+            }
+            .onReceive(sourcePresentation.transcriptCleanup.$isReviewing) { reviewing in
+                if isCleanupReviewRequested != reviewing {
+                    isCleanupReviewRequested = reviewing
+                }
+                if reviewing {
+                    storedTranscriptSidebarVisible = true
+                    smartMarkers.showsSuggestions = false
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .clipFocusTranscriptSearch, object: model)) { _ in
                 guard showsClipTranscriptSidebar else { return }

@@ -91,6 +91,17 @@ struct ContentView: View {
 
                 StatusFooterStripView(
                     activity: model.activityPresentation,
+                    cleanup: model.transcriptCleanup,
+                    reviewCleanup: { model.reviewTranscriptCleanup() },
+                    applyAllCleanup: {
+                        do { try model.applyTranscriptCleanup(acceptAll: true) }
+                        catch { model.transcriptCleanup.reportFailure(error) }
+                    },
+                    retryCleanup: { model.startDefaultTranscriptCleanup() },
+                    undoCleanup: {
+                        do { try model.undoTranscriptCleanup() }
+                        catch { model.transcriptCleanup.reportFailure(error) }
+                    },
                     queuedJobs: model.queuedJobs,
                     isAnalyzing: model.isAnalyzing,
                     isExporting: model.isExporting,

@@ -705,5 +705,9 @@ else
   echo "Parakeet model not bundled (set BUNDLED_PARAKEET_MODEL_DIR or run scripts/transcription_benchmark.sh --parakeet-only once)."
 fi
 
+if [[ "$BUILD_MODE" != "release" ]]; then
+  "$ROOT_DIR/scripts/sign_local_app.sh" "$APP"
+fi
+
 echo "Built: $APP"
 echo "Mode: $BUILD_MODE"

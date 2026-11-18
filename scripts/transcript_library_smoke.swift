@@ -67,6 +67,24 @@ struct TranscriptLibrarySmoke {
         try require(restored.segments[0].timedWords.count == 2, "Word timing was not preserved")
         try require(restored.segments[0].timedWords[1].word == "world.", "Word text changed during restore")
 
+        try require(restored.originalSegments == nil, "Transcript without cleanup acquired an original backup")
+        let corrected = [TranscriptSegment(id: segments[0].id, start: 0, end: 1.25, text: "Hello, world.", timedWords: [
+            TranscriptWordTiming(word: "Hello,", start: 0, end: 0.5),
+            TranscriptWordTiming(word: "world.", start: 0.6, end: 1.25)
+        ]), segments[1]]
+        try await library.save(mediaURL: originalURL, duration: 2.25, segments: corrected,
+                               modelIdentifier: "smoke-model", retention: .ninetyDays, originalSegments: segments)
+        guard let cleaned = try await library.transcript(for: originalURL, retention: .ninetyDays) else {
+            throw SmokeFailure.failed("Cleaned transcript did not restore")
+        }
+        try require(cleaned.segments[0].text == "Hello, world.", "Cleaned transcript was not saved")
+        try require(cleaned.originalSegments?[0].text == "Hello world.", "Original text was lost")
+        try require(cleaned.originalSegments?[0].timedWords[1].start == 0.6, "Original timing was lost")
+        try await library.save(mediaURL: originalURL, duration: 2.25, segments: segments,
+                               modelIdentifier: "smoke-model", retention: .ninetyDays)
+        let reverted = try await library.transcript(for: originalURL, retention: .ninetyDays)
+        try require(reverted?.originalSegments == nil, "Restoring original retained the cleanup backup")
+
         try await library.setPinned(true, id: restored.entry.id)
         try FileManager.default.moveItem(at: originalURL, to: movedURL)
         guard let movedRestore = try await library.transcript(for: movedURL, retention: .ninetyDays) else {

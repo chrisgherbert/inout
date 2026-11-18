@@ -42,6 +42,7 @@ struct TranscriptLibraryEntry: Identifiable, Equatable, Sendable {
 struct StoredTranscript: Sendable {
     let entry: TranscriptLibraryEntry
     let segments: [TranscriptSegment]
+    var originalSegments: [TranscriptSegment]? = nil
 }
 
 struct TranscriptLibrarySnapshot: Sendable {
@@ -66,6 +67,7 @@ enum TranscriptLibraryError: LocalizedError {
 private struct StoredTranscriptPayload: Codable {
     let schemaVersion: Int
     let segments: [StoredTranscriptSegment]
+    var originalSegments: [StoredTranscriptSegment]? = nil
 }
 
 private struct StoredTranscriptSegment: Codable {
@@ -228,7 +230,8 @@ actor TranscriptLibrary {
             isPinned: sqlite3_column_int(statement, 6) != 0,
             fileIsAvailable: true
         )
-        return StoredTranscript(entry: entry, segments: payload.segments.map(\.transcriptSegment))
+        return StoredTranscript(entry: entry, segments: payload.segments.map(\.transcriptSegment),
+                                originalSegments: payload.originalSegments?.map(\.transcriptSegment))
     }
 
     func save(
@@ -236,12 +239,15 @@ actor TranscriptLibrary {
         duration: Double,
         segments: [TranscriptSegment],
         modelIdentifier: String,
-        retention: TranscriptRetentionPolicy
+        retention: TranscriptRetentionPolicy,
+        originalSegments: [TranscriptSegment]? = nil
     ) throws {
+        try Task.checkCancellation()
         let identity = try mediaIdentity(for: mediaURL)
         let payload = StoredTranscriptPayload(
             schemaVersion: Self.payloadSchemaVersion,
-            segments: segments.map(StoredTranscriptSegment.init)
+            segments: segments.map(StoredTranscriptSegment.init),
+            originalSegments: originalSegments?.map(StoredTranscriptSegment.init)
         )
         let payloadData = try JSONEncoder().encode(payload)
         let now = Date().timeIntervalSince1970

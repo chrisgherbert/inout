@@ -359,6 +359,35 @@ struct SmartMarkerSmokeTest {
         precondition(documentProperties?["text"] != nil)
         precondition(documentRequestJSON?["store"] as? Bool == false)
 
+        let cleanupBody = try OpenAIResponsesClient.transcriptCorrectionsRequestBody(
+            model: "gpt-5.6-sol", transcript: "[0] Tim Millar.", instructions: "Correct names."
+        )
+        let cleanupJSON = try JSONSerialization.jsonObject(with: cleanupBody) as! [String: Any]
+        precondition((cleanupJSON["reasoning"] as? [String: String])?["effort"] == "none")
+        let cleanupText = cleanupJSON["text"] as! [String: Any]
+        let cleanupFormat = cleanupText["format"] as! [String: Any]
+        let cleanupSchema = cleanupFormat["schema"] as! [String: Any]
+        let cleanupProperties = cleanupSchema["properties"] as! [String: Any]
+        precondition(cleanupProperties["edits"] != nil && cleanupProperties["text"] == nil)
+        let cleanupPayload = #"{"edits":[{"segments":[0],"from":"Millar","to":"Miller"}]}"#
+        let cleanupEnvelope = try JSONSerialization.data(withJSONObject: [
+            "status": "completed", "output": [["content": [["type": "output_text", "text": cleanupPayload]]]]
+        ])
+        let parsedCleanup = try OpenAIResponsesClient.parseTranscriptCorrectionsResponse(cleanupEnvelope)
+        precondition(parsedCleanup == cleanupPayload)
+        let incompleteEnvelope = try JSONSerialization.data(withJSONObject: [
+            "status": "incomplete", "output": [["content": [["type": "output_text", "text": cleanupPayload]]]]
+        ])
+        do {
+            _ = try OpenAIResponsesClient.parseTranscriptCorrectionsResponse(incompleteEnvelope)
+            preconditionFailure("Incomplete cleanup output was accepted")
+        } catch SmartMarkerProviderError.invalidResponse { }
+        let legacyCleanupBody = try OpenAIResponsesClient.transcriptCorrectionsRequestBody(
+            model: "gpt-4.1", transcript: "[0] Words.", instructions: "Correct names."
+        )
+        let legacyCleanupJSON = try JSONSerialization.jsonObject(with: legacyCleanupBody) as! [String: Any]
+        precondition(legacyCleanupJSON["reasoning"] == nil)
+
         let refinementContext = SmartMarkerRefinementContext(
             entries: input.entries,
             scopeStart: input.scopeStart,
@@ -530,6 +559,15 @@ struct SmartMarkerSmokeTest {
             withJSONObject: [
                 "object": "list",
                 "data": [
+                    ["id": "gpt-6.2-astra", "object": "model"],
+                    ["id": "gpt-6.2-sol", "object": "model"],
+                    ["id": "gpt-6.1-terra", "object": "model"],
+                    ["id": "gpt-6-luna", "object": "model"],
+                    ["id": "gpt-6.1-sol", "object": "model"],
+                    ["id": "gpt-7-sol", "object": "model"],
+                    ["id": "gpt-6-cyber", "object": "model"],
+                    ["id": "gpt-6.2-sol-2026-11-01", "object": "model"],
+                    ["id": "gpt-6-audio", "object": "model"],
                     ["id": "gpt-5.6-terra", "object": "model"],
                     ["id": "chat-latest", "object": "model"],
                     ["id": "gpt-4.1-mini", "object": "model"],
@@ -543,14 +581,28 @@ struct SmartMarkerSmokeTest {
         let modelOptions = SmartMarkerOpenAIModelCatalog.options(from: listedModelIDs)
         precondition(
             modelOptions.map(\.id) == [
-                "gpt-5.6-terra",
-                "chat-latest",
-                "gpt-4.1-mini"
+                "gpt-7-sol", "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6.1-terra",
+                "gpt-6-luna", "gpt-5.6-terra", "gpt-4.1-mini", "chat-latest"
             ],
-            "The model picker must prioritize recommended models and omit incompatible models."
+            "The model picker must automatically group available model versions newest first."
         )
-        precondition(modelOptions[0].isRecommended)
-        precondition(!modelOptions[2].isRecommended)
+        precondition(modelOptions.allSatisfy { !$0.isRecommended })
+        precondition(modelOptions.map(\.pickerGroupTitle) == [
+            "GPT-7", "GPT-6.2", "GPT-6.2", "GPT-6.1", "GPT-6.1", "GPT-6", "GPT-5.6", "GPT-4.1", "Other aliases"
+        ])
+        let futureModels = SmartMarkerOpenAIModelCatalog.options(from: [
+            "gpt-6.9-sol", "gpt-6.10-sol", "gpt-10-sol", "gpt-6.2-sol", "gpt-6-luna", "gpt-6.10-sol"
+        ])
+        precondition(futureModels.map(\.id) == ["gpt-10-sol", "gpt-6.10-sol", "gpt-6.9-sol", "gpt-6.2-sol", "gpt-6-luna"])
+        let testSuite = "inout-model-cache-test-" + UUID().uuidString
+        let testDefaults = UserDefaults(suiteName: testSuite)!
+        defer { testDefaults.removePersistentDomain(forName: testSuite) }
+        let cacheTime = Date()
+        testDefaults.set(cacheTime, forKey: SmartMarkerPreferences.openAIModelCatalogDateKey)
+        precondition(SmartMarkerPreferences.openAIModelCatalogRequiresRefresh(in: testDefaults, now: cacheTime), "An old filtered cache must refresh after upgrade")
+        testDefaults.set(SmartMarkerPreferences.openAIModelCatalogVersion, forKey: SmartMarkerPreferences.openAIModelCatalogVersionKey)
+        precondition(!SmartMarkerPreferences.openAIModelCatalogRequiresRefresh(in: testDefaults, now: cacheTime))
+        precondition(SmartMarkerPreferences.openAIModelCatalogRequiresRefresh(in: testDefaults, now: cacheTime.addingTimeInterval(86_401)))
         precondition(
             !SmartMarkerOpenAIModelCatalog.isCompatibleAlias(
                 "gpt-5.6-terra-2026-07-15"

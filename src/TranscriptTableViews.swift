@@ -1440,7 +1440,9 @@ struct TranscriptTableView: NSViewRepresentable {
             ? (playbackPresentation?.activeRowID ?? activeRowID)
             : nil
         let previousCurrentSearchResultRowID = context.coordinator.currentSearchResultRowID
-        let rowsChanged = context.coordinator.rowsVersion != rowsVersion
+        // Content can change without row IDs or caller-local counters changing (for
+        // example after cleanup, or when SwiftUI recreates the sidebar's state).
+        let rowsChanged = context.coordinator.rowsVersion != rowsVersion || context.coordinator.rows != rows
         let fontChanged = context.coordinator.fontSize != fontSize
         let displayModeChanged = context.coordinator.displayMode != displayMode
         let timecodeVisibilityChanged = context.coordinator.showsTimecodes != showsTimecodes
@@ -1463,6 +1465,9 @@ struct TranscriptTableView: NSViewRepresentable {
 
         context.coordinator.rows = rows
         if rowsChanged {
+            context.coordinator.attributedTextCache.removeAll(keepingCapacity: true)
+            context.coordinator.lastAttributedCacheRowsVersion = -1
+            context.coordinator.lastMeasuredRowsVersion = -1
             context.coordinator.rowIndexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
         }
         context.coordinator.rowsVersion = rowsVersion

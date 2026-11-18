@@ -36,11 +36,15 @@ final class AnalysisCheckPreferencesModel: ObservableObject {
 
 @MainActor
 final class SourcePresentationModel: ObservableObject {
+    let transcriptCleanup = TranscriptCleanupSession()
     @Published var sourceURL: URL?
     @Published var sourceSessionID = UUID()
     @Published var analysis: FileAnalysis?
     @Published var sourceInfo: SourceMediaInfo?
-    @Published var transcriptSegments: [TranscriptSegment] = []
+    private(set) var transcriptRevision = 0
+    @Published var transcriptSegments: [TranscriptSegment] = [] {
+        didSet { transcriptRevision &+= 1 }
+    }
     @Published var transcriptStatusText = "No transcript generated yet."
     @Published var hasCachedTranscript = false
     @Published var isGeneratingTranscript = false

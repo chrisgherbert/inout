@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import InOutCore
 
 @MainActor
 final class ClipTranscriptPlaybackPresentation {
@@ -40,14 +41,13 @@ final class ClipTranscriptPlaybackPresentation {
 }
 
 struct ClipTranscriptSidebarView: View, Equatable {
+    let workspace: WorkspaceViewModel
     let timecodeDisplayStyle: TimecodeFormatConfiguration
     let timecodeFrameRate: Double?
     let timecodeMediaDuration: Double?
     let playbackPresentation: ClipTranscriptPlaybackPresentation
-    let transcriptSegments: [TranscriptSegment]
-    let transcriptStatusText: String
+    @ObservedObject var sourcePresentation: SourcePresentationModel
     let canGenerateTranscript: Bool
-    let isGeneratingTranscript: Bool
     let hasAudioTrack: Bool
     let isPlaying: Bool
     let isScrubbing: Bool
@@ -92,24 +92,20 @@ struct ClipTranscriptSidebarView: View, Equatable {
     @State private var currentSearchMatchID: UUID?
     @State private var requestedSearchRevealRowID: UUID?
     @State private var transcriptRows: [TranscriptDisplayRow] = []
+    @State private var observedTranscriptSegments: [TranscriptSegment]?
     @State private var matchingTranscriptRowIDs: Set<UUID> = []
     @State private var matchingTranscriptRowsInOrder: [TranscriptDisplayRow] = []
     @State private var transcriptRowsVersion: Int = 0
     @State private var transcriptSearchVersion: Int = 0
     @State private var isUserScrollingTranscript = false
-    @State private var transcriptControlsAvailableWidth: CGFloat = 0
     @State private var displayModeOverride: TranscriptDisplayMode?
 
     static func == (lhs: ClipTranscriptSidebarView, rhs: ClipTranscriptSidebarView) -> Bool {
-        lhs.transcriptSegments.count == rhs.transcriptSegments.count &&
-        lhs.transcriptSegments.first?.id == rhs.transcriptSegments.first?.id &&
-        lhs.transcriptSegments.last?.id == rhs.transcriptSegments.last?.id &&
+        lhs.sourcePresentation === rhs.sourcePresentation &&
         lhs.timecodeDisplayStyle == rhs.timecodeDisplayStyle &&
         lhs.timecodeFrameRate == rhs.timecodeFrameRate &&
         lhs.timecodeMediaDuration == rhs.timecodeMediaDuration &&
-        lhs.transcriptStatusText == rhs.transcriptStatusText &&
         lhs.canGenerateTranscript == rhs.canGenerateTranscript &&
-        lhs.isGeneratingTranscript == rhs.isGeneratingTranscript &&
         lhs.hasAudioTrack == rhs.hasAudioTrack &&
         lhs.playbackPresentation === rhs.playbackPresentation &&
         lhs.isPlaying == rhs.isPlaying &&
@@ -127,9 +123,13 @@ struct ClipTranscriptSidebarView: View, Equatable {
         lhs.showsSmartMarkerSuggestions == rhs.showsSmartMarkerSuggestions
     }
 
-    private func makeTranscriptRows() -> [TranscriptDisplayRow] {
+    private var transcriptSegments: [TranscriptSegment] { sourcePresentation.transcriptSegments }
+    private var transcriptStatusText: String { sourcePresentation.transcriptStatusText }
+    private var isGeneratingTranscript: Bool { sourcePresentation.isGeneratingTranscript }
+
+    private func makeTranscriptRows(from segments: [TranscriptSegment]) -> [TranscriptDisplayRow] {
         makeTranscriptDisplayRows(
-            from: transcriptSegments,
+            from: segments,
             mode: activeTranscriptDisplayMode,
             timecodeStyle: timecodeDisplayStyle,
             frameRate: timecodeFrameRate,
@@ -146,7 +146,7 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 
     private var resolvedTranscriptRows: [TranscriptDisplayRow] {
-        transcriptRows.isEmpty ? playbackPresentation.displayRows : transcriptRows
+        transcriptRows
     }
 
     private var matchingTranscriptRowCount: Int {
@@ -180,13 +180,6 @@ struct ClipTranscriptSidebarView: View, Equatable {
             (normalizedSearchText.isEmpty || isPlaying)
     }
 
-    private var transcriptRefreshToken: Int {
-        var hasher = Hasher()
-        hasher.combine(transcriptSegments.count)
-        hasher.combine(transcriptSegments.first?.id)
-        hasher.combine(transcriptSegments.last?.id)
-        return hasher.finalize()
-    }
 
     private var hasTranscript: Bool {
         !transcriptSegments.isEmpty
@@ -200,9 +193,9 @@ struct ClipTranscriptSidebarView: View, Equatable {
         true
     }
 
-    private func refreshTranscriptRows() {
+    private func refreshTranscriptRows(from segments: [TranscriptSegment]? = nil) {
         PlayheadDiagnostics.shared.noteModelWrite("transcript_sidebar_refresh")
-        transcriptRows = makeTranscriptRows()
+        transcriptRows = makeTranscriptRows(from: segments ?? transcriptSegments)
         transcriptRowsVersion &+= 1
         refreshSearchMatches()
     }
@@ -278,29 +271,11 @@ struct ClipTranscriptSidebarView: View, Equatable {
         }
     }
 
-    @ViewBuilder
-    private func transcriptControls(availableWidth: CGFloat) -> some View {
-        let usesStackedLayout = availableWidth < 440
-
-        if usesStackedLayout {
-            VStack(alignment: .leading, spacing: 6) {
-                transcriptSearchField
-
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    transcriptViewOptionsButton
-                    Spacer()
-                        .frame(width: 8)
-                    transcriptExportButton
-                }
-            }
-        } else {
-            HStack(spacing: 8) {
-                transcriptSearchField
-                transcriptViewOptionsButton
-                transcriptExportButton
-            }
-        }
+    private var transcriptControls: some View {
+        TranscriptManipulationControls(model: workspace, session: sourcePresentation.transcriptCleanup,
+            isOptionKeyPressed: isOptionKeyPressed,
+            search: { transcriptSearchField }, appearance: { transcriptViewOptionsButton },
+            export: { transcriptExportButton })
     }
 
     private var transcriptExportButton: some View {
@@ -359,11 +334,6 @@ struct ClipTranscriptSidebarView: View, Equatable {
                         .font(.headline)
                 }
                 Spacer()
-                if hasTranscript && !showsSmartMarkerSuggestions {
-                    Text(normalizedSearchText.isEmpty ? "\(resolvedTranscriptRows.count)" : "\(matchingTranscriptRowCount) matches")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
                 Button(action: onCloseTranscript) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 13, weight: .semibold))
@@ -396,126 +366,88 @@ struct ClipTranscriptSidebarView: View, Equatable {
                     alignment: .topLeading
                 )
             } else if hasTranscript {
-                VStack(alignment: .leading, spacing: 6) {
-                    transcriptControls(
-                        availableWidth: transcriptControlsAvailableWidth > 0 ? transcriptControlsAvailableWidth : 600
-                    )
-                    .background(
-                        GeometryReader { geometry in
-                            Color.clear
-                                .preference(
-                                    key: TranscriptControlsWidthPreferenceKey.self,
-                                    value: geometry.size.width
+                VStack(alignment: .leading, spacing: 10) {
+                    transcriptControls
+
+                    TranscriptCleanupSidebar(model: workspace, session: sourcePresentation.transcriptCleanup,
+                        play: playTranscriptFromTime) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if isGeneratingTranscript {
+                                HStack(alignment: .top, spacing: 8) {
+                                    TranscriptGeneratingDot()
+                                        .padding(.top, 3)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Generating transcript...")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.primary.opacity(0.88))
+                                        Text("Wording and timing may shift slightly until transcription completes.")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(Color.secondary.opacity(0.08))
                                 )
-                        }
-                    )
-                    .onPreferenceChange(TranscriptControlsWidthPreferenceKey.self) { newWidth in
-                        transcriptControlsAvailableWidth = newWidth
-                    }
-
-                    if !normalizedSearchText.isEmpty {
-                        HStack(spacing: 8) {
-                            Text(currentSearchMatchDisplayText ?? "0 of \(matchingTranscriptRowCount)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-
-                            HStack(spacing: 4) {
-                                Button {
-                                    navigateSearchMatch(direction: -1)
-                                } label: {
-                                    Image(systemName: "chevron.up")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(matchingTranscriptRowsInOrder.isEmpty)
-                                .help("Previous match")
-
-                                Button {
-                                    navigateSearchMatch(direction: 1)
-                                } label: {
-                                    Image(systemName: "chevron.down")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(matchingTranscriptRowsInOrder.isEmpty)
-                                .help("Next match")
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color.white.opacity(0.05), lineWidth: 0.6)
+                                )
                             }
 
-                            Spacer(minLength: 0)
-                        }
-                    }
-                }
+                            TranscriptTableView(
+                                rows: displayedTranscriptRows,
+                                rowsVersion: transcriptRowsVersion,
+                                fontSize: transcriptTextSize.fontSize,
+                                displayMode: activeTranscriptDisplayMode,
+                                showsTimecodes: transcriptShowsTimecodes,
+                                playbackPresentation: playbackPresentation,
+                                allowsPlaybackRow: !suspendsPlaybackHighlightDuringScroll,
+                                followsActiveRow: followsPlaybackRow,
+                                showsPlaybackIndicator: showsPlaybackIndicator && !suspendsPlaybackHighlightDuringScroll,
+                                searchQuery: normalizedSearchText,
+                                matchingRowIDs: matchingTranscriptRowIDs,
+                                searchVersion: transcriptSearchVersion,
+                                currentSearchResultRowID: currentSearchMatchID,
+                                requestedSearchRevealRowID: requestedSearchRevealRowID,
+                                allowsMultipleSelection: true,
+                                onUserScrollActivityChanged: { active in
+                                    isUserScrollingTranscript = active
+                                },
+                                onActivateRow: { row in
+                                    if matchingTranscriptRowIDs.contains(row.id) {
+                                        currentSearchMatchID = row.id
+                                        requestSearchReveal(for: row.id)
+                                    }
+                                    seekToTranscriptTime(row.start)
+                                },
+                                onDoubleActivateRow: { row in
+                                    if matchingTranscriptRowIDs.contains(row.id) {
+                                        currentSearchMatchID = row.id
+                                        requestSearchReveal(for: row.id)
+                                    }
+                                    playTranscriptFromTime(row.start)
+                                }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if isGeneratingTranscript {
-                    HStack(alignment: .top, spacing: 8) {
-                        TranscriptGeneratingDot()
-                            .padding(.top, 3)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Generating transcript...")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.primary.opacity(0.88))
-                            Text("Wording and timing may shift slightly until transcription completes.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.secondary.opacity(0.08))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.05), lineWidth: 0.6)
-                    )
-                }
+                            TranscriptCleanupStatusView(model: workspace, session: sourcePresentation.transcriptCleanup) {
+                                HStack(spacing: 8) {
+                                    if isGeneratingTranscript {
+                                        TranscriptGeneratingDot()
+                                    }
+                                    Text(transcriptStatusText)
+                                        .font(.caption)
+                                        .foregroundStyle(isGeneratingTranscript ? Color.primary.opacity(0.82) : Color.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
 
-                TranscriptTableView(
-                    rows: displayedTranscriptRows,
-                    rowsVersion: transcriptRowsVersion,
-                    fontSize: transcriptTextSize.fontSize,
-                    displayMode: activeTranscriptDisplayMode,
-                    showsTimecodes: transcriptShowsTimecodes,
-                    playbackPresentation: playbackPresentation,
-                    allowsPlaybackRow: !suspendsPlaybackHighlightDuringScroll,
-                    followsActiveRow: followsPlaybackRow,
-                    showsPlaybackIndicator: showsPlaybackIndicator && !suspendsPlaybackHighlightDuringScroll,
-                    searchQuery: normalizedSearchText,
-                    matchingRowIDs: matchingTranscriptRowIDs,
-                    searchVersion: transcriptSearchVersion,
-                    currentSearchResultRowID: currentSearchMatchID,
-                    requestedSearchRevealRowID: requestedSearchRevealRowID,
-                    allowsMultipleSelection: true,
-                    onUserScrollActivityChanged: { active in
-                        isUserScrollingTranscript = active
-                    },
-                    onActivateRow: { row in
-                        if matchingTranscriptRowIDs.contains(row.id) {
-                            currentSearchMatchID = row.id
-                            requestSearchReveal(for: row.id)
                         }
-                        seekToTranscriptTime(row.start)
-                    },
-                    onDoubleActivateRow: { row in
-                        if matchingTranscriptRowIDs.contains(row.id) {
-                            currentSearchMatchID = row.id
-                            requestSearchReveal(for: row.id)
-                        }
-                        playTranscriptFromTime(row.start)
                     }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                HStack(spacing: 8) {
-                    if isGeneratingTranscript {
-                        TranscriptGeneratingDot()
-                    }
-                    Text(transcriptStatusText)
-                        .font(.caption)
-                        .foregroundStyle(isGeneratingTranscript ? Color.primary.opacity(0.82) : Color.secondary)
-                        .lineLimit(2)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
@@ -544,11 +476,16 @@ struct ClipTranscriptSidebarView: View, Equatable {
                 Spacer(minLength: 0)
             }
         }
-        .onAppear {
-            refreshTranscriptRows()
-        }
-        .onChange(of: transcriptRefreshToken) { _ in
-            refreshTranscriptRows()
+        .onReceive(sourcePresentation.$transcriptSegments) { segments in
+            // Consume the emitted value: @Published sends before its property is stored.
+            // This subscription also works when an equatable ancestor keeps its inputs.
+            // Unlike the old ID-based onChange, @Published also emits unchanged arrays
+            // (notably the completed transcript after its preview). Avoid rebuilding
+            // and remeasuring every row unless content or timing actually changed.
+            if let observedTranscriptSegments,
+               TranscriptCleanup.matches(observedTranscriptSegments, segments) { return }
+            observedTranscriptSegments = segments
+            refreshTranscriptRows(from: segments)
         }
         .onChange(of: activeTranscriptDisplayMode) { _ in
             refreshTranscriptRows()
@@ -587,12 +524,52 @@ struct ClipTranscriptSidebarView: View, Equatable {
     }
 }
 
+/// One search-field instance survives switching between wide and wrapped toolbars.
+private struct TranscriptManipulationControls<Search: View, AppearanceControls: View, ExportControls: View>: View {
+    let model: WorkspaceViewModel
+    @ObservedObject var session: TranscriptCleanupSession
+    let isOptionKeyPressed: Bool
+    @ViewBuilder let search: () -> Search
+    @ViewBuilder let appearance: () -> AppearanceControls
+    @ViewBuilder let export: () -> ExportControls
+    @State private var availableWidth: CGFloat = 0
+
+    private var usesStackedLayout: Bool {
+        let actionsWidth: CGFloat = session.phase == .ready && !session.edits.isEmpty ? 500 : 420
+        let optionWidth: CGFloat = isOptionKeyPressed ? (session.canStartNewCleanup ? 80 : 40) : 0
+        return availableWidth > 0 && availableWidth < actionsWidth + optionWidth
+    }
+
+    var body: some View {
+        let layout = usesStackedLayout
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 8))
+        layout {
+            search().layoutPriority(1)
+            HStack(spacing: 8) {
+                TranscriptCleanupToolbarControls(model: model, session: session,
+                                                 isOptionKeyPressed: isOptionKeyPressed)
+                appearance()
+                export()
+            }
+            .frame(maxWidth: usesStackedLayout ? .infinity : nil, alignment: .trailing)
+            .layoutPriority(2)
+        }
+        .frame(maxWidth: .infinity)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: TranscriptControlsWidthPreferenceKey.self, value: geometry.size.width)
+            }
+        }
+        .onPreferenceChange(TranscriptControlsWidthPreferenceKey.self) { width in
+            if abs(availableWidth - width) > 0.5 { availableWidth = width }
+        }
+    }
+}
+
 private struct TranscriptControlsWidthPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 private extension ClipTranscriptSidebarView {
@@ -601,9 +578,9 @@ private extension ClipTranscriptSidebarView {
             text: $searchText,
             placeholder: "Search transcript",
             focusToken: focusSearchFieldToken,
-            onSubmit: {
-                navigateSearchMatch(direction: 1)
-            }
+            matchDisplayText: normalizedSearchText.isEmpty ? nil : (currentSearchMatchDisplayText ?? "0 of \(matchingTranscriptRowCount)"),
+            hasMatches: !matchingTranscriptRowsInOrder.isEmpty,
+            onNavigate: { navigateSearchMatch(direction: $0) }
         )
             .frame(minWidth: 0, maxWidth: .infinity)
             .frame(height: 22)
@@ -615,7 +592,9 @@ private struct TranscriptSearchField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let focusToken: Int
-    let onSubmit: () -> Void
+    let matchDisplayText: String?
+    let hasMatches: Bool
+    let onNavigate: (Int) -> Void
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var parent: TranscriptSearchField
@@ -625,6 +604,9 @@ private struct TranscriptSearchField: NSViewRepresentable {
             self.parent = parent
             self.lastAppliedFocusToken = parent.focusToken
         }
+
+        @objc func previousMatch() { parent.onNavigate(-1) }
+        @objc func nextMatch() { parent.onNavigate(1) }
 
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSSearchField else { return }
@@ -636,7 +618,7 @@ private struct TranscriptSearchField: NSViewRepresentable {
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                parent.onSubmit()
+                parent.onNavigate(NSApp.currentEvent?.modifierFlags.contains(.shift) == true ? -1 : 1)
                 return true
             }
             return false
@@ -647,8 +629,10 @@ private struct TranscriptSearchField: NSViewRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeNSView(context: Context) -> NSSearchField {
-        let searchField = NSSearchField(frame: .zero)
+    func makeNSView(context: Context) -> TranscriptSidebarSearchField {
+        let searchField = TranscriptSidebarSearchField(frame: .zero)
+        searchField.setNavigationTarget(context.coordinator,
+            previous: #selector(Coordinator.previousMatch), next: #selector(Coordinator.nextMatch))
         searchField.delegate = context.coordinator
         searchField.placeholderString = placeholder
         searchField.controlSize = .small
@@ -658,8 +642,9 @@ private struct TranscriptSearchField: NSViewRepresentable {
         return searchField
     }
 
-    func updateNSView(_ nsView: NSSearchField, context: Context) {
+    func updateNSView(_ nsView: TranscriptSidebarSearchField, context: Context) {
         context.coordinator.parent = self
+        nsView.configureMatches(displayText: matchDisplayText, hasMatches: hasMatches)
 
         if nsView.stringValue != text {
             nsView.stringValue = text

@@ -39,6 +39,7 @@ extension WorkspaceViewModel {
                     transcriptStatusText = "No transcript generated yet."
                     return
                 }
+                originalTranscriptSegments = stored.originalSegments
                 transcriptSegments = stored.segments
                 hasCachedTranscript = true
                 let count = stored.segments.count
@@ -61,17 +62,20 @@ extension WorkspaceViewModel {
     func saveTranscriptToLibrary(_ transcript: [TranscriptSegment]) {
         guard let url = sourceURL else { return }
         let expectedSessionID = sourceSessionID
+        let original = originalTranscriptSegments
         let duration = sourceDurationSeconds
         let retention = transcriptRetentionPolicy
         transcriptLibrarySaveTask?.cancel()
         transcriptLibrarySaveTask = Task { [weak self] in
             do {
+                try Task.checkCancellation()
                 try await TranscriptLibrary.shared.save(
                     mediaURL: url,
                     duration: duration,
                     segments: transcript,
                     modelIdentifier: "parakeet-tdt-0.6b-v2",
-                    retention: retention
+                    retention: retention,
+                    originalSegments: original
                 )
                 guard !Task.isCancelled, let self else { return }
                 if sourceSessionID == expectedSessionID {

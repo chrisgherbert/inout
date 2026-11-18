@@ -37,6 +37,8 @@ enum SmartMarkerPreferences {
     static let openAIModelKey = "prefs.smartMarkerOpenAIModel"
     static let openAIModelCatalogKey = "prefs.smartMarkerOpenAIModelCatalog"
     static let openAIModelCatalogDateKey = "prefs.smartMarkerOpenAIModelCatalogDate"
+    static let openAIModelCatalogVersionKey = "prefs.smartMarkerOpenAIModelCatalogVersion"
+    static let openAIModelCatalogVersion = 2
     static let openAIKeychainAccount = "openai-api-key"
     static let defaultOpenAIModel = "chat-latest"
     static let claudeModelKey = "prefs.smartMarkerClaudeModel"
@@ -105,22 +107,25 @@ enum SmartMarkerPreferences {
     }
 
     static var openAIModelCatalogNeedsRefresh: Bool {
-        guard let date = UserDefaults.standard.object(
-            forKey: openAIModelCatalogDateKey
-        ) as? Date else {
-            return true
-        }
-        return Date().timeIntervalSince(date) > 24 * 60 * 60
+        openAIModelCatalogRequiresRefresh(in: .standard)
+    }
+
+    static func openAIModelCatalogRequiresRefresh(in defaults: UserDefaults, now: Date = Date()) -> Bool {
+        guard defaults.integer(forKey: openAIModelCatalogVersionKey) == openAIModelCatalogVersion,
+              let date = defaults.object(forKey: openAIModelCatalogDateKey) as? Date else { return true }
+        return now.timeIntervalSince(date) > 24 * 60 * 60
     }
 
     static func cacheOpenAIModelIDs(_ ids: [String]) {
         UserDefaults.standard.set(ids, forKey: openAIModelCatalogKey)
         UserDefaults.standard.set(Date(), forKey: openAIModelCatalogDateKey)
+        UserDefaults.standard.set(openAIModelCatalogVersion, forKey: openAIModelCatalogVersionKey)
     }
 
     static func clearOpenAIModelCatalog() {
         UserDefaults.standard.removeObject(forKey: openAIModelCatalogKey)
         UserDefaults.standard.removeObject(forKey: openAIModelCatalogDateKey)
+        UserDefaults.standard.removeObject(forKey: openAIModelCatalogVersionKey)
     }
 
     static var cachedClaudeModelIDs: [String] {
@@ -198,46 +203,51 @@ struct SmartMarkerModelOption: Identifiable, Equatable, Sendable {
     let title: String
     let detail: String
     let isRecommended: Bool
+    var groupTitle: String? = nil
+
+    var pickerGroupTitle: String { groupTitle ?? (isRecommended ? "App picks" : "Available") }
 }
 
 enum SmartMarkerOpenAIModelCatalog {
-    private static let recommended: [(id: String, title: String, detail: String)] = [
-        ("gpt-5.6-sol", "GPT-5.6 Sol", "Highest quality for complex analysis."),
-        ("gpt-5.6-terra", "GPT-5.6 Terra", "Balances quality, speed, and cost."),
-        ("gpt-5.6-luna", "GPT-5.6 Luna", "Fastest and lowest-cost current option."),
-        ("chat-latest", "Chat Latest", "Tracks OpenAI's latest ChatGPT-style API model.")
-    ]
-
     static func options(from modelIDs: [String]) -> [SmartMarkerModelOption] {
-        let available = Set(modelIDs.filter(isCompatibleAlias))
-        let recommendedIDs = Set(recommended.map(\.id))
-        let recommendedOptions: [SmartMarkerModelOption] = recommended.compactMap { model in
-            guard available.contains(model.id) else { return nil }
-            return SmartMarkerModelOption(
-                id: model.id,
-                title: model.title,
-                detail: model.detail,
-                isRecommended: true
+        Set(modelIDs.filter(isCompatibleAlias)).sorted { lhs, rhs in
+            let left = family(for: lhs)
+            let right = family(for: rhs)
+            for index in 0..<max(left.version.count, right.version.count) {
+                let a = index < left.version.count ? left.version[index] : 0
+                let b = index < right.version.count ? right.version[index] : 0
+                if a != b { return a > b }
+            }
+            if left.title != right.title {
+                return left.title.localizedStandardCompare(right.title) == .orderedAscending
+            }
+            return lhs.localizedStandardCompare(rhs) == .orderedAscending
+        }.map { id in
+            SmartMarkerModelOption(
+                id: id,
+                title: id,
+                detail: "Listed by OpenAI for this API key.",
+                isRecommended: false,
+                groupTitle: family(for: id).title
             )
         }
-        let otherOptions = available
-            .subtracting(recommendedIDs)
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            .map {
-                SmartMarkerModelOption(
-                    id: $0,
-                    title: $0,
-                    detail: "Available to this API key.",
-                    isRecommended: false
-                )
-            }
-        return recommendedOptions + otherOptions
+    }
+
+    private static func family(for id: String) -> (title: String, version: [Int]) {
+        guard let expression = try? NSRegularExpression(pattern: #"^gpt-(\d+(?:\.\d+)*)([a-z]?)(?:-|$)"#),
+              let match = expression.firstMatch(in: id.lowercased(), range: NSRange(id.startIndex..<id.endIndex, in: id)),
+              let versionRange = Range(match.range(at: 1), in: id),
+              let suffixRange = Range(match.range(at: 2), in: id) else {
+            return ("Other aliases", [])
+        }
+        let version = String(id[versionRange])
+        return ("GPT-" + version + id[suffixRange], version.split(separator: ".").compactMap { Int($0) })
     }
 
     static func isCompatibleAlias(_ id: String) -> Bool {
         let normalized = id.lowercased()
         guard normalized == "chat-latest" ||
-                normalized.hasPrefix("gpt-5") ||
+                normalized.range(of: #"^gpt-(?:[5-9]|[1-9][0-9]+)(?:[.-]|$)"#, options: .regularExpression) != nil ||
                 normalized.hasPrefix("gpt-4.1") ||
                 normalized.hasPrefix("gpt-4o") else {
             return false
@@ -245,6 +255,7 @@ enum SmartMarkerOpenAIModelCatalog {
         let unsupportedKinds = [
             "audio",
             "codex",
+            "cyber",
             "image",
             "instruct",
             "moderation",
@@ -340,9 +351,29 @@ protocol SmartMarkerCandidateProvider: Sendable {
         recipe: SmartMarkerAnalysisRecipe
     ) async throws -> String
 
+    func generateTranscriptCorrections(
+        entries: [SmartMarkerTranscriptEntry],
+        instructions: String,
+        onDiagnostics: @escaping @Sendable (String) async -> Void
+    ) async throws -> String
+
     func refine(
         request: SmartMarkerRefinementRequest
     ) async throws -> SmartMarkerRefinementResponse
+}
+
+extension SmartMarkerCandidateProvider {
+    func generateTranscriptCorrections(
+        entries: [SmartMarkerTranscriptEntry],
+        instructions: String,
+        onDiagnostics: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        var recipe = SmartMarkerCustomRecipe.newRecipe()
+        recipe.outputKind = .text
+        recipe.textMode = .document
+        recipe.instructions = instructions
+        return try await generateDocument(entries: entries, recipe: .custom(recipe))
+    }
 }
 
 enum SmartMarkerProviderFactory {
@@ -622,6 +653,17 @@ struct OpenAISmartMarkerProvider: SmartMarkerCandidateProvider {
         return try await client.generateDocument(
             transcript: transcript,
             recipe: recipe
+        )
+    }
+
+    func generateTranscriptCorrections(
+        entries: [SmartMarkerTranscriptEntry],
+        instructions: String,
+        onDiagnostics: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        let transcript = entries.map { "[\($0.ordinal)] \($0.text)" }.joined(separator: "\n")
+        return try await client.generateTranscriptCorrections(
+            transcript: transcript, instructions: instructions, onDiagnostics: onDiagnostics
         )
     }
 
@@ -1090,6 +1132,23 @@ struct OpenAIResponsesClient: Sendable {
         return try Self.parseDocumentResponse(responseData)
     }
 
+    func generateTranscriptCorrections(
+        transcript: String,
+        instructions: String,
+        onDiagnostics: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        let body = try Self.transcriptCorrectionsRequestBody(model: model, transcript: transcript, instructions: instructions)
+        let started = Date()
+        let responseData = try await performRequest(path: "/v1/responses", method: "POST", body: body)
+        if let envelope = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] {
+            let usage = envelope["usage"] as? [String: Any] ?? [:]
+            let outputDetails = usage["output_tokens_details"] as? [String: Any] ?? [:]
+            let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
+            await onDiagnostics("OpenAI \(model): \(seconds)s, status \(envelope["status"] as? String ?? "unknown"), input \(usage["input_tokens"] as? Int ?? 0), output \(usage["output_tokens"] as? Int ?? 0), reasoning \(outputDetails["reasoning_tokens"] as? Int ?? 0) tokens")
+        }
+        return try Self.parseTranscriptCorrectionsResponse(responseData)
+    }
+
     func refine(
         request: SmartMarkerRefinementRequest
     ) async throws -> SmartMarkerRefinementResponse {
@@ -1207,6 +1266,49 @@ struct OpenAIResponsesClient: Sendable {
             ]
         ]
         return try JSONSerialization.data(withJSONObject: body)
+    }
+
+    static func transcriptCorrectionsRequestBody(model: String, transcript: String, instructions: String) throws -> Data {
+        let correction: [String: Any] = [
+            "type": "object", "additionalProperties": false,
+            "properties": [
+                "segments": ["type": "array", "items": ["type": "integer"]],
+                "from": ["type": "string"], "to": ["type": "string"]
+            ],
+            "required": ["segments", "from", "to"]
+        ]
+        var body: [String: Any] = [
+            "model": model, "store": false,
+            "instructions": instructions,
+            "input": transcript,
+            "max_output_tokens": 12_000,
+            "text": ["format": [
+                "type": "json_schema", "name": "transcript_corrections", "strict": true,
+                "schema": ["type": "object", "additionalProperties": false,
+                           "properties": ["edits": ["type": "array", "items": correction]], "required": ["edits"]]
+            ]]
+        ]
+        // Do not change the user's model. Disable extra reasoning only on families
+        // documented to support it; use low on the original GPT-5 family.
+        let normalized = model.lowercased()
+        let supportsNone = ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.5", "gpt-5.6"].contains { normalized.hasPrefix($0) }
+        if supportsNone { body["reasoning"] = ["effort": "none"] }
+        else if normalized == "gpt-5" || normalized.hasPrefix("gpt-5-") { body["reasoning"] = ["effort": "low"] }
+        return try JSONSerialization.data(withJSONObject: body)
+    }
+
+    static func parseTranscriptCorrectionsResponse(_ data: Data) throws -> String {
+        guard let envelope = try? JSONDecoder().decode(ResponseEnvelope.self, from: data) else {
+            throw SmartMarkerProviderError.invalidResponse("OpenAI returned a cleanup response the app could not read.")
+        }
+        guard envelope.status == "completed" else {
+            throw SmartMarkerProviderError.invalidResponse("OpenAI did not complete the correction response.")
+        }
+        guard let text = envelope.output.compactMap(\.content).flatMap({ $0 })
+            .first(where: { $0.type == "output_text" })?.text, !text.isEmpty else {
+            throw SmartMarkerProviderError.invalidResponse("OpenAI returned no transcript corrections.")
+        }
+        return text
     }
 
     static func refinementRequestBody(
@@ -1462,6 +1564,7 @@ struct OpenAIResponsesClient: Sendable {
     }
 
     private struct ResponseEnvelope: Decodable {
+        let status: String?
         let output: [OutputItem]
     }
 

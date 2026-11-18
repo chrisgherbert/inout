@@ -76,8 +76,19 @@ Build output:
 
 Behavior:
 - quick compile path
-- no signing/notarization/release
+- local certificate signing when configured; no notarization/release
 - keeps bundled ffmpeg and Parakeet resources unchanged by default
+
+Background UI tests should launch the app with `--skip-keychain` (for example,
+`open -n dist/In-Out.app --args --skip-keychain`). This leaves saved credentials
+untouched and disables saved API keys for that test process. The smart marker and
+transcript sidebar smoke scripts set `INOUT_SKIP_KEYCHAIN=1` automatically.
+Normal launches retain Keychain access. Dev and quick builds sign with
+`INOUT_CODE_SIGN_IDENTITY`, or the existing `DEV_ID_APP` in `scripts/release.env`.
+Use the same certificate across builds to preserve Keychain trust. No timestamp or
+notarization is performed for local builds. Without either setting, local builds
+still work, but rebuilt apps may prompt again. Switching from an ad hoc build can
+require one final authorization; choose Always Allow for the app when prompted.
 
 Focused transcript export validation:
 

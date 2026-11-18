@@ -446,36 +446,35 @@ struct PreferencesView: View {
         privacyText: String
     ) -> some View {
         settingsRow("Model") {
-            let recommendedModels = models.filter(\.isRecommended)
-            let otherModels = models.filter { !$0.isRecommended }
+            let modelGroups = models.reduce(into: [String]()) { groups, model in
+                if !groups.contains(model.pickerGroupTitle) { groups.append(model.pickerGroupTitle) }
+            }
             let selectedOption = models.first { $0.id == modelSelection.wrappedValue }
             let selectedIsAvailable = selectedOption != nil
 
             VStack(alignment: .leading, spacing: 8) {
                 valueMenuPicker("\(providerName) Model", selection: modelSelection) {
-                    if !recommendedModels.isEmpty {
-                        Section("Recommended") {
-                            ForEach(recommendedModels) { option in
-                                Text(option.title).tag(option.id)
-                            }
-                        }
-                    }
-                    if !otherModels.isEmpty {
-                        Section("Available") {
-                            ForEach(otherModels) { option in
+                    ForEach(modelGroups, id: \.self) { group in
+                        Section(group) {
+                            ForEach(models.filter { $0.pickerGroupTitle == group }) { option in
                                 Text(option.title).tag(option.id)
                             }
                         }
                     }
                     if !selectedIsAvailable {
                         Section("Current Selection") {
-                            Text("\(modelSelection.wrappedValue) (Unavailable)")
+                            Text("\(modelSelection.wrappedValue) (Not listed)")
                                 .tag(modelSelection.wrappedValue)
                         }
                     }
                 }
                 .frame(maxWidth: 300)
 
+                if models.contains(where: { $0.groupTitle != nil }) {
+                    Text("Grouped automatically by model family, newest versions first.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Text(
                     selectedOption?.detail ??
                         "This model has not been confirmed for the saved API key."

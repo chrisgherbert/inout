@@ -287,6 +287,7 @@ extension WorkspaceViewModel {
         guard PlayheadDiagnostics.shared.isEnabled else { return }
         stopBenchmarkTranscriptPreviewStress()
         resetTranscriptPreviewPipeline()
+        originalTranscriptSegments = nil
         transcriptSegments = []
         hasCachedTranscript = false
         isGeneratingTranscript = true
@@ -365,6 +366,7 @@ extension WorkspaceViewModel {
         isAnalyzing = true
         lastActivityState = .running
         wasCancelled = false
+        originalTranscriptSegments = nil
         transcriptSegments = []
         resetTranscriptPreviewPipeline()
         hasCachedTranscript = false
@@ -471,6 +473,7 @@ extension WorkspaceViewModel {
     }
 
     func clearTranscriptGenerationState(statusText: String, analyzeStatus: String? = nil) {
+        originalTranscriptSegments = nil
         transcriptSegments = []
         hasCachedTranscript = false
         transcriptStatusText = statusText
